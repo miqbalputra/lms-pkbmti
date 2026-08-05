@@ -632,7 +632,7 @@ func (s *Server) syncSemesters(tx *gorm.DB, ta *TahunAjaran) {
 		tx.Create(&g)
 	} else {
 		tx.Model(&g).Updates(map[string]interface{}{
-			"tanggal_mulai":  ta.TanggalMulai,
+			"tanggal_mulai":   ta.TanggalMulai,
 			"tanggal_selesai": ganjilEnd,
 		})
 	}
@@ -644,7 +644,7 @@ func (s *Server) syncSemesters(tx *gorm.DB, ta *TahunAjaran) {
 		tx.Create(&ge)
 	} else {
 		tx.Model(&ge).Updates(map[string]interface{}{
-			"tanggal_mulai":  genapStart,
+			"tanggal_mulai":   genapStart,
 			"tanggal_selesai": ta.TanggalSelesai,
 		})
 	}
@@ -1741,13 +1741,13 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 	var unreadCount int64
 	s.db.Model(&Notifikasi{}).Where("user_id = ? AND is_read = ?", c.Locals("userID"), false).Count(&unreadCount)
 	return c.JSON(fiber.Map{
-		"pesertaDidik":    students,
-		"kelas":           classes,
-		"hadir":           attendance,
-		"perPokjar":       perPokjar,
-		"perKelas":        perKelas,
-		"upcomingEvents":  upcomingEvents,
-		"unreadNotif":     unreadCount,
+		"pesertaDidik":   students,
+		"kelas":          classes,
+		"hadir":          attendance,
+		"perPokjar":      perPokjar,
+		"perKelas":       perKelas,
+		"upcomingEvents": upcomingEvents,
+		"unreadNotif":    unreadCount,
 	})
 }
 func (s *Server) arsip(c *fiber.Ctx) error {
@@ -3200,8 +3200,8 @@ func (s *Server) rppOptions(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"mapel":               mapelOpts,
 		"jenjang":             jenjangs,
-		"tahunAjaran":          taOpts,
-		"fase":                 faseOpts,
+		"tahunAjaran":         taOpts,
+		"fase":                faseOpts,
 		"activeTahunAjaranId": activeTA,
 	})
 }
@@ -6045,14 +6045,14 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 					NIKIbu:    nikIbu,
 				}
 				if e := s.db.Create(&ortu).Error; e != nil {
-					issues = append(issues, importIssue{line, "gagal buat data orang tua: "+e.Error()})
+					issues = append(issues, importIssue{line, "gagal buat data orang tua: " + e.Error()})
 					continue
 				}
 			}
 			// Check NIK uniqueness against DB
 			var dup PesertaDidik
 			if s.db.Where("nik = ? AND nik != ''", nik).First(&dup).Error == nil {
-				issues = append(issues, importIssue{line, "NIK sudah ada: "+nik})
+				issues = append(issues, importIssue{line, "NIK sudah ada: " + nik})
 				continue
 			}
 			pd := PesertaDidik{
@@ -6067,11 +6067,11 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				Status:       "aktif",
 			}
 			if e := s.db.Create(&pd).Error; e != nil {
-				issues = append(issues, importIssue{line, "gagal insert siswa: "+e.Error()})
+				issues = append(issues, importIssue{line, "gagal insert siswa: " + e.Error()})
 				continue
 			}
 			if e := s.db.Create(&RiwayatKelasPesertaDidik{PesertaDidikID: pd.ID, KelasID: kelas.ID, TahunAjaranID: activeYear.ID, Status: "aktif"}).Error; e != nil {
-				issues = append(issues, importIssue{line, "gagal catat riwayat kelas: "+e.Error()})
+				issues = append(issues, importIssue{line, "gagal catat riwayat kelas: " + e.Error()})
 				continue
 			}
 			nisSeen[nis] = true
@@ -6542,7 +6542,7 @@ func (s *Server) startScheduler() {
 	// Scheduled full database backup — disabled unless BACKUP_CRON is set (e.g.
 	// "0 2 * * *" for 02:00 WIB daily). When unset, backups are n8n-driven via
 	// GET /api/backup/download. Retention via BACKUP_RETENTION (default 14),
-	// format via BACKUP_FORMAT (db|sql, default db).
+	// format via BACKUP_FORMAT (full|db|sql, default full).
 	if sched := os.Getenv("BACKUP_CRON"); sched != "" {
 		if id, err := cr.AddFunc(sched, func() { s.runScheduledBackup() }); err != nil {
 			fmt.Printf("BACKUP_CRON invalid (%q): %v\n", sched, err)

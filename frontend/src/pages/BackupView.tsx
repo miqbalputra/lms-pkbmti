@@ -115,6 +115,18 @@ export function BackupView({ token }: { token: string }) {
     }
   }
 
+  async function downloadFullBackup() {
+    setBusy('full')
+    try {
+      await downloadBinary('/backup/download?format=full', token, isPG ? 'pkbm-lms-full.sql' : 'pkbm-lms-full.db')
+      toast.success('Database full berhasil diunduh.')
+    } catch (e: unknown) {
+      toast.error(String((e as Error).message || 'Gagal mengunduh database full'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function downloadExisting(name: string) {
     setBusy('dl-' + name)
     try {
@@ -156,6 +168,7 @@ export function BackupView({ token }: { token: string }) {
       toast.error('File harus berekstensi .db atau .sql')
       return
     }
+    if (!confirm('Restore akan mengganti seluruh isi database dengan file ini. Database saat ini akan diamankan terlebih dahulu. Lanjutkan?')) return
     setBusy('restore')
     setRestoreMsg('')
     try {
@@ -167,7 +180,7 @@ export function BackupView({ token }: { token: string }) {
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
       })
-      const x = (await r.json().catch(() => ({}))) as { error?: string; message?: string }
+      const x = (await r.json().catch(() => ({}))) as { error?: string; message?: string; restartScheduled?: boolean }
       if (!r.ok) throw new Error(x.error || 'Gagal menyiapkan restore')
       setRestoreMsg(x.message || 'Restore berhasil.')
       toast.success(isPG ? 'Restore PostgreSQL berhasil diterapkan.' : 'Restore disiapkan — restart server untuk menerapkan.')
@@ -179,15 +192,15 @@ export function BackupView({ token }: { token: string }) {
     }
   }
 
-  const n8nUrl = `${apiBase}/backup/download?format=db&key=YOUR_BACKUP_API_KEY`
+  const n8nUrl = `${apiBase}/backup/download?format=full&key=YOUR_BACKUP_API_KEY`
 
   return (
     <div className="space-y-4">
       <PageToolbar
         title="Backup & Restore Database"
         description={isPG
-          ? "Cadangkan database PostgreSQL via pg_dump (.sql). Restore diterapkan langsung tanpa restart."
-          : "Cadangkan seluruh database SQLite (binary .db atau SQL text), jadwalkan otomatis, sambungkan ke n8n, dan pemulihan satu langkah."
+          ? "Unduh database PostgreSQL penuh via pg_dump (.sql) atau restore cukup dengan upload file."
+          : "Unduh database SQLite penuh (.db) sekali klik, lalu restore cukup dengan upload file backup."
         }
       />
 
@@ -205,6 +218,15 @@ export function BackupView({ token }: { token: string }) {
           </div>
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className="h-4 w-4" /> Segarkan
+          </Button>
+        </div>
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">Download Database Full</p>
+            <p className="text-xs text-muted-foreground">Satu file lengkap untuk dipindahkan atau dipakai restore.</p>
+          </div>
+          <Button onClick={downloadFullBackup} disabled={busy === 'full'}>
+            <HardDriveDownload className="h-4 w-4" /> {busy === 'full' ? 'Mengunduh...' : 'Download Database Full'}
           </Button>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -286,6 +308,7 @@ export function BackupView({ token }: { token: string }) {
               <>Unggah file backup <code>.db</code> atau <code>.sql</code>. Restore diterapkan pada <strong>restart server berikutnya</strong> — DB saat ini otomatis disalin ke <code>backups/pre-restore-*</code> sebagai pengaman, jadi aman bila perlu dibatalkan.</>
             )}
           </p>
+          {!isPG && <p className="text-xs font-medium text-primary">Di production, setelah upload server akan restart otomatis dan restore diterapkan.</p>}
         </div>
         <form className="flex flex-wrap items-end gap-3" onSubmit={uploadRestore}>
           <div className="grid gap-1.5 flex-1 min-w-[240px]">
@@ -293,7 +316,7 @@ export function BackupView({ token }: { token: string }) {
             <input ref={fileRef} type="file" accept={isPG ? '.sql' : '.db,.sql'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
           </div>
           <Button type="submit" disabled={busy === 'restore'}>
-            <FileUp className="h-4 w-4" /> {busy === 'restore' ? 'Memproses...' : isPG ? 'Restore Sekarang' : 'Siapkan Restore'}
+            <FileUp className="h-4 w-4" /> {busy === 'restore' ? 'Memproses...' : 'Restore Sekarang'}
           </Button>
         </form>
         {restoreMsg && (
@@ -354,7 +377,7 @@ export function BackupView({ token }: { token: string }) {
               <ol className="list-decimal pl-5 space-y-1 text-xs text-muted-foreground">
                 <li>Buka kartu <strong>"Buat Backup Baru"</strong> di atas.</li>
                 <li>Klik <strong>"Backup .db (biner)"</strong> atau <strong>"Backup .sql (text)"</strong>. File muncul di folder <code>{dir || 'backups'}</code> dan langsung tercantum di tabel.</li>
-                <li>Untuk mengunduh tanpa menyimpan di server, pakai <strong>"Unduh .db/.sql langsung"</strong>.</li>
+                <li>Untuk satu file database lengkap, klik <strong>"Download Database Full"</strong>. File langsung masuk ke folder Download browser.</li>
                 <li>Unduh file lama via tombol <em>Unduh</em> pada baris tabel; hapus via tombol tong sampah.</li>
               </ol>
             </section>
@@ -366,7 +389,7 @@ export function BackupView({ token }: { token: string }) {
                 Set <code>BACKUP_CRON</code> (cron WIB) di environment server lalu restart. Saat kosong, backup
                 sepenuhnya andalkan n8n (tidak ada penjadwalan internal).
               </p>
-              <CodeBlock copy={copyCode} code={'# Contoh .env / variabel server\nBACKUP_CRON="0 2 * * *"      # tiap 02:00 WIB\nBACKUP_FORMAT="db"        # db | sql\nBACKUP_RETENTION="14"     # simpan 14 backup otomatis terbaru\nBACKUP_DIR="backups"'} />
+              <CodeBlock copy={copyCode} code={'# Contoh .env / variabel server\nBACKUP_CRON="0 2 * * *"      # tiap 02:00 WIB\nBACKUP_FORMAT="full"      # full | db | sql\nBACKUP_RETENTION="14"     # simpan 14 backup otomatis terbaru\nBACKUP_DIR="backups"'} />
               <p className="text-xs text-muted-foreground">
                 Contoh cron lain: <code>0 2 * * 0</code> (Minggu 02:00), <code>0 */6 * * *</code> (tiap 6 jam). File
                 otomatis diberi label <Badge variant="default">otomatis</Badge> dan di-prune sesuai retensi; file
@@ -383,7 +406,7 @@ export function BackupView({ token }: { token: string }) {
                 <li>Konfigurasi node <strong>HTTP Request</strong>:
                   <ul className="list-disc pl-5 mt-1 space-y-0.5">
                     <li><strong>Method:</strong> <code>GET</code></li>
-                    <li><strong>URL:</strong> <code>http://&lt;host&gt;:8080/api/backup/download?format=db&amp;key=YOUR_BACKUP_API_KEY</code> (ganti host &amp; key)</li>
+                    <li><strong>URL:</strong> <code>http://&lt;host&gt;:8080/api/backup/download?format=full&amp;key=YOUR_BACKUP_API_KEY</code> (ganti host &amp; key)</li>
                     <li><strong>Response:</strong> <code>File</code> (binary) — agar n8n menerima file</li>
                     <li>Atau kirim header <code>X-Backup-Key: YOUR_BACKUP_API_KEY</code> sebagai ganti <code>?key=</code></li>
                   </ul>
@@ -410,9 +433,9 @@ export function BackupView({ token }: { token: string }) {
                 </AlertDescription>
               </Alert>
               <ol className="list-decimal pl-5 space-y-1 text-xs text-muted-foreground">
-                <li>Klik <strong>"Siapkan Restore"</strong> di kartu Restore, pilih file <code>.db</code> atau <code>.sql</code>.</li>
-                <li>Server menyimpan file sebagai <code>pkbm-lms.db.restore-pending</code> (.db) atau <code>.restore-pending.sql</code> (.sql).</li>
-                <li><strong>Restart server</strong>: hentikan proses lalu jalankan lagi. Jika dijalankan di bawah supervisor/pm2/systemd, proses auto-restart saat berhenti.</li>
+                <li>Pilih file <code>.db</code> atau <code>.sql</code>, lalu klik <strong>"Restore Sekarang"</strong>.</li>
+                <li>Server memvalidasi file terlebih dahulu dan menyiapkan restore secara aman.</li>
+                <li>Di production, server restart otomatis dan restore diterapkan sebelum database dibuka.</li>
                 <li>Saat startup, <code>applyPendingRestore</code> membackup DB lama → lalu menukar file (.db) atau rebuild dari dump (.sql).</li>
                 <li>Selesai. Verifikasi data di dashboard.</li>
               </ol>
@@ -438,7 +461,9 @@ export function BackupView({ token }: { token: string }) {
                   <tbody className="divide-y divide-border">
                     <tr><td className="p-2 font-mono">BACKUP_API_KEY</td><td className="p-2 text-muted-foreground">—</td><td className="p-2 text-muted-foreground">Kunci statis untuk n8n (tanpa JWT). Wajib di-set agar key aktif.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_CRON</td><td className="p-2 text-muted-foreground">— (off)</td><td className="p-2 text-muted-foreground">Cron WIB. Kosong = andalkan n8n/manual.</td></tr>
-                    <tr><td className="p-2 font-mono">BACKUP_FORMAT</td><td className="p-2 text-muted-foreground">db</td><td className="p-2 text-muted-foreground">db | sql</td></tr>
+                    <tr><td className="p-2 font-mono">BACKUP_FORMAT</td><td className="p-2 text-muted-foreground">full</td><td className="p-2 text-muted-foreground">full | db | sql</td></tr>
+                    <tr><td className="p-2 font-mono">BACKUP_AUTO_RESTART</td><td className="p-2 text-muted-foreground">true (production)</td><td className="p-2 text-muted-foreground">Restart otomatis setelah upload restore.</td></tr>
+                    <tr><td className="p-2 font-mono">BACKUP_MAX_UPLOAD_MB</td><td className="p-2 text-muted-foreground">512</td><td className="p-2 text-muted-foreground">Batas ukuran file restore.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_RETENTION</td><td className="p-2 text-muted-foreground">14</td><td className="p-2 text-muted-foreground">Jumlah backup otomatis (-auto-) yang disimpan.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_DIR</td><td className="p-2 text-muted-foreground">backups</td><td className="p-2 text-muted-foreground">Folder penyimpanan backup.</td></tr>
                   </tbody>

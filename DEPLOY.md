@@ -41,6 +41,12 @@ Add these environment variables in your application:
 | `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret | Required in production |
 | `TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key for public pages | Required in production |
 | `VITE_TURNSTILE_SITE_KEY` | Same public site key for the main login build | Required in production |
+| `BACKUP_CRON` | Jadwal backup otomatis | `0 2 * * *` |
+| `BACKUP_FORMAT` | Format backup penuh | `full` |
+| `BACKUP_RETENTION` | Jumlah backup otomatis yang disimpan | `14` |
+| `BACKUP_AUTO_RESTART` | Restart otomatis setelah upload restore | `true` |
+| `BACKUP_MAX_UPLOAD_MB` | Batas upload file restore | `512` |
+| `BACKUP_API_KEY` | Key untuk download backup via n8n | Optional |
 
 **Note**: Coolify can reference database variables automatically using Coolify's variable syntax.
 

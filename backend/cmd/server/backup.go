@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/url"
 	"os"
 	"os/exec"
@@ -51,7 +52,7 @@ import (
 
 const (
 	liveDBPath       = "pkbm-lms.db"
-	pendingDBPath    = "pkbm-lms.db.restore-pending"      // binary restore staging
+	pendingDBPath    = "pkbm-lms.db.restore-pending"     // binary restore staging
 	pendingSQLPath   = "pkbm-lms.db.restore-pending.sql" // sql restore staging
 	defaultBackupDir = "backups"
 	backupGlob       = "pkbm-lms-*.db"
@@ -72,6 +73,34 @@ func dialect() string {
 }
 
 func backupDir() string { return env("BACKUP_DIR", defaultBackupDir) }
+
+func backupUploadLimit() int {
+	mb, err := strconv.Atoi(env("BACKUP_MAX_UPLOAD_MB", "512"))
+	if err != nil || mb < 8 {
+		mb = 512
+	}
+	return mb * 1024 * 1024
+}
+
+// normalizeBackupFormat makes the default "full" backup the easiest restore
+// source: SQLite uses its exact binary snapshot, while PostgreSQL uses a full
+// pg_dump SQL file. Explicit sql/db requests remain supported for compatibility.
+func normalizeBackupFormat(requested string) string {
+	format := strings.ToLower(strings.TrimSpace(requested))
+	if format == "" || format == "full" {
+		if isSQLite() {
+			return "db"
+		}
+		return "sql"
+	}
+	if isSQLite() {
+		if format == "sql" {
+			return "sql"
+		}
+		return "db"
+	}
+	return "sql"
+}
 
 // ---------------------------------------------------------------------------
 // PostgreSQL backup/restore via pg_dump / psql CLI
@@ -458,12 +487,7 @@ func (s *Server) runScheduledBackup() {
 		fmt.Printf("scheduled backup: mkdir failed: %v\n", err)
 		return
 	}
-	format := env("BACKUP_FORMAT", "sql")
-	if isSQLite() && format != "sql" {
-		format = "db"
-	} else {
-		format = "sql"
-	}
+	format := normalizeBackupFormat(env("BACKUP_FORMAT", "full"))
 	ts := time.Now().Format("20060102-150405")
 	name := fmt.Sprintf("pkbm-lms-%s-auto.%s", ts, format)
 	dest := filepath.Join(backupDir(), name)
@@ -551,10 +575,7 @@ func applyBinaryRestore() error {
 	if err != nil {
 		return fmt.Errorf("pre-restore backup failed: %w", err)
 	}
-	if err := os.Remove(liveDBPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove live db failed: %w", err)
-	}
-	if err := os.Rename(pendingDBPath, liveDBPath); err != nil {
+	if err := atomicReplaceLiveDB(pendingDBPath); err != nil {
 		return fmt.Errorf("swap pending db failed: %w", err)
 	}
 	pendingRestoreApplied = true
@@ -567,36 +588,28 @@ func applySQLRestore() error {
 	if err != nil {
 		return fmt.Errorf("read pending sql failed: %w", err)
 	}
+	// Build and validate the restored database beside the live database first.
+	// A malformed upload therefore cannot delete or leave the active DB empty.
+	tmp, err := os.CreateTemp(".", "pkbm-restore-apply-*")
+	if err != nil {
+		return fmt.Errorf("create restored db failed: %w", err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
+	if err := replaySQLToDatabase(tmpPath, string(content)); err != nil {
+		return fmt.Errorf("replay dump failed: %w", err)
+	}
+	if err := validateSQLiteBackup(tmpPath); err != nil {
+		return fmt.Errorf("restored db integrity check failed: %w", err)
+	}
 	safety, err := savePreRestoreBackup()
 	if err != nil {
 		return fmt.Errorf("pre-restore backup failed: %w", err)
 	}
-	if err := os.Remove(liveDBPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove live db failed: %w", err)
-	}
-	// Open a fresh SQLite DB at the live path and replay the dump. Use the same
-	// hardened DSN as openDB so WAL/busy_timeout are in effect.
-	dsn := "file:" + liveDBPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		return fmt.Errorf("open fresh db failed: %w", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return err
-	}
-	for _, stmt := range splitSQLStatements(string(content)) {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" || strings.HasPrefix(stmt, "--") {
-			continue
-		}
-		if _, err := sqlDB.Exec(stmt); err != nil {
-			_ = sqlDB.Close()
-			return fmt.Errorf("exec dump statement failed (%q): %w", truncate(stmt, 120), err)
-		}
-	}
-	if err := sqlDB.Close(); err != nil {
-		return fmt.Errorf("close restored db failed: %w", err)
+	if err := atomicReplaceLiveDB(tmpPath); err != nil {
+		return fmt.Errorf("swap restored db failed: %w", err)
 	}
 	_ = os.Remove(pendingSQLPath)
 	pendingRestoreApplied = true
@@ -604,11 +617,18 @@ func applySQLRestore() error {
 	return nil
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+func atomicReplaceLiveDB(stagedPath string) error {
+	oldPath := liveDBPath + ".restore-old"
+	_ = os.Remove(oldPath)
+	if err := os.Rename(liveDBPath, oldPath); err != nil && !os.IsNotExist(err) {
+		return err
 	}
-	return s[:n] + "…"
+	if err := os.Rename(stagedPath, liveDBPath); err != nil {
+		_ = os.Rename(oldPath, liveDBPath)
+		return err
+	}
+	_ = os.Remove(oldPath)
+	return nil
 }
 
 func copyFile(src, dst string) error {
@@ -716,12 +736,7 @@ func (s *Server) listBackupsHandler(c *fiber.Ctx) error {
 // it. For SQLite: db → binary snapshot (VACUUM INTO); sql → text dump.
 // For PostgreSQL: always produces a .sql dump via pg_dump. (backupReadAuth)
 func (s *Server) downloadBackup(c *fiber.Ctx) error {
-	format := c.Query("format", "sql")
-	if isSQLite() && format != "sql" {
-		format = "db"
-	} else {
-		format = "sql"
-	}
+	format := normalizeBackupFormat(c.Query("format", "full"))
 	ts := time.Now().Format("20060102-150405")
 	fname := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
@@ -785,12 +800,7 @@ func (s *Server) downloadBackupFile(c *fiber.Ctx) error {
 // POST /backup (admin JWT) — create a backup now in the backup dir and return
 // its metadata. The admin UI uses this; n8n uses GET /backup/download instead.
 func (s *Server) createBackupNow(c *fiber.Ctx) error {
-	format := c.Query("format", "sql")
-	if isSQLite() && format != "sql" {
-		format = "db"
-	} else {
-		format = "sql"
-	}
+	format := normalizeBackupFormat(c.Query("format", "full"))
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
 	}
@@ -838,26 +848,29 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 	ext := strings.ToLower(filepath.Ext(fh.Filename))
 
 	if isSQLite() {
-		// Clean any prior staged restore of the other kind so only one is pending.
-		_ = os.Remove(pendingDBPath)
-		_ = os.Remove(pendingSQLPath)
 		switch ext {
 		case ".db":
-			f, err := fh.Open()
+			tmpPath, err := saveRestoreUpload(c, fh)
 			if err != nil {
-				return fiber.NewError(500, "tidak dapat membaca file")
+				return err
 			}
-			hdr := make([]byte, 16)
-			n, _ := f.Read(hdr)
-			f.Close()
-			if n < 16 || string(hdr[:15]) != "SQLite format 3" {
-				return fiber.NewError(400, "file .db bukan database SQLite yang valid")
+			if err := validateSQLiteBackup(tmpPath); err != nil {
+				_ = os.Remove(tmpPath)
+				return fiber.NewError(400, "file .db tidak valid: "+err.Error())
 			}
-			if err := c.SaveFile(fh, pendingDBPath); err != nil {
+			if err := replacePendingRestore(tmpPath, pendingDBPath); err != nil {
 				return fiber.NewError(500, "gagal menyimpan file restore")
 			}
 		case ".sql":
-			if err := c.SaveFile(fh, pendingSQLPath); err != nil {
+			tmpPath, err := saveRestoreUpload(c, fh)
+			if err != nil {
+				return err
+			}
+			if err := validateSQLBackup(tmpPath); err != nil {
+				_ = os.Remove(tmpPath)
+				return fiber.NewError(400, "file .sql tidak valid: "+err.Error())
+			}
+			if err := replacePendingRestore(tmpPath, pendingSQLPath); err != nil {
 				return fiber.NewError(500, "gagal menyimpan file restore")
 			}
 		default:
@@ -866,10 +879,19 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 		uid := c.Locals("userID").(string)
 		mode := ext[1:]
 		s.audit(&uid, "restore", "system", "staged "+mode+" restore pending restart")
+		restartScheduled := scheduleRestoreRestart()
+		message := "Restore disiapkan."
+		if restartScheduled {
+			message += " Server akan restart otomatis untuk menerapkannya."
+		} else {
+			message += " Restart server untuk menerapkan."
+		}
+		message += " DB saat ini otomatis di-backup ke backups/pre-restore-<waktu>.db sebagai pengaman."
 		return c.JSON(fiber.Map{
-			"ok":      true,
-			"mode":    mode,
-			"message": "Restore disiapkan. Restart server (hentikan lalu jalankan lagi, atau jika dijalankan di bawah supervisor/process manager, proses akan auto-restart) untuk menerapkan. DB saat ini otomatis di-backup ke backups/pre-restore-<waktu>.db sebagai pengaman.",
+			"ok":               true,
+			"mode":             mode,
+			"restartScheduled": restartScheduled,
+			"message":          message,
 		})
 	}
 
@@ -900,6 +922,130 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 		"mode":    "sql",
 		"message": "Restore PostgreSQL berhasil diterapkan langsung ke database.",
 	})
+}
+
+func saveRestoreUpload(c *fiber.Ctx, fh *multipart.FileHeader) (string, error) {
+	tmp, err := os.CreateTemp(".", "pkbm-restore-upload-*")
+	if err != nil {
+		return "", fiber.NewError(500, "tidak dapat membuat file sementara")
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fiber.NewError(500, "tidak dapat menyiapkan file sementara")
+	}
+	if err := c.SaveFile(fh, tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fiber.NewError(500, "gagal menyimpan file restore")
+	}
+	return tmpPath, nil
+}
+
+func replacePendingRestore(tmpPath, pendingPath string) error {
+	// Only replace pending files after the uploaded file has passed validation.
+	if err := os.Remove(pendingDBPath); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Remove(pendingSQLPath); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, pendingPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func validateSQLiteBackup(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	hdr := make([]byte, 16)
+	n, readErr := f.Read(hdr)
+	_ = f.Close()
+	if readErr != nil || n < 16 || string(hdr[:15]) != "SQLite format 3" {
+		return fmt.Errorf("bukan database SQLite yang valid")
+	}
+	db, err := gorm.Open(sqlite.Open("file:"+path+"?mode=ro"), &gorm.Config{})
+	if err != nil {
+		return err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+	var result string
+	if err := sqlDB.QueryRow("PRAGMA integrity_check").Scan(&result); err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(result)) != "ok" {
+		return fmt.Errorf("integrity_check: %s", result)
+	}
+	return nil
+}
+
+func validateSQLBackup(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(content))) == 0 {
+		return fmt.Errorf("file kosong")
+	}
+	tmp, err := os.CreateTemp(".", "pkbm-restore-validate-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
+	return replaySQLToDatabase(tmpPath, string(content))
+}
+
+func replaySQLToDatabase(path, content string) error {
+	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		return err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	for _, stmt := range splitSQLStatements(content) {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" || strings.HasPrefix(stmt, "--") {
+			continue
+		}
+		if _, err := sqlDB.Exec(stmt); err != nil {
+			_ = sqlDB.Close()
+			return fmt.Errorf("statement gagal: %w", err)
+		}
+	}
+	if _, err := sqlDB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		_ = sqlDB.Close()
+		return err
+	}
+	closeErr := sqlDB.Close()
+	_ = os.Remove(path + "-wal")
+	_ = os.Remove(path + "-shm")
+	return closeErr
+}
+
+func scheduleRestoreRestart() bool {
+	if env("APP_ENV", "development") != "production" || strings.EqualFold(env("BACKUP_AUTO_RESTART", "true"), "false") {
+		return false
+	}
+	// Let Fiber flush the upload response before the process exits. Docker,
+	// Coolify, systemd, or another supervisor then starts the server again and
+	// applyPendingRestore performs the atomic swap before opening the DB.
+	time.AfterFunc(750*time.Millisecond, func() { os.Exit(0) })
+	return true
 }
 
 // deleteBackupFile (admin JWT) — DELETE /backup/:name — remove a backup file.

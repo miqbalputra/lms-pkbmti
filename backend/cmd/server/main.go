@@ -749,7 +749,7 @@ func main() {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
-		BodyLimit:    8 * 1024 * 1024, // 8 MB — cukup untuk upload tanda tangan/bukti foto base64
+		BodyLimit:    backupUploadLimit(), // supports full database restore uploads
 	})
 	app.Use(logger.New())
 	app.Use(helmet.New())

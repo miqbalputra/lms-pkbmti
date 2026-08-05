@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -133,6 +134,33 @@ func TestBackupSQLDumpRestoreRoundTrip(t *testing.T) {
 		if r.Note != want[r.ID] {
 			t.Errorf("restored row %s note = %q, want %q", r.ID, r.Note, want[r.ID])
 		}
+	}
+}
+
+func TestUploadedBackupValidation(t *testing.T) {
+	dir := t.TempDir()
+	src := newTestDB(t, filepath.Join(dir, "src.db"))
+	src.Create(&backupTestRow{ID: "1", Name: "full", Note: "validated"})
+	s := &Server{db: src}
+
+	dbPath := filepath.Join(dir, "full.db")
+	if err := s.backupBinary(dbPath); err != nil {
+		t.Fatalf("backupBinary: %v", err)
+	}
+	if err := validateSQLiteBackup(dbPath); err != nil {
+		t.Fatalf("validateSQLiteBackup: %v", err)
+	}
+
+	var dump bytes.Buffer
+	if err := s.dumpSQL(&dump); err != nil {
+		t.Fatalf("dumpSQL: %v", err)
+	}
+	sqlPath := filepath.Join(dir, "full.sql")
+	if err := os.WriteFile(sqlPath, dump.Bytes(), 0o600); err != nil {
+		t.Fatalf("write SQL backup: %v", err)
+	}
+	if err := validateSQLBackup(sqlPath); err != nil {
+		t.Fatalf("validateSQLBackup: %v", err)
 	}
 }
 
