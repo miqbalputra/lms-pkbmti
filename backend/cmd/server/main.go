@@ -488,7 +488,8 @@ type Ujian struct {
 	WaktuMulai       time.Time     `json:"waktuMulai"`
 	WaktuSelesai     time.Time     `json:"waktuSelesai"`
 	DurasiMenit      int           `json:"durasiMenit"`
-	BatasTabSwitch   int           `json:"batasTabSwitch"` // 0 = tanpa batas; jika terlampaui ujian dikunci otomatis
+	GracePeriodMenit int           `json:"gracePeriodMenit"` // waktu toleransi setelah durasi habis (default 5 mnt)
+	BatasTabSwitch   int           `json:"batasTabSwitch"`   // 0 = tanpa batas; jika terlampaui ujian dikunci otomatis
 	AcakSoal         bool          `json:"acakSoal"`
 	AksesKode        string        `gorm:"index" json:"aksesKode"` // kode akses siswa (tanpa login)
 	Semester         string        `json:"semester"`

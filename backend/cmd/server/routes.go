@@ -3916,15 +3916,16 @@ func (s *Server) deleteBankSoal(c *fiber.Ctx) error {
 }
 
 type ujianInput struct {
-	MapelID        string    `json:"mapelId"`
-	KelasID        string    `json:"kelasId"`
-	Judul          string    `json:"judul"`
-	WaktuMulai     time.Time `json:"waktuMulai"`
-	WaktuSelesai   time.Time `json:"waktuSelesai"`
-	DurasiMenit    int       `json:"durasiMenit"`
-	BatasTabSwitch int       `json:"batasTabSwitch"`
-	AcakSoal       bool      `json:"acakSoal"`
-	AksesKode      string    `json:"aksesKode"` // kode akses siswa ujian online
+	MapelID          string    `json:"mapelId"`
+	KelasID          string    `json:"kelasId"`
+	Judul            string    `json:"judul"`
+	WaktuMulai       time.Time `json:"waktuMulai"`
+	WaktuSelesai     time.Time `json:"waktuSelesai"`
+	DurasiMenit      int       `json:"durasiMenit"`
+	GracePeriodMenit int       `json:"gracePeriodMenit"`
+	BatasTabSwitch   int       `json:"batasTabSwitch"`
+	AcakSoal         bool      `json:"acakSoal"`
+	AksesKode        string    `json:"aksesKode"` // kode akses siswa ujian online
 }
 
 func (s *Server) scopeUjian(c *fiber.Ctx, u *Ujian) error {
@@ -3983,6 +3984,7 @@ func (s *Server) createUjian(c *fiber.Ctx) error {
 		WaktuMulai:       in.WaktuMulai,
 		WaktuSelesai:     in.WaktuSelesai,
 		DurasiMenit:      in.DurasiMenit,
+		GracePeriodMenit: in.GracePeriodMenit,
 		BatasTabSwitch:   in.BatasTabSwitch,
 		AcakSoal:         in.AcakSoal,
 		AksesKode:        in.AksesKode,
@@ -4030,6 +4032,7 @@ func (s *Server) updateUjian(c *fiber.Ctx) error {
 		uj.WaktuSelesai = in.WaktuSelesai
 	}
 	uj.DurasiMenit = in.DurasiMenit
+	uj.GracePeriodMenit = in.GracePeriodMenit
 	uj.BatasTabSwitch = in.BatasTabSwitch
 	uj.AcakSoal = in.AcakSoal
 	uj.AksesKode = in.AksesKode

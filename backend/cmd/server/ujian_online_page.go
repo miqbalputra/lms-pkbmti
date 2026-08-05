@@ -204,7 +204,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 
 <script>
 const API='/api';
-let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,ujianPesertaId:'',soal:[],jawaban:{},currentIdx:0,timerInterval:null,sisaWaktu:0};
+let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,ujianPesertaId:'',soal:[],jawaban:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null};
 
 function show(el){el.classList.remove('hidden')}
 function hide(el){el.classList.add('hidden')}
@@ -251,16 +251,24 @@ state.ujianPesertaId=d.id;
 await loadSoal(ujianId);
 hide(document.getElementById('listCard'));show(document.getElementById('examCard'));
 document.getElementById('examTitle').textContent=state.currentUjian?.judul||'Ujian';
-startTimer(d.mulai);
+state.currentUjian.gracePeriodMenit=d.gracePeriodMenit||5;
+startTimer(d.mulai,d.sisaWaktu);
 }catch(e){alert(e.message)}
 }
 
 async function loadSoal(ujianId){
 const r=await fetch(API+'/ujian-online/'+ujianId+'/soal?nisn='+encodeURIComponent(state.nisn)+'&aksesKode='+encodeURIComponent(state.aksesKode));
-const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
+const d=await r.json();if(!r.ok){
+  if(d.error&&d.error.includes('habis')){hide(document.getElementById('examCard'));show(document.getElementById('resultCard'));document.getElementById('scoreValue').textContent='—';document.getElementById('scoreDetail').innerHTML='<strong>Waktu ujian sudah habis.</strong>';}
+  throw new Error(d.error||'Gagal');
+}
 state.soal=d.soal||[];state.sisaWaktu=d.sisaWaktu||0;
+state.currentUjian=state.currentUjian||{};
+state.currentUjian.gracePeriodMenit=d.gracePeriodMenit||5;
 (d.jawaban||[]).forEach(j=>{state.jawaban[j.ujianSoalId]=j.jawaban});
 state.currentIdx=0;renderSoal();
+// Restart timer with server time (handles reconnect / grace period)
+if(state.sisaWaktu!==0){startTimer(null,state.sisaWaktu)}
 }
 
 function renderSoal(){
@@ -298,18 +306,38 @@ fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd
 function prevSoal(){if(state.currentIdx>0){state.currentIdx--;renderSoal()}}
 function nextSoal(){if(state.currentIdx<state.soal.length-1){state.currentIdx++;renderSoal()}}
 
-function startTimer(mulaiStr){
+function startTimer(mulaiStr,sisaOverride){
 if(state.timerInterval)clearInterval(state.timerInterval);
 const durasi=state.currentUjian?.durasiMenit||60;
-const mulai=new Date(mulaiStr).getTime();
-const batas=mulai+durasi*60*1000;
+const grace=state.currentUjian?.gracePeriodMenit||5;
+// On reconnect, use stored mulai; otherwise parse from server
+let mulaiMs;
+if(mulaiStr){mulaiMs=new Date(mulaiStr).getTime();state.mulai=mulaiMs}
+else{mulaiMs=state.mulai}
+if(!mulaiMs)return;
+const batasNormal=mulaiMs+durasi*60*1000;
+const batasGrace=batasNormal+grace*60*1000;
+// sisaOverride: server returns negative = in grace period
+let inGrace=sisaOverride!==undefined&&sisaOverride<0;
 state.timerInterval=setInterval(()=>{
-const sisa=Math.max(0,Math.floor((batas-Date.now())/1000));
-const h=Math.floor(sisa/3600),m=Math.floor((sisa%3600)/60),s=sisa%60;
+const now=Date.now();
+if(!inGrace){
+// Normal countdown
+const sisa=Math.max(0,Math.floor((batasNormal-now)/1000));
+const h=Math.floor(sisa/3600),m=Math.floor((sisa%3600)/60),ss=sisa%60;
 const el=document.getElementById('timer');
-el.textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+el.textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');
 el.className='timer'+(sisa<300?' danger':sisa<600?' warning':'');
-if(sisa<=0){clearInterval(state.timerInterval);selesaiUjian(true)}
+if(sisa<=0){inGrace=true}// switch to grace mode
+}else{
+// Grace period countdown
+const sisaG=Math.max(0,Math.floor((batasGrace-now)/1000));
+const m=Math.floor((sisaG%3600)/60),ss=sisaG%60;
+const el=document.getElementById('timer');
+el.textContent='GRACE '+String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');
+el.className='timer danger';
+if(sisaG<=0){clearInterval(state.timerInterval);selesaiUjian(true)}
+}
 },1000);
 }
 

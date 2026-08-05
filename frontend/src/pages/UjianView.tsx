@@ -51,6 +51,7 @@ const emptyForm = {
   waktuMulai: '',
   waktuSelesai: '',
   durasiMenit: '60',
+  gracePeriodMenit: '5',
   batasTabSwitch: '0',
   acakSoal: false,
   aksesKode: '',
@@ -115,6 +116,7 @@ export function UjianView({
       waktuMulai: String(r.waktuMulai || '').slice(0, 16),
       waktuSelesai: String(r.waktuSelesai || '').slice(0, 16),
       durasiMenit: String(r.durasiMenit ?? '60'),
+      gracePeriodMenit: String(r.gracePeriodMenit ?? '5'),
       batasTabSwitch: String(r.batasTabSwitch ?? '0'),
       acakSoal: !!r.acakSoal,
       aksesKode: String(r.aksesKode || ''),
@@ -140,6 +142,7 @@ export function UjianView({
       waktuMulai: form.waktuMulai ? new Date(form.waktuMulai).toISOString() : undefined,
       waktuSelesai: form.waktuSelesai ? new Date(form.waktuSelesai).toISOString() : undefined,
       durasiMenit: Number(form.durasiMenit) || 0,
+      gracePeriodMenit: Number(form.gracePeriodMenit) || 0,
       batasTabSwitch: Number(form.batasTabSwitch) || 0,
       acakSoal: form.acakSoal,
       aksesKode: form.aksesKode || '',
@@ -250,6 +253,11 @@ export function UjianView({
               <Input type="number" value={form.durasiMenit} onChange={(e) => setForm({ ...form, durasiMenit: e.target.value })} />
             </div>
             <div className="grid gap-2">
+              <Label>Grace Period (menit)</Label>
+              <Input type="number" min="0" value={form.gracePeriodMenit} onChange={(e) => setForm({ ...form, gracePeriodMenit: e.target.value })} />
+              <p className="text-xs text-muted-foreground">Toleransi setelah durasi habis. Siswa masih bisa mengerjakan & mengirim jawaban selama grace period (default 5 mnt).</p>
+            </div>
+            <div className="grid gap-2">
               <Label>Batas Tab Switch (0 = tanpa batas)</Label>
               <Input type="number" min="0" value={form.batasTabSwitch} onChange={(e) => setForm({ ...form, batasTabSwitch: e.target.value })} />
               <p className="text-xs text-muted-foreground">Jika terlampaui, ujian otomatis dikunci & dinilai.</p>
@@ -313,6 +321,7 @@ export function UjianView({
                   <TableCell className="text-sm text-muted-foreground">
                     <div>{fmtDateTime(r.waktuMulai) || '—'}</div>
                     <div className="text-xs">s/d {fmtDateTime(r.waktuSelesai) || '—'}{r.durasiMenit ? ` (${r.durasiMenit} mnt)` : ''}</div>
+                    {r.gracePeriodMenit ? <div className="text-xs text-blue-600">Grace: {r.gracePeriodMenit} mnt</div> : null}
                     {r.batasTabSwitch ? <div className="text-xs text-orange-600">Max {r.batasTabSwitch}x pindah tab</div> : null}
                   </TableCell>
                   <TableCell>

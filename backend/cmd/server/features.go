@@ -147,13 +147,14 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 	if up.Status == "selesai" || up.Status == "dikunci" {
 		return fiber.NewError(403, "Anda sudah menyelesaikan ujian ini")
 	}
-	// Check if time is up
+	// Check if time is up (beyond grace period)
 	if up.Mulai != nil && uj.DurasiMenit > 0 {
-		batas := up.Mulai.Add(time.Duration(uj.DurasiMenit) * time.Minute)
-		if time.Now().After(batas) {
-			// Auto-finish
+		if time.Now().After(batasGrace(&up, uj)) {
+			// Hard lock: grace period expired
 			up.Status = "selesai"
 			up.Selesai = &time.Time{}
+			skor := s.gradeUjianPeserta(&up, uj)
+			up.Skor = &skor
 			s.db.Save(&up)
 			return fiber.NewError(403, "Waktu ujian sudah habis")
 		}
@@ -221,23 +222,33 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 		jawabanList = append(jawabanList, jawabanRes{UjianSoalID: j.SoalID, Jawaban: j.Jawaban})
 	}
 	return c.JSON(fiber.Map{
-		"ujianPesertaId": up.ID,
-		"sisaWaktu":      s.sisaWaktu(&up, uj),
-		"soal":           res,
-		"jawaban":        jawabanList,
+		"ujianPesertaId":   up.ID,
+		"sisaWaktu":        s.sisaWaktu(&up, uj),
+		"gracePeriodMenit": uj.GracePeriodMenit,
+		"soal":             res,
+		"jawaban":          jawabanList,
 	})
 }
 
+// sisaWaktu returns remaining seconds. Positive = normal countdown.
+// Negative = grace period (absolute value = grace seconds remaining).
+// Returns 0 if no timer or both expired.
 func (s *Server) sisaWaktu(up *UjianPeserta, uj *Ujian) int {
 	if up.Mulai == nil || uj.DurasiMenit == 0 {
 		return 0
 	}
-	batas := up.Mulai.Add(time.Duration(uj.DurasiMenit) * time.Minute)
+	batas := batasWaktu(up, uj)
 	sisa := time.Until(batas).Seconds()
-	if sisa < 0 {
-		return 0
+	if sisa >= 0 {
+		return int(sisa)
 	}
-	return int(sisa)
+	// Normal time expired — check grace period
+	grace := batasGrace(up, uj)
+	sisaGrace := time.Until(grace).Seconds()
+	if sisaGrace > 0 {
+		return -int(sisaGrace) // negative = grace period
+	}
+	return 0 // both expired
 }
 
 // jawabSoal — POST /ujian-online/:ujianId/jawab {nisn, aksesKode, ujianSoalId, jawaban}
@@ -253,11 +264,12 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	if up.Status == "selesai" || up.Status == "dikunci" {
 		return fiber.NewError(403, "Ujian sudah selesai")
 	}
-	// Check time
+	// Check time (beyond grace period = hard lock)
 	if up.Mulai != nil && uj.DurasiMenit > 0 {
-		batas := up.Mulai.Add(time.Duration(uj.DurasiMenit) * time.Minute)
-		if time.Now().After(batas) {
+		if time.Now().After(batasGrace(&up, uj)) {
 			up.Status = "selesai"
+			skor := s.gradeUjianPeserta(&up, uj)
+			up.Skor = &skor
 			s.db.Save(&up)
 			return fiber.NewError(403, "Waktu ujian sudah habis")
 		}
@@ -346,8 +358,28 @@ func (s *Server) gradeUjianPeserta(up *UjianPeserta, uj *Ujian) float64 {
 	return skor
 }
 
+// batasWaktu returns the normal deadline (Mulai + DurasiMenit).
+// batasGrace returns the hard deadline including grace period.
+func batasWaktu(up *UjianPeserta, uj *Ujian) time.Time {
+	if up.Mulai == nil || uj.DurasiMenit == 0 {
+		return time.Time{}
+	}
+	return up.Mulai.Add(time.Duration(uj.DurasiMenit) * time.Minute)
+}
+func batasGrace(up *UjianPeserta, uj *Ujian) time.Time {
+	b := batasWaktu(up, uj)
+	if b.IsZero() {
+		return b
+	}
+	gp := uj.GracePeriodMenit
+	if gp <= 0 {
+		gp = 5 // default 5 menit grace period
+	}
+	return b.Add(time.Duration(gp) * time.Minute)
+}
+
 // autoFinishUjianSessions runs every 30s and closes any ujian session whose
-// DurasiMenit has expired. This ensures exams are graded even if the student
+// grace period has expired. This ensures exams are graded even if the student
 // closes their browser without clicking "Selesai".
 func (s *Server) autoFinishUjianSessions() {
 	var pesertas []UjianPeserta
@@ -357,8 +389,8 @@ func (s *Server) autoFinishUjianSessions() {
 		if up.Ujian.DurasiMenit == 0 || up.Mulai == nil {
 			continue
 		}
-		batas := up.Mulai.Add(time.Duration(up.Ujian.DurasiMenit) * time.Minute)
-		if now.After(batas) {
+		// Only auto-finish after the FULL grace period has expired
+		if now.After(batasGrace(&up, &up.Ujian)) {
 			up.Selesai = &now
 			up.Status = "selesai"
 			skor := s.gradeUjianPeserta(&up, &up.Ujian)
