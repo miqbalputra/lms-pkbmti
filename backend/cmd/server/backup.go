@@ -4,7 +4,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -62,7 +64,130 @@ var pendingRestoreApplied bool
 
 func isSQLite() bool { return os.Getenv("DATABASE_URL") == "" }
 
+func dialect() string {
+	if isSQLite() {
+		return "sqlite"
+	}
+	return "postgresql"
+}
+
 func backupDir() string { return env("BACKUP_DIR", defaultBackupDir) }
+
+// ---------------------------------------------------------------------------
+// PostgreSQL backup/restore via pg_dump / psql CLI
+// ---------------------------------------------------------------------------
+
+type pgConnInfo struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	DBName   string
+}
+
+// parseDatabaseURL extracts connection parameters from a PostgreSQL DATABASE_URL
+// of the form: postgres://user:pass@host:port/dbname?options
+func parseDatabaseURL(raw string) (pgConnInfo, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return pgConnInfo{}, fmt.Errorf("invalid DATABASE_URL: %w", err)
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		port = "5432"
+	}
+	user := u.User.Username()
+	pass, _ := u.User.Password()
+	dbName := strings.TrimPrefix(u.Path, "/")
+	if dbName == "" {
+		dbName = "postgres"
+	}
+	return pgConnInfo{
+		Host:     host,
+		Port:     port,
+		User:     user,
+		Password: pass,
+		DBName:   dbName,
+	}, nil
+}
+
+// pgDump runs pg_dump to create a SQL backup of the PostgreSQL database.
+func pgDump(destPath string) error {
+	info, err := parseDatabaseURL(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"-h", info.Host,
+		"-p", info.Port,
+		"-U", info.User,
+		"-d", info.DBName,
+		"-f", destPath,
+		"--no-owner",
+		"--no-privileges",
+		"--clean",
+		"--if-exists",
+	}
+	cmd := exec.Command("pg_dump", args...)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+info.Password)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pg_dump failed: %s — %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// pgRestore runs psql to restore a SQL backup into the PostgreSQL database.
+func pgRestore(srcPath string) error {
+	info, err := parseDatabaseURL(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"-h", info.Host,
+		"-p", info.Port,
+		"-U", info.User,
+		"-d", info.DBName,
+		"-f", srcPath,
+		"--no-owner",
+		"--no-privileges",
+	}
+	cmd := exec.Command("psql", args...)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+info.Password)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("psql restore failed: %s — %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// pgDumpStream runs pg_dump and writes the SQL output to w (for download-only backup).
+func pgDumpStream(w io.Writer) error {
+	info, err := parseDatabaseURL(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"-h", info.Host,
+		"-p", info.Port,
+		"-U", info.User,
+		"-d", info.DBName,
+		"--no-owner",
+		"--no-privileges",
+		"--clean",
+		"--if-exists",
+	}
+	cmd := exec.Command("pg_dump", args...)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+info.Password)
+	cmd.Stdout = w
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("pg_dump failed: %s — %w", strings.TrimSpace(stderr.String()), err)
+	}
+	return nil
+}
 
 // backupReadAuth allows an admin JWT or a static BACKUP_API_KEY (header
 // X-Backup-Key or ?key=). The static key exists so n8n can pull backups on a
@@ -329,38 +454,46 @@ func pruneBackups(retention int) {
 // registered in startScheduler (routes.go) when BACKUP_CRON is set. Audited with
 // no user actor (system-initiated).
 func (s *Server) runScheduledBackup() {
-	if !isSQLite() {
-		return
-	}
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		fmt.Printf("scheduled backup: mkdir failed: %v\n", err)
 		return
 	}
-	format := env("BACKUP_FORMAT", "db")
-	if format != "sql" {
+	format := env("BACKUP_FORMAT", "sql")
+	if isSQLite() && format != "sql" {
 		format = "db"
+	} else {
+		format = "sql"
 	}
 	ts := time.Now().Format("20060102-150405")
 	name := fmt.Sprintf("pkbm-lms-%s-auto.%s", ts, format)
 	dest := filepath.Join(backupDir(), name)
 	var d string
-	if format == "sql" {
-		f, err := os.Create(dest)
-		if err != nil {
-			fmt.Printf("scheduled backup: create failed: %v\n", err)
-			return
+	if isSQLite() {
+		if format == "sql" {
+			f, err := os.Create(dest)
+			if err != nil {
+				fmt.Printf("scheduled backup: create failed: %v\n", err)
+				return
+			}
+			err = s.dumpSQL(f)
+			f.Close()
+			if err != nil {
+				fmt.Printf("scheduled backup: dump failed: %v\n", err)
+				_ = os.Remove(dest)
+				return
+			}
+			d = dest
+		} else {
+			if err := s.backupBinary(dest); err != nil {
+				fmt.Printf("scheduled backup: VACUUM INTO failed: %v\n", err)
+				_ = os.Remove(dest)
+				return
+			}
+			d = dest
 		}
-		err = s.dumpSQL(f)
-		f.Close()
-		if err != nil {
-			fmt.Printf("scheduled backup: dump failed: %v\n", err)
-			_ = os.Remove(dest)
-			return
-		}
-		d = dest
 	} else {
-		if err := s.backupBinary(dest); err != nil {
-			fmt.Printf("scheduled backup: VACUUM INTO failed: %v\n", err)
+		if err := pgDump(dest); err != nil {
+			fmt.Printf("scheduled backup: pg_dump failed: %v\n", err)
 			_ = os.Remove(dest)
 			return
 		}
@@ -572,52 +705,51 @@ func splitSQLStatements(content string) []string {
 
 // GET /backup — list existing backups in the backup dir. (backupReadAuth)
 func (s *Server) listBackupsHandler(c *fiber.Ctx) error {
-	if !isSQLite() {
-		return fiber.NewError(501, "backup/restore not supported for PostgreSQL — use pg_dump")
-	}
 	files, err := listBackupFiles()
 	if err != nil {
 		return fiber.NewError(500, err.Error())
 	}
-	return c.JSON(fiber.Map{"dir": backupDir(), "backups": files})
+	return c.JSON(fiber.Map{"dir": backupDir(), "backups": files, "dialect": dialect()})
 }
 
 // GET /backup/download?format=db|sql — generate a fresh full backup and stream
-// it. db → binary snapshot (VACUUM INTO); sql → text dump. (backupReadAuth)
+// it. For SQLite: db → binary snapshot (VACUUM INTO); sql → text dump.
+// For PostgreSQL: always produces a .sql dump via pg_dump. (backupReadAuth)
 func (s *Server) downloadBackup(c *fiber.Ctx) error {
-	if !isSQLite() {
-		return fiber.NewError(501, "backup/restore not supported for PostgreSQL — use pg_dump")
-	}
-	format := c.Query("format", "db")
-	if format != "sql" {
+	format := c.Query("format", "sql")
+	if isSQLite() && format != "sql" {
 		format = "db"
+	} else {
+		format = "sql"
 	}
 	ts := time.Now().Format("20060102-150405")
 	fname := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
 	}
-	// Use the OS temp dir for the staging file so the backups/ folder stays clean
-	// (best-effort cleanup after the send; on Windows a still-open handle can
-	// briefly defer removal, hence the temp dir rather than backups/).
 	tmp, err := os.CreateTemp("", "pkbm-dl-*")
 	if err != nil {
 		return fiber.NewError(500, "tidak dapat membuat file sementara")
 	}
 	tmpPath := tmp.Name()
-	if format == "sql" {
-		err = s.dumpSQL(tmp)
-		tmp.Close()
+	if isSQLite() {
+		if format == "sql" {
+			err = s.dumpSQL(tmp)
+			tmp.Close()
+		} else {
+			tmp.Close()
+			_ = os.Remove(tmpPath)
+			err = s.backupBinary(tmpPath)
+		}
 	} else {
 		tmp.Close()
-		_ = os.Remove(tmpPath) // VACUUM INTO needs a non-existent dest
-		err = s.backupBinary(tmpPath)
+		_ = os.Remove(tmpPath)
+		err = pgDump(tmpPath)
 	}
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		return fiber.NewError(500, "gagal membuat backup: "+err.Error())
 	}
-	// Stream as a download; clean up the temp file afterwards.
 	c.Set("Content-Disposition", `attachment; filename="`+fname+`"`)
 	if format == "sql" {
 		c.Set("Content-Type", "application/sql; charset=utf-8")
@@ -635,9 +767,6 @@ func (s *Server) downloadBackup(c *fiber.Ctx) error {
 // GET /backup/file/:name — download a previously created backup file by name.
 // (backupReadAuth) Path traversal guarded.
 func (s *Server) downloadBackupFile(c *fiber.Ctx) error {
-	if !isSQLite() {
-		return fiber.NewError(501, "backup/restore not supported for PostgreSQL — use pg_dump")
-	}
 	name := c.Params("name")
 	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") {
 		return fiber.NewError(400, "nama file tidak valid")
@@ -656,12 +785,11 @@ func (s *Server) downloadBackupFile(c *fiber.Ctx) error {
 // POST /backup (admin JWT) — create a backup now in the backup dir and return
 // its metadata. The admin UI uses this; n8n uses GET /backup/download instead.
 func (s *Server) createBackupNow(c *fiber.Ctx) error {
-	if !isSQLite() {
-		return fiber.NewError(501, "backup/restore not supported for PostgreSQL — use pg_dump")
-	}
-	format := c.Query("format", "db")
-	if format != "sql" {
+	format := c.Query("format", "sql")
+	if isSQLite() && format != "sql" {
 		format = "db"
+	} else {
+		format = "sql"
 	}
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
@@ -669,21 +797,28 @@ func (s *Server) createBackupNow(c *fiber.Ctx) error {
 	ts := time.Now().Format("20060102-150405")
 	name := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
 	dest := filepath.Join(backupDir(), name)
-	if format == "sql" {
-		f, err := os.Create(dest)
-		if err != nil {
-			return fiber.NewError(500, err.Error())
-		}
-		err = s.dumpSQL(f)
-		f.Close()
-		if err != nil {
-			_ = os.Remove(dest)
-			return fiber.NewError(500, "gagal dump: "+err.Error())
+	if isSQLite() {
+		if format == "sql" {
+			f, err := os.Create(dest)
+			if err != nil {
+				return fiber.NewError(500, err.Error())
+			}
+			err = s.dumpSQL(f)
+			f.Close()
+			if err != nil {
+				_ = os.Remove(dest)
+				return fiber.NewError(500, "gagal dump: "+err.Error())
+			}
+		} else {
+			if err := s.backupBinary(dest); err != nil {
+				_ = os.Remove(dest)
+				return fiber.NewError(500, "gagal backup: "+err.Error())
+			}
 		}
 	} else {
-		if err := s.backupBinary(dest); err != nil {
+		if err := pgDump(dest); err != nil {
 			_ = os.Remove(dest)
-			return fiber.NewError(500, "gagal backup: "+err.Error())
+			return fiber.NewError(500, "gagal pg_dump: "+err.Error())
 		}
 	}
 	uid := c.Locals("userID").(string)
@@ -692,59 +827,83 @@ func (s *Server) createBackupNow(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"name": name, "size": info.Size(), "path": dest, "format": format})
 }
 
-// POST /backup/restore (admin JWT) — stage an uploaded backup file for restore
-// on next restart. Accepts multipart "file" (db|sql). The file extension
-// decides the restore mode. Returns instructions; no restart is performed here.
+// POST /backup/restore (admin JWT) — stage an uploaded backup file for restore.
+// SQLite: staged as pending file, applied on next restart.
+// PostgreSQL: applied immediately via psql (no restart needed).
 func (s *Server) stageRestore(c *fiber.Ctx) error {
-	if !isSQLite() {
-		return fiber.NewError(501, "backup/restore not supported for PostgreSQL — use pg_dump")
-	}
 	fh, err := c.FormFile("file")
 	if err != nil {
 		return fiber.NewError(400, "file backup wajib diunggah (field name=file)")
 	}
 	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	// Clean any prior staged restore of the other kind so only one is pending.
-	_ = os.Remove(pendingDBPath)
-	_ = os.Remove(pendingSQLPath)
-	switch ext {
-	case ".db":
-		// Validate it's a SQLite file (magic header "SQLite format 3\0").
-		f, err := fh.Open()
-		if err != nil {
-			return fiber.NewError(500, "tidak dapat membaca file")
+
+	if isSQLite() {
+		// Clean any prior staged restore of the other kind so only one is pending.
+		_ = os.Remove(pendingDBPath)
+		_ = os.Remove(pendingSQLPath)
+		switch ext {
+		case ".db":
+			f, err := fh.Open()
+			if err != nil {
+				return fiber.NewError(500, "tidak dapat membaca file")
+			}
+			hdr := make([]byte, 16)
+			n, _ := f.Read(hdr)
+			f.Close()
+			if n < 16 || string(hdr[:15]) != "SQLite format 3" {
+				return fiber.NewError(400, "file .db bukan database SQLite yang valid")
+			}
+			if err := c.SaveFile(fh, pendingDBPath); err != nil {
+				return fiber.NewError(500, "gagal menyimpan file restore")
+			}
+		case ".sql":
+			if err := c.SaveFile(fh, pendingSQLPath); err != nil {
+				return fiber.NewError(500, "gagal menyimpan file restore")
+			}
+		default:
+			return fiber.NewError(400, "ekstensi file harus .db atau .sql")
 		}
-		hdr := make([]byte, 16)
-		n, _ := f.Read(hdr)
-		f.Close()
-		if n < 16 || string(hdr[:15]) != "SQLite format 3" {
-			return fiber.NewError(400, "file .db bukan database SQLite yang valid")
-		}
-		if err := c.SaveFile(fh, pendingDBPath); err != nil {
-			return fiber.NewError(500, "gagal menyimpan file restore")
-		}
-	case ".sql":
-		if err := c.SaveFile(fh, pendingSQLPath); err != nil {
-			return fiber.NewError(500, "gagal menyimpan file restore")
-		}
-	default:
-		return fiber.NewError(400, "ekstensi file harus .db atau .sql")
+		uid := c.Locals("userID").(string)
+		mode := ext[1:]
+		s.audit(&uid, "restore", "system", "staged "+mode+" restore pending restart")
+		return c.JSON(fiber.Map{
+			"ok":      true,
+			"mode":    mode,
+			"message": "Restore disiapkan. Restart server (hentikan lalu jalankan lagi, atau jika dijalankan di bawah supervisor/process manager, proses akan auto-restart) untuk menerapkan. DB saat ini otomatis di-backup ke backups/pre-restore-<waktu>.db sebagai pengaman.",
+		})
+	}
+
+	// PostgreSQL: apply immediately via psql
+	if ext != ".sql" {
+		return fiber.NewError(400, "restore PostgreSQL hanya menerima file .sql")
+	}
+	tmp, err := os.CreateTemp("", "pkbm-restore-pg-*.sql")
+	if err != nil {
+		return fiber.NewError(500, "tidak dapat membuat file sementara")
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	if err := c.SaveFile(fh, tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fiber.NewError(500, "gagal menyimpan file restore")
 	}
 	uid := c.Locals("userID").(string)
-	mode := ext[1:]
-	s.audit(&uid, "restore", "system", "staged "+mode+" restore pending restart")
+	if err := pgRestore(tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		s.audit(&uid, "restore", "system", "psql restore FAILED: "+err.Error())
+		return fiber.NewError(500, "gagal restore PostgreSQL: "+err.Error())
+	}
+	_ = os.Remove(tmpPath)
+	s.audit(&uid, "restore", "system", "psql restore applied successfully")
 	return c.JSON(fiber.Map{
 		"ok":      true,
-		"mode":    mode,
-		"message": "Restore disiapkan. Restart server (hentikan lalu jalankan lagi, atau jika dijalankan di bawah supervisor/process manager, proses akan auto-restart) untuk menerapkan. DB saat ini otomatis di-backup ke backups/pre-restore-<waktu>.db sebagai pengaman.",
+		"mode":    "sql",
+		"message": "Restore PostgreSQL berhasil diterapkan langsung ke database.",
 	})
 }
 
 // deleteBackupFile (admin JWT) — DELETE /backup/:name — remove a backup file.
 func (s *Server) deleteBackupFile(c *fiber.Ctx) error {
-	if !isSQLite() {
-		return fiber.NewError(501, "backup/restore not supported for PostgreSQL — use pg_dump")
-	}
 	name := c.Params("name")
 	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") {
 		return fiber.NewError(400, "nama file tidak valid")

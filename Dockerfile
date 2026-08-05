@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 go build -o /pkbm-server ./cmd/server
 
 FROM alpine:3.21
 WORKDIR /app
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates postgresql-client
 COPY --from=backend-build /pkbm-server ./pkbm-server
 COPY --from=frontend-build /app/frontend/dist ./public
 EXPOSE 8080

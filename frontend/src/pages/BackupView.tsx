@@ -55,11 +55,14 @@ async function downloadBinary(path: string, token: string, fallback: string) {
 export function BackupView({ token }: { token: string }) {
   const [backups, setBackups] = useState<Backup[]>([])
   const [dir, setDir] = useState('backups')
+  const [dialect, setDialect] = useState('sqlite')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState<string | null>(null) // 'db' | 'sql' | 'restore' | null
   const [restoreMsg, setRestoreMsg] = useState('')
   const [showGuide, setShowGuide] = useState(true)
   const fileRef = useRef<HTMLInputElement | null>(null)
+
+  const isPG = dialect === 'postgresql'
 
   function copyCode(code: string) {
     void navigator.clipboard.writeText(code).then(
@@ -71,9 +74,10 @@ export function BackupView({ token }: { token: string }) {
   async function load() {
     setLoading(true)
     try {
-      const r = (await request('/backup', token)) as { dir: string; backups: Backup[] }
+      const r = (await request('/backup', token)) as { dir: string; backups: Backup[]; dialect: string }
       setDir(r.dir || 'backups')
       setBackups(r.backups || [])
+      setDialect(r.dialect || 'sqlite')
     } catch (e: unknown) {
       toast.error(String((e as Error).message || 'Gagal memuat daftar backup'))
     } finally {
@@ -86,10 +90,11 @@ export function BackupView({ token }: { token: string }) {
   }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function createBackup(format: 'db' | 'sql') {
+    const actualFormat = isPG ? 'sql' : format
     setBusy(format)
     try {
-      const r = (await request('/backup?format=' + format, token, 'POST')) as { name: string }
-      toast.success(`Backup ${format.toUpperCase()} dibuat: ${r.name}`)
+      const r = (await request('/backup?format=' + actualFormat, token, 'POST')) as { name: string }
+      toast.success(`Backup ${isPG ? 'pg_dump' : actualFormat.toUpperCase()} dibuat: ${r.name}`)
       void load()
     } catch (e: unknown) {
       toast.error(String((e as Error).message || 'Gagal membuat backup'))
@@ -139,11 +144,15 @@ export function BackupView({ token }: { token: string }) {
     e.preventDefault()
     const f = fileRef.current?.files?.[0]
     if (!f) {
-      toast.error('Pilih file backup (.db atau .sql) terlebih dahulu.')
+      toast.error('Pilih file backup (.sql) terlebih dahulu.')
       return
     }
     const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
-    if (ext !== '.db' && ext !== '.sql') {
+    if (isPG && ext !== '.sql') {
+      toast.error('PostgreSQL hanya menerima file .sql')
+      return
+    }
+    if (!isPG && ext !== '.db' && ext !== '.sql') {
       toast.error('File harus berekstensi .db atau .sql')
       return
     }
@@ -160,8 +169,8 @@ export function BackupView({ token }: { token: string }) {
       })
       const x = (await r.json().catch(() => ({}))) as { error?: string; message?: string }
       if (!r.ok) throw new Error(x.error || 'Gagal menyiapkan restore')
-      setRestoreMsg(x.message || 'Restore disiapkan. Restart server untuk menerapkan.')
-      toast.success('Restore disiapkan — restart server untuk menerapkan.')
+      setRestoreMsg(x.message || 'Restore berhasil.')
+      toast.success(isPG ? 'Restore PostgreSQL berhasil diterapkan.' : 'Restore disiapkan — restart server untuk menerapkan.')
       if (fileRef.current) fileRef.current.value = ''
     } catch (err: unknown) {
       toast.error(String((err as Error).message || 'Gagal restore'))
@@ -176,7 +185,10 @@ export function BackupView({ token }: { token: string }) {
     <div className="space-y-4">
       <PageToolbar
         title="Backup & Restore Database"
-        description="Cadangkan seluruh database SQLite (binary .db atau SQL text), jadwalkan otomatis, sambungkan ke n8n, dan pemulihan satu langkah."
+        description={isPG
+          ? "Cadangkan database PostgreSQL via pg_dump (.sql). Restore diterapkan langsung tanpa restart."
+          : "Cadangkan seluruh database SQLite (binary .db atau SQL text), jadwalkan otomatis, sambungkan ke n8n, dan pemulihan satu langkah."
+        }
       />
 
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs space-y-3">
@@ -184,7 +196,11 @@ export function BackupView({ token }: { token: string }) {
           <div>
             <h2 className="text-sm font-semibold">Buat Backup Baru</h2>
             <p className="text-xs text-muted-foreground">
-              Format <strong>.db</strong> = snapshot biner (paling cepat &amp; restore paling mudah). Format <strong>.sql</strong> = text portable (bisa dibaca/diff, untuk arsip n8n).
+              {isPG ? (
+                <>Format <strong>.sql</strong> = dump PostgreSQL via <code>pg_dump</code> (portable, bisa direstore ke instance PG lain).</>
+              ) : (
+                <>Format <strong>.db</strong> = snapshot biner (paling cepat &amp; restore paling mudah). Format <strong>.sql</strong> = text portable (bisa dibaca/diff, untuk arsip n8n).</>
+              )}
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
@@ -192,15 +208,19 @@ export function BackupView({ token }: { token: string }) {
           </Button>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => createBackup('db')} disabled={busy === 'db'}>
-            <Database className="h-4 w-4" /> {busy === 'db' ? 'Memproses...' : 'Backup .db (biner)'}
+          {!isPG && (
+            <Button onClick={() => createBackup('db')} disabled={busy === 'db'}>
+              <Database className="h-4 w-4" /> {busy === 'db' ? 'Memproses...' : 'Backup .db (biner)'}
+            </Button>
+          )}
+          <Button onClick={() => createBackup('sql')} disabled={busy === 'sql'} variant={isPG ? 'default' : 'outline'}>
+            <Plus className="h-4 w-4" /> {busy === 'sql' ? 'Memproses...' : isPG ? 'Backup pg_dump (.sql)' : 'Backup .sql (text)'}
           </Button>
-          <Button onClick={() => createBackup('sql')} disabled={busy === 'sql'} variant="outline">
-            <Plus className="h-4 w-4" /> {busy === 'sql' ? 'Memproses...' : 'Backup .sql (text)'}
-          </Button>
-          <Button onClick={() => downloadFresh('db')} disabled={busy === 'dl-db'} variant="ghost">
-            <HardDriveDownload className="h-4 w-4" /> Unduh .db langsung
-          </Button>
+          {!isPG && (
+            <Button onClick={() => downloadFresh('db')} disabled={busy === 'dl-db'} variant="ghost">
+              <HardDriveDownload className="h-4 w-4" /> Unduh .db langsung
+            </Button>
+          )}
           <Button onClick={() => downloadFresh('sql')} disabled={busy === 'dl-sql'} variant="ghost">
             <Download className="h-4 w-4" /> Unduh .sql langsung
           </Button>
@@ -260,16 +280,20 @@ export function BackupView({ token }: { token: string }) {
         <div>
           <h2 className="text-sm font-semibold flex items-center gap-2"><FileUp className="h-4 w-4" /> Restore (Pemulihan)</h2>
           <p className="text-xs text-muted-foreground">
-            Unggah file backup <code>.db</code> atau <code>.sql</code>. Restore diterapkan pada <strong>restart server berikutnya</strong> — DB saat ini otomatis disalin ke <code>backups/pre-restore-*</code> sebagai pengaman, jadi aman bila perlu dibatalkan.
+            {isPG ? (
+              <>Unggah file backup <code>.sql</code>. Restore PostgreSQL <strong>diterapkan langsung</strong> ke database tanpa restart.</>
+            ) : (
+              <>Unggah file backup <code>.db</code> atau <code>.sql</code>. Restore diterapkan pada <strong>restart server berikutnya</strong> — DB saat ini otomatis disalin ke <code>backups/pre-restore-*</code> sebagai pengaman, jadi aman bila perlu dibatalkan.</>
+            )}
           </p>
         </div>
         <form className="flex flex-wrap items-end gap-3" onSubmit={uploadRestore}>
           <div className="grid gap-1.5 flex-1 min-w-[240px]">
-            <Label className="text-xs">File backup (.db / .sql)</Label>
-            <input ref={fileRef} type="file" accept=".db,.sql" className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
+            <Label className="text-xs">File backup {isPG ? '(.sql)' : '(.db / .sql)'}</Label>
+            <input ref={fileRef} type="file" accept={isPG ? '.sql' : '.db,.sql'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
           </div>
           <Button type="submit" disabled={busy === 'restore'}>
-            <FileUp className="h-4 w-4" /> {busy === 'restore' ? 'Mengunggah...' : 'Siapkan Restore'}
+            <FileUp className="h-4 w-4" /> {busy === 'restore' ? 'Memproses...' : isPG ? 'Restore Sekarang' : 'Siapkan Restore'}
           </Button>
         </form>
         {restoreMsg && (
@@ -432,7 +456,7 @@ export function BackupView({ token }: { token: string }) {
                 <li><strong>"database is locked"</strong> sudah ditangani <code>WAL + busy_timeout</code> — writer menunggu, bukan gagal. Jika muncul, periksa apakah ada proses lain (mis. sqlite3 CLI) memegang lock lama.</li>
                 <li>Restore gagal? Lihat log startup (<code>RESTORE applied ...</code> atau error). DB lama tetap utuh di <code>backups/pre-restore-*</code>.</li>
                 <li>File sementara unduh (<code>pkbm-dl-*</code>) ditulis di <em>OS temp dir</em>, bukan folder backup.</li>
-                <li>Backup/restore via endpoint ini hanya untuk <strong>SQLite</strong> (default). Jika <code>DATABASE_URL</code> di-set (PostgreSQL), endpoint mengembalikan 501 — gunakan <code>pg_dump</code>.</li>
+                <li>Backup/restore mendukung <strong>SQLite</strong> dan <strong>PostgreSQL</strong>. PostgreSQL menggunakan <code>pg_dump</code>/<code>psql</code> — restore diterapkan langsung tanpa restart.</li>
               </ul>
             </section>
           </div>
