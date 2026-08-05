@@ -312,61 +312,49 @@ func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
 	now := time.Now()
 	up.Selesai = &now
 	up.Status = "selesai"
-	// Auto-grade PG: compare jawaban with kunci, compute score
+
 	var jawabans []UjianJawaban
 	s.db.Where("ujian_peserta_id = ?", up.ID).Find(&jawabans)
 	var ujianSoals []UjianSoal
 	s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&ujianSoals)
-	// Build kunci map
-	kunciMap := map[string]string{}
+
+	// Build lookup: soalID -> UjianSoal (with Soal.Tipe and Bobot)
+	soalLookup := map[string]UjianSoal{}
 	for _, us := range ujianSoals {
-		kunciMap[us.SoalID] = us.Soal.Kunci
+		soalLookup[us.SoalID] = us
 	}
+
 	totalSkor := 0.0
 	totalBobot := 0.0
 	for i := range jawabans {
-		kunci := strings.TrimSpace(kunciMap[jawabans[i].SoalID])
+		us, ok := soalLookup[jawabans[i].SoalID]
+		if !ok {
+			s.db.Save(&jawabans[i])
+			continue
+		}
+		totalBobot += us.Bobot
+		kunci := strings.TrimSpace(us.Soal.Kunci)
 		jawaban := strings.TrimSpace(jawabans[i].Jawaban)
-		if kunci != "" && jawaban != "" {
-			// For PG: kunci is index (0..n), jawaban is also index
-			// For essay: case-insensitive contains check
-			if kunci == jawaban {
-				benar := true
-				jawabans[i].Benar = &benar
-				// Find bobot
-				for _, us := range ujianSoals {
-					if us.SoalID == jawabans[i].SoalID {
-						jawabans[i].Nilai = us.Bobot
-						totalSkor += us.Bobot
-						totalBobot += us.Bobot
-						break
-					}
-				}
-			} else {
-				benar := false
-				jawabans[i].Benar = &benar
-			}
+		if kunci == "" || jawaban == "" {
+			s.db.Save(&jawabans[i])
+			continue
+		}
+		var benar bool
+		switch us.Soal.Tipe {
+		case "essay":
+			// Case-insensitive contains: jawaban must contain kunci (or vice versa)
+			benar = strings.Contains(strings.ToLower(jawaban), strings.ToLower(kunci))
+		default: // "pg" — exact match on index
+			benar = kunci == jawaban
+		}
+		jawabans[i].Benar = &benar
+		if benar {
+			jawabans[i].Nilai = us.Bobot
+			totalSkor += us.Bobot
 		}
 		s.db.Save(&jawabans[i])
 	}
-	// Compute total bobot
-	for _, us := range ujianSoals {
-		totalBobot += us.Bobot
-	}
-	// Avoid double-counting: recalculate properly
-	totalSkor = 0
-	totalBobot = 0
-	for i := range jawabans {
-		for _, us := range ujianSoals {
-			if us.SoalID == jawabans[i].SoalID {
-				totalBobot += us.Bobot
-				if jawabans[i].Benar != nil && *jawabans[i].Benar {
-					totalSkor += jawabans[i].Nilai
-				}
-				break
-			}
-		}
-	}
+
 	var skor float64
 	if totalBobot > 0 {
 		skor = (totalSkor / totalBobot) * 100

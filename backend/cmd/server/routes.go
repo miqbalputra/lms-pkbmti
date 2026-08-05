@@ -4297,8 +4297,12 @@ func (s *Server) exportUjianResults(c *fiber.Ctx) error {
 	s.db.Preload("PesertaDidik").Preload("PesertaDidik.Kelas").
 		Where("ujian_id = ?", uj.ID).Find(&participants)
 
+	var participantIDs []string
+	for _, p := range participants {
+		participantIDs = append(participantIDs, p.ID)
+	}
 	var answers []UjianJawaban
-	s.db.Where("ujian_id = ?", uj.ID).Find(&answers)
+	s.db.Where("ujian_peserta_id IN ?", participantIDs).Find(&answers)
 
 	// Build answer map: participantID -> soalID -> jawaban
 	answerMap := map[string]map[string]string{}
@@ -7165,7 +7169,8 @@ func (s *Server) recomputeRekap(tx *gorm.DB, pesertaDidikID, mapelID, kelasID, t
 // nilaiSumber returns the per-source average nilai for one (peserta, kelas, mapel,
 // semester). UM = avg NilaiUM (== np yang sudah dihitung pemanggil). TUGAS = avg
 // PengumpulanTugas.Nilai berstatus "Dinilai" untuk tugas di kelas+mapel+semester.
-// UJIAN (luring, tidak ada nilai tersimpan) & PRAKTIK (Modul M, belum) → nil.
+// UJIAN = avg UjianPeserta.Skor untuk ujian online di mapel+semester.
+// PRAKTIK (Modul M, belum) → nil.
 func nilaiSumber(tx *gorm.DB, pesertaDidikID, kelasID, mapelID, semester, kode string, np *float64) *float64 {
 	switch kode {
 	case "UM":
@@ -7187,6 +7192,31 @@ func nilaiSumber(tx *gorm.DB, pesertaDidikID, kelasID, mapelID, semester, kode s
 		for _, p := range pks {
 			if p.Nilai != nil {
 				sum += *p.Nilai
+				cnt++
+			}
+		}
+		if cnt == 0 {
+			return nil
+		}
+		v := round2(sum / float64(cnt))
+		return &v
+	case "UJIAN":
+		var ujians []Ujian
+		tx.Where("mapel_id = ? AND semester = ?", mapelID, semester).Find(&ujians)
+		if len(ujians) == 0 {
+			return nil
+		}
+		ujianIDs := make([]string, len(ujians))
+		for i, u := range ujians {
+			ujianIDs[i] = u.ID
+		}
+		var pesertas []UjianPeserta
+		tx.Where("ujian_id IN ? AND peserta_didik_id = ? AND status = ?", ujianIDs, pesertaDidikID, "selesai").Find(&pesertas)
+		var sum float64
+		var cnt int
+		for _, p := range pesertas {
+			if p.Skor != nil {
+				sum += *p.Skor
 				cnt++
 			}
 		}
