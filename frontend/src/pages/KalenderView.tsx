@@ -1,13 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { CalendarDays, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
-import { EmptyState, FormCard, PageToolbar } from '../components/ui/page'
+import { FormCard, PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
-import type { User } from '../App'
 import { request } from '../lib/api'
 
 type Event = Record<string, unknown> & { id: string }
@@ -33,11 +32,9 @@ function firstDayOfMonth(y: number, m: number) { return new Date(y, m, 1).getDay
 
 export function KalenderView({
   token,
-  user,
   readOnly,
 }: {
   token: string
-  user: User
   readOnly: boolean
 }) {
   const [events, setEvents] = useState<Event[]>([])
@@ -113,7 +110,7 @@ export function KalenderView({
           <div
             key={ev.id}
             className="rounded px-1 py-0.5 mb-0.5 truncate font-medium cursor-pointer hover:opacity-80"
-            style={{ backgroundColor: String(ev.warna || tipeWarna[ev.tipe] || '#ccc') + '22', color: String(ev.warna || tipeWarna[ev.tipe] || '#333') }}
+            style={{ backgroundColor: String(ev.warna || tipeWarna[String(ev.tipe)] || '#ccc') + '22', color: String(ev.warna || tipeWarna[String(ev.tipe)] || '#333') }}
             title={String(ev.judul)}
           >
             {String(ev.judul).slice(0, 15)}
@@ -191,7 +188,7 @@ export function KalenderView({
             <div className="space-y-2">
               {events.map(ev => (
                 <div key={ev.id} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30 text-sm">
-                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: String(ev.warna || tipeWarna[ev.tipe]) }} />
+                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: String(ev.warna || tipeWarna[String(ev.tipe)]) }} />
                   <div className="flex-1 min-w-0">
                     <span className="font-medium">{String(ev.judul)}</span>
                     <span className="text-muted-foreground ml-2 text-xs">{String(ev.tanggalMulai).slice(0, 10)}</span>

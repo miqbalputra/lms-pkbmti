@@ -5,19 +5,14 @@ import { Card } from '../components/ui/card'
 import { EmptyState, PageToolbar } from '../components/ui/page'
 import { Badge } from '../components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
-import type { User } from '../App'
 import { request } from '../lib/api'
 
 type Peserta = Record<string, unknown> & { id: string }
 
 export function UjianMonitorView({
   token,
-  user,
-  readOnly,
 }: {
   token: string
-  user: User
-  readOnly: boolean
 }) {
   const [ujians, setUjians] = useState<Peserta[]>([])
   const [selected, setSelected] = useState<string>('')

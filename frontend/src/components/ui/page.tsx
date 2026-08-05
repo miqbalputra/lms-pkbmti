@@ -33,7 +33,16 @@ export function FormCard({ title, description, children }: { title: string; desc
   )
 }
 
-export function EmptyState({ colSpan = 1, label = 'Belum ada data.' }: { colSpan?: number; label?: string }) {
+export function EmptyState({ colSpan = 1, label = 'Belum ada data.', title, description, icon }: { colSpan?: number; label?: string; title?: string; description?: string; icon?: React.ReactNode }) {
+  if (title || icon) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        {icon && <div className="mb-3">{icon}</div>}
+        <h4 className="text-sm font-bold text-foreground">{title || label}</h4>
+        {description && <p className="mt-1 text-xs text-muted-foreground">{description}</p>}
+      </div>
+    )
+  }
   return (
     <tr>
       <td colSpan={colSpan} className="h-32 text-center text-sm text-muted-foreground font-medium">

@@ -225,10 +225,10 @@ function Workspace({
   if (page === 'laporan') return <LaporanView token={token} />
   if (page === 'import') return user.role === 'admin' || user.role === 'guru' ? <ImportView token={token} user={user} /> : <Restricted />
   if (page === 'backup') return user.role === 'admin' ? <BackupView token={token} /> : <Restricted />
-  if (page === 'ujian-online') return <UjianOnlineView token={token} user={user} />
-  if (page === 'ujian-monitor') return <UjianMonitorView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
+  if (page === 'ujian-online') return <UjianOnlineView token={token} />
+  if (page === 'ujian-monitor') return <UjianMonitorView token={token} />
   if (page === 'notifikasi') return <NotifikasiView token={token} />
-  if (page === 'kalender') return <KalenderView token={token} user={user} readOnly={user.role === 'kepala_sekolah' || user.role === 'guru'} />
+  if (page === 'kalender') return <KalenderView token={token} readOnly={user.role === 'kepala_sekolah' || user.role === 'guru'} />
   if (page === 'analytics') return <AnalyticsView token={token} />
   if (page === 'portal-ortu') {
     window.open('/api/orang-tua/portal', '_blank')

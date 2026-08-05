@@ -306,7 +306,7 @@ export function UjianView({
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1 flex-wrap">
-                      {r.aksesKode && (
+                      {Boolean(r.aksesKode) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -316,7 +316,7 @@ export function UjianView({
                           🎓 Siswa
                         </Button>
                       )}
-                      {r.aksesKode && setPage && (
+                      {Boolean(r.aksesKode) && setPage && (
                         <Button
                           size="sm"
                           variant="default"

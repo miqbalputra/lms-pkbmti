@@ -1,8 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
-import { BarChart3, Users, School, BookOpen, CalendarCheck, Award, TrendingUp, Filter } from 'lucide-react'
-import { Card, CardContent } from '../components/ui/card'
+import { BarChart3, Users, School, BookOpen, CalendarCheck, TrendingUp, Filter } from 'lucide-react'
+import { Card } from '../components/ui/card'
 import { PageToolbar } from '../components/ui/page'
-import { Button } from '../components/ui/button'
 import { request } from '../lib/api'
 import {
   BarChart,
@@ -15,9 +14,6 @@ import {
   PieChart,
   Pie,
   Cell,
-  LineChart,
-  Line,
-  Legend,
 } from 'recharts'
 
 type DashboardData = Record<string, unknown>
@@ -38,7 +34,6 @@ export function AnalyticsView({ token }: { token: string }) {
   const [loading, setLoading] = useState(true)
   const [semester, setSemester] = useState('')
   const [year, setYear] = useState(new Date().getFullYear())
-  const [ujian, setUjian] = useState<Record<string, unknown>[]>([])
 
   useEffect(() => {
     setLoading(true)
@@ -52,7 +47,6 @@ export function AnalyticsView({ token }: { token: string }) {
       request('/mapel', token).then(d => setMapel(Array.isArray(d) ? d : [])).catch(() => {}),
       request('/kelas', token).then(d => setKelas(Array.isArray(d) ? d : [])).catch(() => {}),
       request('/peserta-didik', token).then(d => setSiswa(Array.isArray(d) ? d : [])).catch(() => {}),
-      request('/ujian', token).then(d => setUjian(Array.isArray(d) ? d : [])).catch(() => {}),
     ]).finally(() => setLoading(false))
   }, [token, semester, year])
 
@@ -67,7 +61,6 @@ export function AnalyticsView({ token }: { token: string }) {
   }, [siswa, semester, year])
 
   const perPokjar = (data.perPokjar as { label: string; total: number }[]) || []
-  const perKelas = (data.perKelas as { label: string; total: number }[]) || []
 
   // Compute analytics using filtered siswa
   const siswaByGender = [
@@ -85,15 +78,6 @@ export function AnalyticsView({ token }: { token: string }) {
     name: `Kelas ${String(k.jenjang || '')}${String(k.namaRombel || '')}`,
     siswa: filteredSiswa.filter(s => s.kelasId === k.id).length,
   })).sort((a, b) => b.siswa - a.siswa).slice(0, 10)
-
-  // Ujian completion stats
-  const ujianStats = useMemo(() => {
-    if (!Array.isArray(ujian) || ujian.length === 0) return []
-    return ujian.slice(0, 10).map((u: any) => ({
-      name: String(u.judul || '-').slice(0, 20),
-      soal: Number(u.jumlahSoal || 0),
-    }))
-  }, [ujian])
 
   const kpis = [
     { label: 'Total Peserta Didik', value: filteredSiswa.length, icon: Users },

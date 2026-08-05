@@ -84,7 +84,6 @@ export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
   // Real notifications state
   const [notifs, setNotifs] = useState<Notif[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
-  const [notifLoading, setNotifLoading] = useState(false)
 
   const loadNotifs = useCallback(() => {
     if (!token) return
@@ -350,9 +349,7 @@ export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
                 </div>
 
                 <div className="max-h-72 overflow-y-auto custom-scrollbar divide-y divide-gray-100 dark:divide-gray-800 py-1">
-                  {notifLoading ? (
-                    <div className="p-4 text-center text-sm text-gray-500">Memuat...</div>
-                  ) : notifs.length === 0 ? (
+                  {notifs.length === 0 ? (
                     <div className="p-4 text-center text-sm text-gray-500">Tidak ada notifikasi</div>
                   ) : (
                     notifs.map((n) => (

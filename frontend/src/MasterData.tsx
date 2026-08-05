@@ -61,7 +61,7 @@ type Field = {
 type Column = {
   key: string
   label: string
-  render?: 'text' | 'badge' | 'badgeBrand' | 'badgeSelect' | 'date' | 'dateRange' | 'activeStatus' | 'info' | 'boolean'
+  render?: 'text' | 'badge' | 'badgeBrand' | 'badgeSelect' | 'date' | 'dateRange' | 'activeStatus' | 'archiveStatus' | 'info' | 'boolean'
   primary?: boolean
   mono?: boolean
   truncate?: boolean
@@ -635,9 +635,10 @@ export function MasterData({
         )
       case 'text':
         if (col.key === '_tahunAjaran') {
+          const ta = row.tahunAjaran as Record<string, unknown> | undefined
           return (
             <TableCell key={col.key} className="text-muted-foreground text-xs">
-              {(row.tahunAjaran as Row)?.namaTahunAjaran || String(row.tahunAjaranId || '-')}
+              {String(ta?.namaTahunAjaran || row.tahunAjaranId || '-')}
             </TableCell>
           )
         }
