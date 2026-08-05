@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { KeyRound, Pencil, Plus, Printer, Trash2 } from 'lucide-react'
+import { Dices, KeyRound, Pencil, Plus, Printer, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -81,6 +81,13 @@ export function UjianView({
   const kelasOptions = isGuru
     ? kelas.filter((k) => String(k.waliKelasId || '') === (user.tutorId || ''))
     : kelas
+
+  function genToken(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    let t = ''
+    for (let i = 0; i < 6; i++) t += chars[Math.floor(Math.random() * chars.length)]
+    return t
+  }
 
   const load = () => {
     void request('/ujian', token).then((r: Row[]) => setRows(r || [])).catch(() => setRows([]))
@@ -245,7 +252,23 @@ export function UjianView({
             </div>
             <div className="grid gap-2">
               <Label>Kode Akses Ujian Online (opsional)</Label>
-              <Input value={form.aksesKode} onChange={(e) => setForm({ ...form, aksesKode: e.target.value })} placeholder="Contoh: MTK2024" />
+              <div className="flex gap-2">
+                <Input
+                  value={form.aksesKode}
+                  onChange={(e) => setForm({ ...form, aksesKode: e.target.value.toUpperCase() })}
+                  placeholder="6 digit huruf kapital & angka"
+                  maxLength={6}
+                  className="flex-1 font-mono tracking-widest"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setForm({ ...form, aksesKode: genToken() })}
+                  title="Generate kode acak"
+                >
+                  <Dices className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             <div className="flex gap-2 sm:col-span-2">
               <Button type="submit" disabled={submitting}>{submitting ? 'Menyimpan...' : editing ? 'Simpan perubahan' : 'Simpan ujian'}</Button>
@@ -299,9 +322,46 @@ export function UjianView({
                         >
                           <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                         </Button>
+                        {!readOnly && canEdit(r) && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 px-1.5"
+                            onClick={async () => {
+                              const newCode = genToken()
+                              try {
+                                await request('/ujian/' + r.id, token, 'PUT', { ...r, aksesKode: newCode })
+                                toast.success('Kode akses baru: ' + newCode)
+                                load()
+                              } catch (e: any) {
+                                toast.error(e.message || 'Gagal regenerate.')
+                              }
+                            }}
+                            title="Generate kode baru"
+                          >
+                            <Dices className="h-3 w-3" />
+                          </Button>
+                        )}
                       </div>
                     ) : (
-                      <span className="text-xs text-muted-foreground italic">-</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-1.5 text-xs"
+                        onClick={async () => {
+                          const newCode = genToken()
+                          try {
+                            await request('/ujian/' + r.id, token, 'PUT', { ...r, aksesKode: newCode })
+                            toast.success('Kode akses: ' + newCode)
+                            load()
+                          } catch (e: any) {
+                            toast.error(e.message || 'Gagal generate kode.')
+                          }
+                        }}
+                        title="Generate kode akses"
+                      >
+                        <Dices className="h-3 w-3 mr-1" /> Generate
+                      </Button>
                     )}
                   </TableCell>
                   <TableCell>
