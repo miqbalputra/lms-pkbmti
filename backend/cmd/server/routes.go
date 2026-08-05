@@ -423,7 +423,46 @@ func (s *Server) crudMapel(r fiber.Router) {
 	r.Get("/mapel", func(c *fiber.Ctx) error { return list[MataPelajaran](s.db, c) })
 	r.Post("/mapel", s.createMapel)
 	r.Put("/mapel/:id", func(c *fiber.Ctx) error { return update[MataPelajaran](s, c, "mapel") })
-	r.Delete("/mapel/:id", func(c *fiber.Ctx) error { return deleteRow[MataPelajaran](s, c, "mapel") })
+	r.Delete("/mapel/:id", s.deleteMapel)
+}
+
+// deleteMapel removes a MataPelajaran and all child rows that reference it via
+// MapelID foreign keys. Without cascade, PostgreSQL rejects the delete.
+func (s *Server) deleteMapel(c *fiber.Ctx) error {
+	rid := id(c)
+	uid := c.Locals("userID").(string)
+	// child tables referencing mapel_id — order doesn't matter for FK-free delete
+	children := []struct {
+		table string
+		model interface{}
+	}{
+		{"pengaturan_bobot_nilais", &PengaturanBobotNilai{}},
+		{"ambang_predikats", &AmbangPredikat{}},
+		{"rekap_nilai_akhirs", &RekapNilaiAkhir{}},
+		{"kelas_mapels", &KelasMapel{}},
+		{"penugasan_guru_mapels", &PenugasanGuruMapel{}},
+		{"temas", &Tema{}},
+		{"jurnal_mengajars", &JurnalMengajar{}},
+		{"tugas", &Tugas{}},
+		{"materis", &Materi{}},
+		{"r_p_p_s", &RPP{}},
+		{"kelas_virtuales", &KelasVirtual{}},
+		{"bank_soals", &BankSoal{}},
+		{"ujians", &Ujian{}},
+		{"bobot_sumber_nilais", &BobotSumberNilai{}},
+		{"modul_belajars", &ModulBelajar{}},
+		{"kompetensis", &Kompetensi{}},
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		for _, ch := range children {
+			tx.Where("mapel_id = ?", rid).Delete(ch.model)
+		}
+		if e := tx.Delete(&MataPelajaran{}, "id = ?", rid).Error; e != nil {
+			return e
+		}
+		s.auditTx(tx, &uid, "delete", "mapel", rid)
+		return c.SendStatus(204)
+	})
 }
 
 // createMapel replaces the generic create so a new mapel is seeded with default
