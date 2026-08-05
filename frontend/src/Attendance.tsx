@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent, type ReactNode } from 'react'
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Image as ImageIcon, Info, Save, Trash2, UploadCloud } from 'lucide-react'
 import { AttendanceRecap } from './AttendanceRecap'
 import { Alert, AlertDescription } from './components/ui/alert'
@@ -41,12 +41,12 @@ export function AttendanceWorkspace({
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
 
-  const loadMeetings = () => request('/presensi', token).then(setMeetings)
+  const loadMeetings = useCallback(() => request('/presensi', token).then(setMeetings), [token])
 
   useEffect(() => {
     void request('/kelas', token).then(setClasses)
     void loadMeetings()
-  }, [token])
+  }, [loadMeetings, token])
 
   useEffect(() => {
     if (classID) {

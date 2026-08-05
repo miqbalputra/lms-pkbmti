@@ -160,12 +160,13 @@ export function BackupView({ token }: { token: string }) {
       return
     }
     const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
-    if (isPG && ext !== '.sql') {
-      toast.error('PostgreSQL hanya menerima file .sql')
+    const innerExt = ext === '.enc' ? f.name.slice(0, -4).slice(f.name.slice(0, -4).lastIndexOf('.')).toLowerCase() : ext
+    if (isPG && innerExt !== '.sql') {
+      toast.error('PostgreSQL hanya menerima file .sql atau .sql.enc')
       return
     }
-    if (!isPG && ext !== '.db' && ext !== '.sql') {
-      toast.error('File harus berekstensi .db atau .sql')
+    if (!isPG && innerExt !== '.db' && innerExt !== '.sql') {
+      toast.error('File harus berekstensi .db, .sql, .db.enc, atau .sql.enc')
       return
     }
     if (!confirm('Restore akan mengganti seluruh isi database dengan file ini. Database saat ini akan diamankan terlebih dahulu. Lanjutkan?')) return
@@ -303,17 +304,17 @@ export function BackupView({ token }: { token: string }) {
           <h2 className="text-sm font-semibold flex items-center gap-2"><FileUp className="h-4 w-4" /> Restore (Pemulihan)</h2>
           <p className="text-xs text-muted-foreground">
             {isPG ? (
-              <>Unggah file backup <code>.sql</code>. Restore PostgreSQL <strong>diterapkan langsung</strong> ke database tanpa restart.</>
+              <>Unggah file backup <code>.sql</code> atau backup terenkripsi <code>.sql.enc</code>. Restore PostgreSQL <strong>diterapkan langsung</strong> ke database tanpa restart.</>
             ) : (
-              <>Unggah file backup <code>.db</code> atau <code>.sql</code>. Restore diterapkan pada <strong>restart server berikutnya</strong> — DB saat ini otomatis disalin ke <code>backups/pre-restore-*</code> sebagai pengaman, jadi aman bila perlu dibatalkan.</>
+              <>Unggah file backup <code>.db</code>, <code>.sql</code>, atau versi terenkripsinya (<code>.db.enc</code>/<code>.sql.enc</code>). Restore diterapkan pada <strong>restart server berikutnya</strong> — DB saat ini otomatis disalin ke <code>backups/pre-restore-*</code> sebagai pengaman.</>
             )}
           </p>
           {!isPG && <p className="text-xs font-medium text-primary">Di production, setelah upload server akan restart otomatis dan restore diterapkan.</p>}
         </div>
         <form className="flex flex-wrap items-end gap-3" onSubmit={uploadRestore}>
           <div className="grid gap-1.5 flex-1 min-w-[240px]">
-            <Label className="text-xs">File backup {isPG ? '(.sql)' : '(.db / .sql)'}</Label>
-            <input ref={fileRef} type="file" accept={isPG ? '.sql' : '.db,.sql'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
+            <Label className="text-xs">File backup {isPG ? '(.sql / .sql.enc)' : '(.db / .sql / .enc)'}</Label>
+            <input ref={fileRef} type="file" accept={isPG ? '.sql,.sql.enc' : '.db,.sql,.db.enc,.sql.enc'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
           </div>
           <Button type="submit" disabled={busy === 'restore'}>
             <FileUp className="h-4 w-4" /> {busy === 'restore' ? 'Memproses...' : 'Restore Sekarang'}
@@ -403,6 +404,15 @@ export function BackupView({ token }: { token: string }) {
                 otomatis diberi label <Badge variant="default">otomatis</Badge> dan di-prune sesuai retensi; file
                 manual &amp; pre-restore pengaman tidak pernah dihapus otomatis.
               </p>
+              <p className="text-xs text-muted-foreground">
+                Untuk arsip offsite, isi <code>BACKUP_OFFSITE_URL</code> dan <code>BACKUP_ENCRYPTION_KEY</code>.
+                Sistem mengenkripsi backup sebelum mengirimnya ke presigned S3, gateway n8n, atau endpoint internal.
+                Simpan kunci enkripsi di secret manager karena tanpa kunci file <code>.enc</code> tidak dapat direstore.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Untuk restore drill PostgreSQL, isi <code>BACKUP_DRILL_DATABASE_URL</code> dengan database disposable.
+                Backup terjadwal akan diuji dengan <code>psql</code> di database tersebut sebelum dicatat sebagai berhasil.
+              </p>
             </section>
 
             {/* D. Integrasi n8n */}
@@ -488,6 +498,9 @@ export function BackupView({ token }: { token: string }) {
                     <tr><td className="p-2 font-mono">BACKUP_MAX_UPLOAD_MB</td><td className="p-2 text-muted-foreground">512</td><td className="p-2 text-muted-foreground">Batas ukuran file restore.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_RETENTION</td><td className="p-2 text-muted-foreground">14</td><td className="p-2 text-muted-foreground">Jumlah backup otomatis (-auto-) yang disimpan.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_DIR</td><td className="p-2 text-muted-foreground">backups</td><td className="p-2 text-muted-foreground">Folder penyimpanan backup.</td></tr>
+                    <tr><td className="p-2 font-mono">BACKUP_OFFSITE_URL</td><td className="p-2 text-muted-foreground">—</td><td className="p-2 text-muted-foreground">Endpoint S3 presigned, n8n, atau storage gateway untuk upload terenkripsi.</td></tr>
+                    <tr><td className="p-2 font-mono">BACKUP_ENCRYPTION_KEY</td><td className="p-2 text-muted-foreground">—</td><td className="p-2 text-muted-foreground">Kunci enkripsi backup offsite; wajib disimpan di secret manager.</td></tr>
+                    <tr><td className="p-2 font-mono">BACKUP_DRILL_DATABASE_URL</td><td className="p-2 text-muted-foreground">—</td><td className="p-2 text-muted-foreground">Database disposable untuk menguji restore PostgreSQL terjadwal.</td></tr>
                   </tbody>
                 </table>
               </div>

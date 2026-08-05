@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Bell, Check, CheckCheck } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
@@ -31,7 +31,7 @@ export function NotifikasiView({ token }: { token: string }) {
   const [unread, setUnread] = useState(0)
   const [loading, setLoading] = useState(true)
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true)
     Promise.all([
       request('/notifikasi', token).then((d) => setNotifs(Array.isArray(d) ? d : [])),
@@ -39,11 +39,11 @@ export function NotifikasiView({ token }: { token: string }) {
     ])
       .catch(() => {})
       .finally(() => setLoading(false))
-  }
+  }, [token])
 
   useEffect(() => {
     load()
-  }, [token])
+  }, [load])
 
   const tandaiBaca = (id: string) => {
     request(`/notifikasi/${id}/baca`, token, 'PUT')

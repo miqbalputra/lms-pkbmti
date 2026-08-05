@@ -50,8 +50,20 @@ Add these environment variables in your application:
 | `BACKUP_AUTO_RESTART` | Restart otomatis setelah upload restore | `true` |
 | `BACKUP_MAX_UPLOAD_MB` | Batas upload file restore | `512` |
 | `BACKUP_API_KEY` | Key untuk download backup via n8n | Optional |
+| `BACKUP_OFFSITE_URL` | Endpoint S3 presigned/n8n untuk arsip terenkripsi | Optional |
+| `BACKUP_OFFSITE_METHOD` | Metode upload offsite | `PUT` |
+| `BACKUP_OFFSITE_TOKEN` | Token gateway offsite | Optional |
+| `BACKUP_OFFSITE_TIMEOUT` | Timeout upload offsite | `5m` |
+| `BACKUP_ENCRYPTION_KEY` | Kunci enkripsi backup offsite | Wajib jika offsite aktif |
+| `BACKUP_DRILL_DATABASE_URL` | Database PostgreSQL disposable untuk restore drill | Optional, sangat disarankan |
 
 **Note**: Coolify can reference database variables automatically using Coolify's variable syntax.
+
+### Backup Offsite dan Restore Drill
+
+Jika `BACKUP_OFFSITE_URL` diisi, setiap backup terjadwal dienkripsi AES-256-GCM lalu dikirim sebagai body binary ke endpoint tersebut. Endpoint dapat berupa gateway n8n, storage service internal, atau URL S3 yang memang dikelola untuk upload berulang. Simpan `BACKUP_ENCRYPTION_KEY` di secret manager; file `.enc` tidak dapat dipulihkan tanpa kunci itu.
+
+Isi `BACKUP_DRILL_DATABASE_URL` dengan database PostgreSQL disposable yang terpisah dari production. Backup terjadwal akan direstore ke database tersebut dengan `psql` sebelum dicatat sebagai backup berhasil.
 
 ## 5. Configure Domain
 

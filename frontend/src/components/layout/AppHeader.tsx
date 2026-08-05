@@ -127,7 +127,7 @@ export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
       return () => clearInterval(interval)
     }
     return () => { evtSource?.close() }
-  }, [loadNotifs])
+  }, [loadNotifs, token])
 
   const markNotifRead = (id: string) => {
     request(`/notifikasi/${id}/baca`, token, 'PUT')

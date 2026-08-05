@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from './components/ui/alert'
 import { Button } from './components/ui/button'
@@ -34,7 +34,7 @@ export function PengaturanNilai({ token }: { token: string }) {
     void request('/mapel', token).then((rows: Mapel[]) => setMapels(rows || [])).catch((e: unknown) => console.warn('gagal memuat mapel:', e))
   }, [token])
 
-  async function loadSettings(id: string) {
+  const loadSettings = useCallback(async (id: string) => {
     if (!id) return
     setLoading(true)
     setMessage('')
@@ -52,11 +52,11 @@ export function PengaturanNilai({ token }: { token: string }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [token])
 
   useEffect(() => {
     if (mapelId) void loadSettings(mapelId)
-  }, [mapelId, token])
+  }, [mapelId, loadSettings])
 
   const bobotValid = Number(bobotK) + Number(bobotP) === 100
 

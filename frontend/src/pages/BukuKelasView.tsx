@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Info, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -54,15 +54,15 @@ export function BukuKelasView({ token, readOnly }: { token: string; readOnly: bo
   const [bukuId, setBukuId] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const load = () => {
+  const load = useCallback(() => {
     void request('/buku-kelas', token).then((r: Row[]) => setRows(r || [])).catch(() => setRows([]))
-  }
+  }, [token])
 
   useEffect(() => {
     load()
     void request('/kelas', token).then((r: Row[]) => setKelas(r || [])).catch(() => setKelas([]))
     void request('/buku', token).then((r: Row[]) => setBuku(r || [])).catch(() => setBuku([]))
-  }, [token])
+  }, [load, token])
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()

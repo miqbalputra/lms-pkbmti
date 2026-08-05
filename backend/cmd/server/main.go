@@ -723,8 +723,10 @@ type Config struct {
 	AccessTTL, RefreshTTL                          time.Duration
 }
 type Server struct {
-	db  *gorm.DB
-	cfg Config
+	db        *gorm.DB
+	cfg       Config
+	startedAt time.Time
+	metrics   backupMetrics
 }
 
 func env(k, d string) string {
@@ -749,7 +751,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	s := &Server{db: db, cfg: cfg}
+	s := &Server{db: db, cfg: cfg, startedAt: time.Now()}
 	if err = s.migrate(); err != nil {
 		panic(err)
 	}
@@ -767,11 +769,11 @@ func main() {
 	app.Use(compress.New())
 	app.Use(cors.New(cors.Config{AllowOrigins: env("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), AllowHeaders: "Origin, Content-Type, Accept, Authorization", AllowCredentials: true}))
 	health := func(c *fiber.Ctx) error {
-		sqlDB, err := s.db.DB()
-		if err != nil || sqlDB.Ping() != nil {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "unhealthy"})
+		payload, healthy := s.healthPayload()
+		if !healthy {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(payload)
 		}
-		return c.JSON(fiber.Map{"status": "ok"})
+		return c.JSON(payload)
 	}
 	app.Get("/health", health)
 	// Short public entry points. The page still calls its JSON endpoints under /api.
@@ -905,6 +907,30 @@ func validateConfig(cfg Config) error {
 	}
 	if strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")) == "" || strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")) == "" {
 		return errors.New("production requires TURNSTILE_SECRET_KEY and TURNSTILE_SITE_KEY")
+	}
+	if offsiteURL := strings.TrimSpace(os.Getenv("BACKUP_OFFSITE_URL")); offsiteURL != "" {
+		u, err := url.Parse(offsiteURL)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return errors.New("BACKUP_OFFSITE_URL must be a valid HTTP(S) endpoint")
+		}
+		if u.Scheme != "https" {
+			return errors.New("production BACKUP_OFFSITE_URL must use HTTPS")
+		}
+		if _, err := deriveBackupKey(os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+			return err
+		}
+		method := strings.ToUpper(strings.TrimSpace(env("BACKUP_OFFSITE_METHOD", "PUT")))
+		if method != "PUT" && method != "POST" {
+			return errors.New("BACKUP_OFFSITE_METHOD must be PUT or POST")
+		}
+		if _, err := time.ParseDuration(strings.TrimSpace(env("BACKUP_OFFSITE_TIMEOUT", "5m"))); err != nil {
+			return errors.New("BACKUP_OFFSITE_TIMEOUT must be a valid duration")
+		}
+	}
+	if drillURL := strings.TrimSpace(os.Getenv("BACKUP_DRILL_DATABASE_URL")); drillURL != "" {
+		if _, err := parseDatabaseURL(drillURL); err != nil {
+			return fmt.Errorf("invalid BACKUP_DRILL_DATABASE_URL: %w", err)
+		}
 	}
 	return nil
 }

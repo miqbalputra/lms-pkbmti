@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Download, FileSpreadsheet, FileText, History, Pencil, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { downloadFile } from './lib/api'
@@ -39,12 +39,12 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
   const [isDeleting, setIsDeleting] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
-  const load = () => request('/kelas', token).then(setRows)
+  const load = useCallback(() => request('/kelas', token).then(setRows), [token])
 
   useEffect(() => {
     void load()
     if (!readOnly) void loadOptions(token).then(setOptions)
-  }, [token, readOnly])
+  }, [load, readOnly, token])
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -220,12 +220,12 @@ export function StudentsView({ token, readOnly }: { token: string; readOnly: boo
   const [deletingRow, setDeletingRow] = useState<Row | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
-  const load = () => request('/peserta-didik', token).then(setRows)
+  const load = useCallback(() => request('/peserta-didik', token).then(setRows), [token])
 
   useEffect(() => {
     void load()
     if (!readOnly) void loadOptions(token).then(setO)
-  }, [token, readOnly])
+  }, [load, readOnly, token])
 
   async function confirmDelete() {
     if (!deletingRow) return
@@ -371,12 +371,12 @@ export function AssignmentsView({ token, readOnly }: { token: string; readOnly: 
   const [isDeleting, setIsDeleting] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
-  const load = () => request('/penugasan', token).then(setRows)
+  const load = useCallback(() => request('/penugasan', token).then(setRows), [token])
 
   useEffect(() => {
     void load()
     void loadOptions(token).then(setO)
-  }, [token])
+  }, [load, token])
 
   async function submit(e: FormEvent<HTMLFormElement>, all = false) {
     e.preventDefault()
@@ -725,4 +725,3 @@ async function request(path: string, token: string, method = 'GET', body?: unkno
   if (!r.ok) throw new Error(result?.error || 'Permintaan gagal')
   return result
 }
-

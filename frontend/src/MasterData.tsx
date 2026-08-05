@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   CheckCircle2,
   ChevronLeft,
@@ -346,7 +346,7 @@ export function MasterData({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [taOptions, setTaOptions] = useState<Row[]>([])
 
-  const loadData = () => {
+  const loadData = useCallback(() => {
     setLoading(true)
     request('/' + resource, token)
       .then((data) => {
@@ -361,7 +361,7 @@ export function MasterData({
         setRows([])
       })
       .finally(() => setLoading(false))
-  }
+  }, [resource, schema.title, token])
 
   useEffect(() => {
     setSearchQuery('')
@@ -372,7 +372,7 @@ export function MasterData({
         .then((d) => { if (Array.isArray(d)) setTaOptions(d as Row[]) })
         .catch(() => undefined)
     }
-  }, [resource, token])
+  }, [loadData, resource, token])
 
   const filteredRows = useMemo(() => {
     if (!searchQuery.trim()) return rows

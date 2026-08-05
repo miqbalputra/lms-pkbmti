@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Pencil, Plus, Power } from 'lucide-react'
 import { Alert, AlertDescription } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
@@ -29,7 +29,7 @@ export function Accounts({ token }: { token: string }) {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const load = () =>
+  const load = useCallback(() =>
     Promise.all([
       request('/users', token),
       request('/tutor', token),
@@ -40,11 +40,13 @@ export function Accounts({ token }: { token: string }) {
         setTutors(t)
         if (Array.isArray(o)) setOrangTuaList(o)
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(String(e))),
+    [token]
+  )
 
   useEffect(() => {
     void load()
-  }, [token])
+  }, [load])
 
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()

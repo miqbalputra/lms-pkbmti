@@ -189,7 +189,11 @@ func pgDump(destPath string) error {
 
 // pgRestore runs psql to restore a SQL backup into the PostgreSQL database.
 func pgRestore(srcPath string) error {
-	info, err := parseDatabaseURL(os.Getenv("DATABASE_URL"))
+	return pgRestoreTo(srcPath, os.Getenv("DATABASE_URL"))
+}
+
+func pgRestoreTo(srcPath, databaseURL string) error {
+	info, err := parseDatabaseURL(databaseURL)
 	if err != nil {
 		return err
 	}
@@ -500,6 +504,7 @@ func pruneBackups(retention int) {
 func (s *Server) runScheduledBackup() {
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		fmt.Printf("scheduled backup: mkdir failed: %v\n", err)
+		s.metrics.recordFailure()
 		return
 	}
 	format := normalizeBackupFormat(env("BACKUP_FORMAT", "full"))
@@ -512,12 +517,14 @@ func (s *Server) runScheduledBackup() {
 			f, err := os.Create(dest)
 			if err != nil {
 				fmt.Printf("scheduled backup: create failed: %v\n", err)
+				s.metrics.recordFailure()
 				return
 			}
 			err = s.dumpSQL(f)
 			f.Close()
 			if err != nil {
 				fmt.Printf("scheduled backup: dump failed: %v\n", err)
+				s.metrics.recordFailure()
 				_ = os.Remove(dest)
 				return
 			}
@@ -525,6 +532,7 @@ func (s *Server) runScheduledBackup() {
 		} else {
 			if err := s.backupBinary(dest); err != nil {
 				fmt.Printf("scheduled backup: VACUUM INTO failed: %v\n", err)
+				s.metrics.recordFailure()
 				_ = os.Remove(dest)
 				return
 			}
@@ -534,12 +542,26 @@ func (s *Server) runScheduledBackup() {
 		if err := pgDump(dest); err != nil {
 			fmt.Printf("scheduled backup: pg_dump failed: %v\n", err)
 			_ = os.Remove(dest)
+			s.metrics.recordFailure()
 			return
 		}
 		d = dest
 	}
+	drillVerified, err := verifyBackupArtifact(d)
+	if err != nil {
+		fmt.Printf("scheduled backup: verification failed: %v\n", err)
+		s.metrics.recordFailure()
+		return
+	}
+	offsiteUploaded, err := uploadOffsiteBackup(d)
+	if err != nil {
+		fmt.Printf("scheduled backup: offsite upload failed: %v\n", err)
+		s.metrics.recordFailure()
+		return
+	}
 	// Best-effort audit (system actor: nil uid).
 	s.audit(nil, "backup", "system", "scheduled backup -> "+d)
+	s.metrics.recordSuccess(offsiteUploaded, drillVerified)
 	if r, e := strconv.Atoi(env("BACKUP_RETENTION", "14")); e == nil {
 		pruneBackups(r)
 	}
@@ -863,15 +885,13 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(400, "file backup wajib diunggah (field name=file)")
 	}
-	ext := strings.ToLower(filepath.Ext(fh.Filename))
-
 	if isSQLite() {
+		tmpPath, ext, err := saveRestoreUploadForRestore(c, fh)
+		if err != nil {
+			return err
+		}
 		switch ext {
 		case ".db":
-			tmpPath, err := saveRestoreUpload(c, fh)
-			if err != nil {
-				return err
-			}
 			if err := validateSQLiteBackup(tmpPath); err != nil {
 				_ = os.Remove(tmpPath)
 				return fiber.NewError(400, "file .db tidak valid: "+err.Error())
@@ -880,10 +900,6 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 				return fiber.NewError(500, "gagal menyimpan file restore")
 			}
 		case ".sql":
-			tmpPath, err := saveRestoreUpload(c, fh)
-			if err != nil {
-				return err
-			}
 			if err := validateSQLBackup(tmpPath); err != nil {
 				_ = os.Remove(tmpPath)
 				return fiber.NewError(400, "file .sql tidak valid: "+err.Error())
@@ -914,18 +930,13 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 	}
 
 	// PostgreSQL: apply immediately via psql
-	if ext != ".sql" {
-		return fiber.NewError(400, "restore PostgreSQL hanya menerima file .sql")
-	}
-	tmp, err := os.CreateTemp("", "pkbm-restore-pg-*.sql")
+	tmpPath, ext, err := saveRestoreUploadForRestore(c, fh)
 	if err != nil {
-		return fiber.NewError(500, "tidak dapat membuat file sementara")
+		return err
 	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	if err := c.SaveFile(fh, tmpPath); err != nil {
+	if ext != ".sql" {
 		_ = os.Remove(tmpPath)
-		return fiber.NewError(500, "gagal menyimpan file restore")
+		return fiber.NewError(400, "restore PostgreSQL hanya menerima file .sql")
 	}
 	stat, err := os.Stat(tmpPath)
 	if err != nil || stat.Size() == 0 {

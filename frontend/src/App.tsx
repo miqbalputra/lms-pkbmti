@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useEffect, useState, lazy, Suspense } from 'react'
+import { Component, type ReactNode, useCallback, useEffect, useState, lazy, Suspense } from 'react'
 import {
   Bell,
   CalendarCheck,
@@ -116,11 +116,11 @@ export default function App() {
       .finally(() => setReady(true))
   }, [])
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     void request('/auth/logout', token, 'POST').catch(() => undefined)
     setToken('')
     setUser(null)
-  }
+  }, [token])
 
   useEffect(() => {
     if (token) {
@@ -129,7 +129,7 @@ export default function App() {
       setOnUnauthorized(null)
     }
     return () => setOnUnauthorized(null)
-  }, [token])
+  }, [handleLogout, token])
 
   // Keep-alive: refresh access token periodically while user is active.
   // Access token TTL is 15 min; we refresh every 5 min on user activity
