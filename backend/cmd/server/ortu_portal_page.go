@@ -156,6 +156,7 @@ let state={token:'',anakId:'',anakList:[],anakData:null};
 const TABS=[
   {id:'identitas',label:'Identitas',icon:'👤'},
   {id:'performa',label:'Performa',icon:'📊'},
+  {id:'perilaku',label:'Perilaku',icon:'📝'},
   {id:'ujian',label:'Ujian',icon:'📝'},
   {id:'tugas',label:'Tugas',icon:'📋'},
   {id:'materi',label:'Materi',icon:'📚'},
@@ -216,7 +217,7 @@ function showTab(tab,el){
   const c=document.getElementById('tabContent');
   c.innerHTML='<div class="empty-state">Memuat...</div>';
   const m={
-    identitas:loadIdentitas,performa:loadPerforma,ujian:loadUjian,tugas:loadTugas,
+    identitas:loadIdentitas,performa:loadPerforma,perilaku:loadPerilaku,ujian:loadUjian,tugas:loadTugas,
     materi:loadMateri,kalender:loadKalender,notif:loadNotif,chat:loadChat,buku:loadBuku
   };
   if(m[tab])m[tab](c);
@@ -268,6 +269,31 @@ async function loadPerforma(c){
       rPresensi.forEach(p=>{counts[p.statusKehadiran]=(counts[p.statusKehadiran]||0)+1});
       new Chart(document.getElementById('chartPresensi'),{type:'doughnut',data:{labels:Object.keys(counts),datasets:[{data:Object.values(counts),backgroundColor:['#22c55e','#f59e0b','#3b82f6','#ef4444']}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}}}});
     }
+  }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
+}
+
+async function loadPerilaku(c){
+  try{
+    const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/perilaku',{headers:hdr()});
+    const d=await r.json();if(!r.ok)throw new Error(d.error);
+    if(!Array.isArray(d)||!d.length){c.innerHTML='<div class="empty-state">Belum ada catatan perilaku</div>';return}
+    const pos=d.filter(x=>x.kategori==='positif');
+    const neg=d.filter(x=>x.kategori==='negatif');
+    let html='<div class="card"><div class="card-content">';
+    html+='<div style="display:flex;gap:12px;margin-bottom:16px;text-align:center">';
+    html+='<div style="flex:1;padding:12px;background:#dcfce7;border-radius:var(--radius)"><div style="font-size:22px;font-weight:700;color:#166534">'+pos.length+'</div><div style="font-size:11px;color:#166534;font-weight:500">Positif</div></div>';
+    html+='<div style="flex:1;padding:12px;background:#fef2f2;border-radius:var(--radius)"><div style="font-size:22px;font-weight:700;color:#991b1b">'+neg.length+'</div><div style="font-size:11px;color:#991b1b;font-weight:500">Negatif</div></div>';
+    html+='</div></div></div>';
+    html+='<div class="card"><div class="card-header"><h1 style="font-size:15px">Riwayat Catatan</h1></div><div class="card-content">';
+    html+=d.map(n=>{
+      const dt=new Date(n.tanggal);
+      const dateStr=dt.toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
+      const cls=n.kategori==='positif'?'badge-success':'badge-destructive';
+      const icon=n.kategori==='positif'?'✅':'⚠️';
+      return'<div style="padding:10px 0;border-bottom:1px solid var(--border)"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span class="badge '+cls+'">'+icon+' '+esc(n.kategori.charAt(0).toUpperCase()+n.kategori.slice(1))+'</span><span style="font-size:11px;color:var(--muted-foreground)">'+dateStr+'</span></div><div style="font-size:13px">'+esc(n.deskripsi)+'</div></div>'
+    }).join('');
+    html+='</div></div>';
+    c.innerHTML=html;
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
 }
 

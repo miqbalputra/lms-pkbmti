@@ -1016,6 +1016,17 @@ func (s *Server) sendChatAnak(c *fiber.Ctx) error {
 	return c.Status(201).JSON(msg)
 }
 
+// getPerilakuAnak — GET /orang-tua/anak/:id/perilaku
+func (s *Server) getPerilakuAnak(c *fiber.Ctx) error {
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var catatan []CatatanPerilaku
+	s.db.Where("peserta_didik_id = ?", anakID).Order("tanggal desc").Find(&catatan)
+	return c.JSON(catatan)
+}
+
 // ============================================================================
 // Ujian/AksesKode — update createUjian to support aksesKode
 // ============================================================================
