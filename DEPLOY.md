@@ -65,6 +65,8 @@ Jika `BACKUP_OFFSITE_URL` diisi, setiap backup terjadwal dienkripsi AES-256-GCM 
 
 Isi `BACKUP_DRILL_DATABASE_URL` dengan database PostgreSQL disposable yang terpisah dari production. Backup terjadwal akan direstore ke database tersebut dengan `psql` sebelum dicatat sebagai backup berhasil.
 
+Panduan lengkap konfigurasi, endpoint, pengujian, dan restore tersedia di [BACKUP_OFFSITE_GUIDE.md](BACKUP_OFFSITE_GUIDE.md).
+
 ## 5. Configure Domain
 
 1. Go to **Application** → **Networking**
