@@ -416,6 +416,8 @@ export function MasterData({
 
     if (resource === 'tahun-ajaran') {
       body.isAktif = editingRow?.isAktif ?? false
+      body.tanggalMulai = body.tanggalMulai ? String(body.tanggalMulai).slice(0, 10) : undefined
+      body.tanggalSelesai = body.tanggalSelesai ? String(body.tanggalSelesai).slice(0, 10) : undefined
     }
     if (resource === 'semester') {
       body.isArchived = formData.has('isArchived')
@@ -434,7 +436,7 @@ export function MasterData({
     // (yang hanya periksa kosong saat browser memvalidasi). Menangkap kasus di
     // antarmuka yang melewati validasi native maupun validasi format/range.
     for (const f of schema.fields) {
-      if (f.required && !String(body[f.key] ?? '').trim()) {
+      if (f.required && !schema.readOnly?.includes(f.key) && !String(body[f.key] ?? '').trim()) {
         toast.error(`${f.label} wajib diisi.`)
         setIsSubmitting(false)
         return

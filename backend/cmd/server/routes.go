@@ -516,8 +516,34 @@ func (s *Server) updateTahun(c *fiber.Ctx) error {
 	if e := s.db.First(&row, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
 	}
-	if e := c.BodyParser(&row); e != nil {
+	var in struct {
+		NamaTahunAjaran *string `json:"namaTahunAjaran"`
+		TanggalMulai    *string `json:"tanggalMulai"`
+		TanggalSelesai  *string `json:"tanggalSelesai"`
+		IsAktif         *bool   `json:"isAktif"`
+	}
+	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if in.NamaTahunAjaran != nil {
+		row.NamaTahunAjaran = *in.NamaTahunAjaran
+	}
+	if in.TanggalMulai != nil {
+		t, e := time.Parse("2006-01-02", *in.TanggalMulai)
+		if e != nil {
+			return fiber.NewError(400, "format tanggalMulai tidak valid (YYYY-MM-DD)")
+		}
+		row.TanggalMulai = t
+	}
+	if in.TanggalSelesai != nil {
+		t, e := time.Parse("2006-01-02", *in.TanggalSelesai)
+		if e != nil {
+			return fiber.NewError(400, "format tanggalSelesai tidak valid (YYYY-MM-DD)")
+		}
+		row.TanggalSelesai = t
+	}
+	if in.IsAktif != nil {
+		row.IsAktif = *in.IsAktif
 	}
 	uid := c.Locals("userID").(string)
 	return s.db.Transaction(func(tx *gorm.DB) error {
