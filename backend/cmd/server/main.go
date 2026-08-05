@@ -1148,9 +1148,9 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 		return fail("Gagal mengambil info akun Google.")
 	}
 	defer r.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(r.Body, 2048))
 	if r.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 512))
-		return fail(fmt.Sprintf("Google userinfo gagal (HTTP %d): %s", r.StatusCode, string(body)))
+		return fail(fmt.Sprintf("Google userinfo gagal (HTTP %d): %s", r.StatusCode, string(respBody)))
 	}
 	var info struct {
 		Sub           string `json:"sub"`
@@ -1158,8 +1158,8 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 		EmailVerified string `json:"email_verified"` // Google returns "true"/"false"
 		Name          string `json:"name"`
 	}
-	if json.NewDecoder(r.Body).Decode(&info) != nil {
-		return fail("Info akun Google tidak terbaca.")
+	if e := json.Unmarshal(respBody, &info); e != nil {
+		return fail(fmt.Sprintf("Info akun Google tidak terbaca: %s", string(respBody)))
 	}
 	if info.Email == "" {
 		return fail("Akun Google tidak memiliki email.")
