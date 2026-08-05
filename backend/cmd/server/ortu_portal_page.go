@@ -136,7 +136,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     </div>
     <div class="form-group">
       <label for="tanggalLahir">Tanggal Lahir Anak</label>
-      <input class="input" type="date" id="tanggalLahir" autocomplete="off">
+      <input class="input" type="text" id="tanggalLahir" placeholder="DDMMYYYY (contoh: 15082010)" maxlength="8" inputmode="numeric" autocomplete="off">
     </div>
   </div>
   <div class="card-footer">

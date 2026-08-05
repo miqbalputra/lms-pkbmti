@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -714,16 +715,22 @@ func (s *Server) deleteKalenderEvent(c *fiber.Ctx) error {
 func (s *Server) loginOrangTua(c *fiber.Ctx) error {
 	var in struct {
 		NISN         string `json:"nisn"`
-		TanggalLahir string `json:"tanggalLahir"` // format: YYYY-MM-DD
+		TanggalLahir string `json:"tanggalLahir"` // format: DDMMYYYY
 	}
 	if e := c.BodyParser(&in); e != nil || in.NISN == "" || in.TanggalLahir == "" {
 		return fiber.NewError(400, "NISN dan tanggal lahir wajib diisi")
 	}
-	// Parse tanggal lahir
-	tl, err := time.Parse("2006-01-02", in.TanggalLahir)
-	if err != nil {
-		return fiber.NewError(400, "Format tanggal lahir tidak valid (YYYY-MM-DD)")
+	// Parse tanggal lahir DDMMYYYY
+	if len(in.TanggalLahir) != 8 {
+		return fiber.NewError(400, "Format tanggal lahir tidak valid (DDMMYYYY)")
 	}
+	day, err1 := strconv.Atoi(in.TanggalLahir[0:2])
+	month, err2 := strconv.Atoi(in.TanggalLahir[2:4])
+	year, err3 := strconv.Atoi(in.TanggalLahir[4:8])
+	if err1 != nil || err2 != nil || err3 != nil || day < 1 || day > 31 || month < 1 || month > 12 || year < 1900 {
+		return fiber.NewError(400, "Format tanggal lahir tidak valid (DDMMYYYY)")
+	}
+	tl := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 	// Find student by NISN
 	var pd PesertaDidik
 	if s.db.Preload("OrangTua").Preload("Kelas").Where("nisn = ?", in.NISN).First(&pd).Error != nil {
