@@ -1153,18 +1153,25 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 		return fail(fmt.Sprintf("Google userinfo gagal (HTTP %d): %s", r.StatusCode, string(respBody)))
 	}
 	var info struct {
-		Sub           string `json:"sub"`
-		Email         string `json:"email"`
-		EmailVerified string `json:"email_verified"` // Google returns "true"/"false"
-		Name          string `json:"name"`
+		Sub           string      `json:"sub"`
+		Email         string      `json:"email"`
+		EmailVerified interface{} `json:"email_verified"` // Google returns bool true/false
+		Name          string      `json:"name"`
 	}
 	if e := json.Unmarshal(respBody, &info); e != nil {
-		return fail(fmt.Sprintf("Info akun Google tidak terbaca: %s", string(respBody)))
+		return fail("Info akun Google tidak terbaca.")
 	}
 	if info.Email == "" {
 		return fail("Akun Google tidak memiliki email.")
 	}
-	if info.EmailVerified != "true" {
+	verified := false
+	switch v := info.EmailVerified.(type) {
+	case bool:
+		verified = v
+	case string:
+		verified = v == "true"
+	}
+	if !verified {
 		return fail("Email Google belum diverifikasi. Verifikasi email Anda di Google lalu coba lagi.")
 	}
 	var u User
