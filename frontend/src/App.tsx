@@ -13,7 +13,7 @@ import { Toaster } from './components/ui/sonner'
 import { AppShell } from './components/layout/AppShell'
 import { LoginView } from './pages/Login'
 import { InstallPrompt } from './components/InstallPrompt'
-import { request } from './lib/api'
+import { request, setOnUnauthorized } from './lib/api'
 
 // Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
 // berfungsi (sumber kebenaran kini di ./lib/api, tanpa import sirkular).
@@ -121,6 +121,15 @@ export default function App() {
     setToken('')
     setUser(null)
   }
+
+  useEffect(() => {
+    if (token) {
+      setOnUnauthorized(handleLogout)
+    } else {
+      setOnUnauthorized(null)
+    }
+    return () => setOnUnauthorized(null)
+  }, [token])
 
   if (!ready) {
     return (

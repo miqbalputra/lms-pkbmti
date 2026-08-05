@@ -8,6 +8,9 @@
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
+let onUnauthorized: (() => void) | null = null
+export function setOnUnauthorized(fn: (() => void) | null) { onUnauthorized = fn }
+
 export async function request(
   path: string,
   token: string,
@@ -26,6 +29,7 @@ export async function request(
     signal,
   })
   if (!r.ok) {
+    if (r.status === 401 && onUnauthorized) onUnauthorized()
     const x = await r.json().catch(() => ({}))
     throw new Error(
       x.error ||
@@ -45,6 +49,7 @@ export async function downloadFile(path: string, token: string, fallback: string
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   })
   if (!r.ok) {
+    if (r.status === 401 && onUnauthorized) onUnauthorized()
     const x = await r.json().catch(() => ({}))
     throw new Error((x as { error?: string; message?: string })?.error || (x as { message?: string })?.message || `Gagal mengunduh (${r.status})`)
   }
