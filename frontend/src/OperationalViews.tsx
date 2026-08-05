@@ -50,7 +50,9 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
     e.preventDefault()
     setSubmitting(true)
     try {
-      await request('/kelas', token, 'POST', Object.fromEntries(new FormData(e.currentTarget)))
+      const body: Record<string, unknown> = Object.fromEntries(new FormData(e.currentTarget))
+      body.jenjang = Number(body.jenjang)
+      await request('/kelas', token, 'POST', body)
       toast.success('Rombongan belajar berhasil dibuat.')
       setAdding(false)
       void load()
