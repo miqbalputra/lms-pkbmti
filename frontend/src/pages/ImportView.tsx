@@ -32,6 +32,7 @@ type Result = { logId: string; totalBaris: number; berhasil: number; gagal: numb
 const TIPES = [
   { tipe: 'siswa-lengkap', label: 'Peserta Didik Lengkap (+ Data Orang Tua)', needsKelas: false, adminOnly: true },
   { tipe: 'siswa', label: 'Peserta Didik (Basic)', needsKelas: false, adminOnly: true },
+  { tipe: 'tutor', label: 'Tutor / Pengajar', needsKelas: false, adminOnly: true },
   { tipe: 'nilai-kompetensi', label: 'Nilai Kompetensi', needsKelas: true, adminOnly: false },
 ]
 

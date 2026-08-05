@@ -5369,6 +5369,8 @@ func (s *Server) importTemplate(c *fiber.Ctx) error {
 		return s.siswaLengkapTemplate(c)
 	case "nilai-kompetensi":
 		return s.nilaiKompetensiTemplate(c)
+	case "tutor":
+		return s.tutorTemplate(c)
 	default:
 		return fiber.NewError(400, "tipe template tidak dikenal")
 	}
@@ -5415,6 +5417,33 @@ func (s *Server) nilaiKompetensiTemplate(c *fiber.Ctx) error {
 	_ = xlsx.SetPanes(sheet, &excelize.Panes{Freeze: true, Split: false, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
 	c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	c.Attachment("template-import-nilai-kompetensi.xlsx")
+	return xlsx.Write(c.Response().BodyWriter())
+}
+
+func (s *Server) tutorTemplate(c *fiber.Ctx) error {
+	xlsx := excelize.NewFile()
+	sheet := xlsx.GetSheetName(0)
+	_ = xlsx.SetSheetName(sheet, "Tutor")
+	headers := []string{"nama", "jenis_kelamin", "no_hp", "alamat", "is_rpp_maker"}
+	if err := xlsx.SetSheetRow(sheet, "A1", &headers); err != nil {
+		return err
+	}
+	examples := []struct{ row []string }{
+		{[]string{"Ahmad Fauzi", "L", "08123456789", "Jl. Merdeka No. 10, Jakarta", "false"}},
+		{[]string{"Siti Nurhaliza", "P", "08567890123", "Jl. Pendidikan No. 5, Bandung", "true"}},
+	}
+	for i, ex := range examples {
+		cell, _ := excelize.CoordinatesToCellName(1, i+2)
+		_ = xlsx.SetSheetRow(sheet, cell, &ex.row)
+	}
+	widths := []float64{28, 16, 18, 40, 14}
+	for i, w := range widths {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		_ = xlsx.SetColWidth(sheet, col, col, w)
+	}
+	_ = xlsx.SetPanes(sheet, &excelize.Panes{Freeze: true, Split: false, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+	c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Attachment("template-import-tutor.xlsx")
 	return xlsx.Write(c.Response().BodyWriter())
 }
 
@@ -5750,6 +5779,56 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 					continue
 				}
 			}
+			berhasil++
+		}
+	case "tutor":
+		if role != "admin" {
+			return fiber.NewError(403, "import tutor hanya admin")
+		}
+		expected := []string{"nama", "jenis_kelamin", "no_hp", "alamat", "is_rpp_maker"}
+		if e := validateImportHeaders(rows[0], expected); e != nil {
+			return fiber.NewError(400, e.Error())
+		}
+		if total > 500 {
+			return fiber.NewError(400, "import tutor dibatasi 500 baris")
+		}
+		namaSeen := map[string]bool{}
+		for index, row := range rows[1:] {
+			line := index + 2
+			if len(row) < len(expected) {
+				issues = append(issues, importIssue{line, "kolom tidak lengkap"})
+				continue
+			}
+			nama := strings.TrimSpace(row[0])
+			jk := strings.ToUpper(strings.TrimSpace(row[1]))
+			noHP := strings.TrimSpace(row[2])
+			alamat := strings.TrimSpace(row[3])
+			isRPP := strings.ToLower(strings.TrimSpace(row[4]))
+			if nama == "" || (jk != "L" && jk != "P") {
+				issues = append(issues, importIssue{line, "nama wajib; jenis_kelamin L/P"})
+				continue
+			}
+			if namaSeen[nama] {
+				issues = append(issues, importIssue{line, "duplikat nama dalam file: " + nama})
+				continue
+			}
+			var existing Tutor
+			if s.db.Where("nama = ?", nama).First(&existing).Error == nil {
+				issues = append(issues, importIssue{line, "nama tutor sudah ada: " + nama})
+				continue
+			}
+			tutor := Tutor{
+				Nama:         nama,
+				JenisKelamin: jk,
+				NoHP:         noHP,
+				Alamat:       alamat,
+				IsRPPMaker:   isRPP == "true" || isRPP == "1" || isRPP == "ya",
+			}
+			if ce := s.db.Create(&tutor).Error; ce != nil {
+				issues = append(issues, importIssue{line, "gagal simpan: " + ce.Error()})
+				continue
+			}
+			namaSeen[nama] = true
 			berhasil++
 		}
 	default:
