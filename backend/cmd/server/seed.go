@@ -464,7 +464,39 @@ func (s *Server) seedDummy() (string, error) {
 	// --- Audit trail marker ---
 	s.audit(&adminID, "seed", "dummy", "comprehensive dummy data seeded")
 
-	return "OK: dummy data lengkap diisi (user: kepala/Kepala123, guru1 & guru2/Guru1234). Login admin/Admin123 untuk akses penuh.", nil
+	// --- Kalender Akademik events ---
+	events := []KalenderEvent{
+		{Judul: "Libur Nasional - Hari Pancasila", TanggalMulai: time.Date(2025, 6, 1, 0, 0, 0, 0, time.Local), Tipe: "libur", Warna: "#dc2626", DibuatOlehUserID: adminID},
+		{Judul: "Ujian Tengah Semester Ganjil", TanggalMulai: time.Date(2025, 10, 6, 0, 0, 0, 0, time.Local), TanggalSelesai: timePtr(time.Date(2025, 10, 17, 0, 0, 0, 0, time.Local)), Tipe: "ujian", Warna: "#2563eb", DibuatOlehUserID: adminID},
+		{Judul: "Hari Guru Nasional", TanggalMulai: time.Date(2025, 11, 25, 0, 0, 0, 0, time.Local), Tipe: "kegiatan", Warna: "#16a34a", DibuatOlehUserID: adminID},
+		{Judul: "Ujian Akhir Semester Ganjil", TanggalMulai: time.Date(2025, 12, 1, 0, 0, 0, 0, time.Local), TanggalSelesai: timePtr(time.Date(2025, 12, 19, 0, 0, 0, 0, time.Local)), Tipe: "ujian", Warna: "#2563eb", DibuatOlehUserID: adminID},
+		{Judul: "Libur Semester", TanggalMulai: time.Date(2025, 12, 22, 0, 0, 0, 0, time.Local), TanggalSelesai: timePtr(time.Date(2026, 1, 3, 0, 0, 0, 0, time.Local)), Tipe: "libur", Warna: "#dc2626", DibuatOlehUserID: adminID},
+	}
+	for _, ev := range events {
+		s.db.Create(&ev)
+	}
+
+	// --- Notifikasi for admin ---
+	notifs := []Notifikasi{
+		{UserID: adminID, Judul: "Selamat Datang", Isi: "Sistem LMS PKBM Tunas Ilmu telah berhasil diinisialisasi dengan data dummy.", Tipe: "umum"},
+		{UserID: adminID, Judul: "Fitur Ujian Online Aktif", Isi: "Ujian Online kini tersedia. Buat ujian dengan kode akses untuk siswa mengerjakan tanpa login.", Tipe: "ujian"},
+		{UserID: adminID, Judul: "Portal Orang Tua Aktif", Isi: "Orang tua dapat login dengan NIK + NISN anak untuk melihat nilai dan presensi.", Tipe: "umum"},
+	}
+	for _, n := range notifs {
+		s.db.Create(&n)
+	}
+
+	// --- Parent account demo ---
+	var ortu OrangTua
+	if s.db.First(&ortu).Error == nil {
+		var existing User
+		if s.db.Where("username = ?", "orangtua1").First(&existing).Error != nil {
+			hash, _ := bcryptHash("OrangTua123")
+			s.db.Create(&User{Username: "orangtua1", Email: "orangtua1@pkbm.local", PasswordHash: hash, Role: "orang_tua", OrangTuaID: &ortu.ID, IsActive: true})
+		}
+	}
+
+	return "OK: dummy data lengkap diisi (user: kepala/Kepala123, guru1 & guru2/Guru1234, orangtua1/OrangTua123). Login admin/Admin123 untuk akses penuh.", nil
 }
 
 // seedDummyHandler is the admin-only endpoint that triggers seedDummy.

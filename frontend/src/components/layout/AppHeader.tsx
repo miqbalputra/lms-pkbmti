@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   Bell,
   ChevronDown,
@@ -31,6 +31,7 @@ import { ThemeToggleButton } from '../common/ThemeToggleButton'
 import { NAV_ITEMS } from './AppSidebar'
 import { useSidebar } from '../../context/SidebarContext'
 import { toast } from 'sonner'
+import { request } from '../../lib/api'
 
 interface User {
   id: string
@@ -38,18 +39,85 @@ interface User {
   role: string
 }
 
+interface Notif {
+  id: string
+  judul: string
+  isi: string
+  tipe: string
+  isRead: boolean
+  createdAt: string
+}
+
 interface AppHeaderProps {
+  token: string
   setPage: (p: string) => void
   user: User
   onLogout: () => void
 }
 
-export function AppHeader({ setPage, user, onLogout }: AppHeaderProps) {
+function fmtNotifTime(v: string): string {
+  if (!v) return ''
+  const d = new Date(v)
+  const now = new Date()
+  const diff = now.getTime() - d.getTime()
+  if (diff < 60000) return 'Baru saja'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m lalu`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}j lalu`
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+}
+
+const tipeIcon: Record<string, string> = {
+  ujian: '📝',
+  tugas: '📋',
+  presensi: '✅',
+  rapor: '📊',
+  umum: '📢',
+}
+
+export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
   const [logoutModalOpen, setLogoutModalOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const { toggleSidebar, toggleMobileSidebar, isExpanded } = useSidebar()
+
+  // Real notifications state
+  const [notifs, setNotifs] = useState<Notif[]>([])
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [notifLoading, setNotifLoading] = useState(false)
+
+  const loadNotifs = useCallback(() => {
+    if (!token) return
+    Promise.all([
+      request('/notifikasi', token).then((d) => setNotifs(Array.isArray(d) ? d.slice(0, 10) : [])),
+      request('/notifikasi/unread-count', token).then((d) => setUnreadCount(Number(d.count || 0))),
+    ]).catch(() => {})
+  }, [token])
+
+  useEffect(() => {
+    loadNotifs()
+    const interval = setInterval(loadNotifs, 30000) // poll every 30s
+    return () => clearInterval(interval)
+  }, [loadNotifs])
+
+  const markNotifRead = (id: string) => {
+    request(`/notifikasi/${id}/baca`, token, 'PUT')
+      .then(() => {
+        setNotifs((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)))
+        setUnreadCount((u) => Math.max(0, u - 1))
+      })
+      .catch(() => {})
+  }
+
+  const markAllRead = () => {
+    request('/notifikasi/baca-all', token, 'PUT')
+      .then(() => {
+        setNotifs((prev) => prev.map((n) => ({ ...n, isRead: true })))
+        setUnreadCount(0)
+        toast.success('Semua notifikasi ditandai sudah dibaca.')
+      })
+      .catch(() => {})
+  }
 
   // Ctrl+K / ⌘K focuses the search box
   useEffect(() => {
@@ -223,13 +291,14 @@ export function AppHeader({ setPage, user, onLogout }: AppHeaderProps) {
               <DropdownMenuTrigger asChild>
                 <button
                   className="relative flex items-center justify-center text-gray-500 bg-white border border-gray-200 rounded-full h-11 w-11 hover:bg-gray-100 hover:text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
-                  title="Pusat Notifikasi & Verifikasi"
+                  title="Pusat Notifikasi"
                 >
                   <Bell className="h-5 w-5" />
-                  <span className="absolute top-2.5 right-2.5 flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success-500 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-success-500"></span>
-                  </span>
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  )}
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -240,90 +309,76 @@ export function AppHeader({ setPage, user, onLogout }: AppHeaderProps) {
                   <div className="flex items-center gap-2">
                     <Bell className="h-4 w-4 text-brand-500" />
                     <span className="text-sm font-semibold text-gray-800 dark:text-white/90">
-                      Notifikasi & Verifikasi
+                      Notifikasi
                     </span>
                   </div>
-                  <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-500 dark:bg-brand-500/[0.12] dark:text-brand-400">
-                    3 Baru
-                  </span>
+                  {unreadCount > 0 && (
+                    <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-500 dark:bg-brand-500/[0.12] dark:text-brand-400">
+                      {unreadCount} Baru
+                    </span>
+                  )}
                 </div>
 
                 <div className="max-h-72 overflow-y-auto custom-scrollbar divide-y divide-gray-100 dark:divide-gray-800 py-1">
-                  <div
-                    onClick={() => {
-                      setPage('presensi')
-                      toast.success('Membuka modul Verifikasi Presensi Harian')
-                    }}
-                    className="flex items-start gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors dark:hover:bg-white/[0.03]"
-                  >
-                    <div className="h-8 w-8 shrink-0 rounded-full bg-success-50 text-success-500 flex items-center justify-center font-bold text-xs">
-                      ✓
-                    </div>
-                    <div className="space-y-0.5 flex-1">
-                      <p className="text-sm font-semibold text-gray-800 dark:text-white/90">
-                        Verifikasi Presensi & Bukti KBM
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 leading-snug">
-                        Presensi kelas dan bukti foto KBM telah terverifikasi lengkap.
-                      </p>
-                      <p className="text-[10px] text-gray-400 font-mono">Baru saja</p>
-                    </div>
-                  </div>
-
-                  <div
-                    onClick={() => {
-                      setPage('audit-log')
-                      toast.info('Sesi login terverifikasi aman di Audit Log')
-                    }}
-                    className="flex items-start gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors dark:hover:bg-white/[0.03]"
-                  >
-                    <div className="h-8 w-8 shrink-0 rounded-full bg-brand-50 text-brand-500 flex items-center justify-center font-bold text-xs dark:bg-brand-500/[0.12] dark:text-brand-400">
-                      🛡️
-                    </div>
-                    <div className="space-y-0.5 flex-1">
-                      <p className="text-sm font-semibold text-gray-800 dark:text-white/90">
-                        Verifikasi Keamanan Sesi
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 leading-snug">
-                        Autentikasi akun & token JWT terverifikasi aktif tanpa kendala.
-                      </p>
-                      <p className="text-[10px] text-gray-400 font-mono">5 menit lalu</p>
-                    </div>
-                  </div>
-
-                  <div
-                    onClick={() => {
-                      setPage('peserta-didik')
-                      toast.info('Status data peserta didik aktif terverifikasi')
-                    }}
-                    className="flex items-start gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors dark:hover:bg-white/[0.03]"
-                  >
-                    <div className="h-8 w-8 shrink-0 rounded-full bg-warning-50 text-warning-500 flex items-center justify-center font-bold text-xs">
-                      🎓
-                    </div>
-                    <div className="space-y-0.5 flex-1">
-                      <p className="text-sm font-semibold text-gray-800 dark:text-white/90">
-                        Verifikasi Peserta Didik
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 leading-snug">
-                        Data NIS & NISN rombel aktif diselaras terverifikasi.
-                      </p>
-                      <p className="text-[10px] text-gray-400 font-mono">1 jam lalu</p>
-                    </div>
-                  </div>
+                  {notifLoading ? (
+                    <div className="p-4 text-center text-sm text-gray-500">Memuat...</div>
+                  ) : notifs.length === 0 ? (
+                    <div className="p-4 text-center text-sm text-gray-500">Tidak ada notifikasi</div>
+                  ) : (
+                    notifs.map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => {
+                          markNotifRead(n.id)
+                          if (n.tipe === 'ujian') setPage('ujian')
+                          else if (n.tipe === 'tugas') setPage('tugas')
+                          else if (n.tipe === 'presensi') setPage('presensi')
+                          else if (n.tipe === 'rapor') setPage('rapor')
+                          else setPage('notifikasi')
+                        }}
+                        className={`flex items-start gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors dark:hover:bg-white/[0.03] ${
+                          !n.isRead ? 'bg-brand-50/50 dark:bg-brand-500/5' : ''
+                        }`}
+                      >
+                        <div className="h-8 w-8 shrink-0 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-sm">
+                          {tipeIcon[n.tipe] || '📢'}
+                        </div>
+                        <div className="space-y-0.5 flex-1 min-w-0">
+                          <p className={`text-sm leading-snug ${!n.isRead ? 'font-semibold text-gray-800 dark:text-white/90' : 'text-gray-600 dark:text-gray-400'}`}>
+                            {n.judul}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 leading-snug line-clamp-2">
+                            {n.isi}
+                          </p>
+                          <p className="text-[10px] text-gray-400 font-mono">{fmtNotifTime(n.createdAt)}</p>
+                        </div>
+                        {!n.isRead && (
+                          <div className="h-2 w-2 shrink-0 rounded-full bg-brand-500 mt-1.5" />
+                        )}
+                      </div>
+                    ))
+                  )}
                 </div>
 
-                <div className="pt-2 border-t border-gray-100 dark:border-gray-800 text-center">
+                <div className="pt-2 border-t border-gray-100 dark:border-gray-800 flex gap-2">
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() =>
-                      toast.success('Semua notifikasi verifikasi telah ditandai dibaca.')
-                    }
-                    className="h-auto w-full justify-center py-1 font-medium text-brand-500 hover:underline"
+                    onClick={() => { setPage('notifikasi'); toast.success('Membuka pusat notifikasi') }}
+                    className="flex-1 justify-center py-1 font-medium text-brand-500 hover:underline"
                   >
-                    Tandai Semua Dibaca
+                    Lihat Semua
                   </Button>
+                  {unreadCount > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={markAllRead}
+                      className="flex-1 justify-center py-1 font-medium text-muted-foreground hover:underline"
+                    >
+                      Tandai Dibaca
+                    </Button>
+                  )}
                 </div>
               </DropdownMenuContent>
             </DropdownMenu>

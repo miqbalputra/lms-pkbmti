@@ -42,6 +42,14 @@ input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(28,
 .timer{font-size:24px;font-weight:700;color:var(--brand);text-align:center;padding:12px;background:#f0fdf4;border-radius:10px;margin-bottom:16px}
 .timer.warning{color:var(--warning);background:#fffbeb}
 .timer.danger{color:var(--danger);background:#fef2f2}
+@media(max-width:640px){
+  .wrap{padding:8px}
+  .pad{padding:16px}
+  h1{font-size:18px}
+  .timer{font-size:20px;padding:10px}
+  .option{padding:8px 10px;font-size:13px}
+  .btn{padding:8px 14px;font-size:13px}
+}
 .exam-item{border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px;transition:all .15s}
 .exam-item:hover{border-color:var(--brand);box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .exam-item h3{font-size:16px;margin:0 0 4px}

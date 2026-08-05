@@ -783,6 +783,7 @@ func main() {
 	api.Post("/ujian-online/:ujianId/tab-switch", s.tabSwitchUjianOnline)
 	// Public Orang Tua login endpoint — no JWT; login by NIK + NISN.
 	api.Post("/orang-tua/login", s.loginOrangTua)
+	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage)
 	protected := api.Group("", s.auth)
 	protected.Get("/dashboard", s.dashboard)
 	s.routes(protected)

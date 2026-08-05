@@ -21,11 +21,12 @@ interface AppShellProps {
 
 function ShellContent({
   user,
+  token,
   page,
   setPage,
   onLogout,
   children,
-}: Omit<AppShellProps, 'token'>) {
+}: AppShellProps) {
   const { isExpanded, isHovered } = useSidebar()
 
   return (
@@ -39,7 +40,7 @@ function ShellContent({
           isExpanded || isHovered ? 'lg:ml-[290px]' : 'lg:ml-[90px]'
         }`}
       >
-        <AppHeader setPage={setPage} user={user} onLogout={onLogout} />
+        <AppHeader token={token} setPage={setPage} user={user} onLogout={onLogout} />
         <div className="p-4 mx-auto max-w-(--breakpoint-2xl) md:p-6 w-full">
           {children}
         </div>
@@ -50,6 +51,7 @@ function ShellContent({
 
 export function AppShell({
   user,
+  token,
   page,
   setPage,
   onLogout,
@@ -59,6 +61,7 @@ export function AppShell({
     <SidebarProvider>
       <ShellContent
         user={user}
+        token={token}
         page={page}
         setPage={setPage}
         onLogout={onLogout}

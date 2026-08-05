@@ -634,6 +634,7 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	var in struct {
 		Username, Email, Password, Role string
 		TutorID                         *string `json:"tutorId"`
+		OrangTuaID                      *string `json:"orangTuaId"`
 		IsActive                        bool    `json:"isActive"`
 	}
 	if e := c.BodyParser(&in); e != nil {
@@ -645,8 +646,11 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	if in.Role == "guru" && in.TutorID == nil {
 		return fiber.NewError(400, "guru account requires a tutor")
 	}
+	if in.Role == "orang_tua" && in.OrangTuaID == nil {
+		return fiber.NewError(400, "orang_tua account requires an orangTuaId")
+	}
 	h, _ := bcryptHash(in.Password)
-	u := User{Username: in.Username, Email: in.Email, PasswordHash: h, Role: in.Role, TutorID: in.TutorID, IsActive: in.IsActive}
+	u := User{Username: in.Username, Email: in.Email, PasswordHash: h, Role: in.Role, TutorID: in.TutorID, OrangTuaID: in.OrangTuaID, IsActive: in.IsActive}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if in.TutorID != nil {
 			if err := tx.First(&Tutor{}, "id = ?", *in.TutorID).Error; err != nil {
@@ -659,6 +663,15 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 			var dup User
 			if err := tx.Where("tutor_id = ?", *in.TutorID).First(&dup).Error; err == nil {
 				return fiber.NewError(400, "tutor is already linked to another user account")
+			}
+		}
+		if in.OrangTuaID != nil {
+			if err := tx.First(&OrangTua{}, "id = ?", *in.OrangTuaID).Error; err != nil {
+				return fiber.NewError(400, "orang tua not found")
+			}
+			var dup User
+			if err := tx.Where("orang_tua_id = ?", *in.OrangTuaID).First(&dup).Error; err == nil {
+				return fiber.NewError(400, "orang tua is already linked to another user account")
 			}
 		}
 		if err := tx.Create(&u).Error; err != nil {
@@ -712,6 +725,7 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 	var in struct {
 		Username, Email, Password, Role string
 		TutorID                         *string `json:"tutorId"`
+		OrangTuaID                      *string `json:"orangTuaId"`
 		IsActive                        bool    `json:"isActive"`
 	}
 	if e := c.BodyParser(&in); e != nil || !validRole(in.Role) || strings.TrimSpace(in.Username) == "" || strings.TrimSpace(in.Email) == "" {
@@ -734,7 +748,7 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 			return fiber.NewError(409, "tidak dapat mengubah: minimal satu admin aktif harus tersisa")
 		}
 	}
-	u.Username, u.Email, u.Role, u.TutorID, u.IsActive = in.Username, in.Email, in.Role, in.TutorID, in.IsActive
+	u.Username, u.Email, u.Role, u.TutorID, u.OrangTuaID, u.IsActive = in.Username, in.Email, in.Role, in.TutorID, in.OrangTuaID, in.IsActive
 	if in.Password != "" {
 		if len(in.Password) < 8 {
 			return fiber.NewError(400, "password must be at least 8 characters")
@@ -2100,6 +2114,12 @@ func (s *Server) createPengumuman(c *fiber.Ctx) error {
 		return fiber.NewError(400, e.Error())
 	}
 	s.audit(&uid, "create", "pengumuman", p.ID)
+	// Notify all active users about new pengumuman
+	var users []User
+	s.db.Where("role IN ? AND is_active = ?", []string{"admin", "kepala_sekolah", "guru"}, true).Find(&users)
+	for _, u := range users {
+		s.pushNotifikasi(u.ID, "Pengumuman Baru", fmt.Sprintf("\"%s\" — %s", p.Judul, p.Isi), "umum", &p.ID)
+	}
 	return c.Status(201).JSON(p)
 }
 
@@ -2457,6 +2477,14 @@ func (s *Server) createTugas(c *fiber.Ctx) error {
 		return fiber.NewError(400, e.Error())
 	}
 	s.audit(&uid, "create", "tugas", t.ID)
+	// Notify wali kelas about new tugas
+	var kelas Kelas
+	if s.db.First(&kelas, "id = ?", kelasID).Error == nil && kelas.WaliKelasID != nil {
+		var tutor Tutor
+		if s.db.First(&tutor, "id = ?", *kelas.WaliKelasID).Error == nil && tutor.UserID != nil {
+			s.pushNotifikasi(*tutor.UserID, "Tugas Baru", fmt.Sprintf("Tugas \"%s\" telah dibuat untuk kelas %d%s", t.Judul, kelas.Jenjang, kelas.NamaRombel), "tugas", &t.ID)
+		}
+	}
 	return c.Status(201).JSON(t)
 }
 
@@ -3864,6 +3892,7 @@ func (s *Server) createUjian(c *fiber.Ctx) error {
 		return fiber.NewError(400, e.Error())
 	}
 	s.audit(&uid, "create", "ujian", uj.ID)
+	s.notifyNewUjian(&uj)
 	return c.Status(201).JSON(uj)
 }
 

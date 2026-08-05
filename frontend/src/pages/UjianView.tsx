@@ -261,6 +261,7 @@ export function UjianView({
               <TableHead>Mapel</TableHead>
               <TableHead>Kelas</TableHead>
               <TableHead>Waktu</TableHead>
+              <TableHead>Kode Akses</TableHead>
               <TableHead className="text-right">Aksi</TableHead>
             </TableRow>
           </TableHeader>
@@ -281,7 +282,38 @@ export function UjianView({
                     <div className="text-xs">s/d {fmtDateTime(r.waktuSelesai) || '—'}{r.durasiMenit ? ` (${r.durasiMenit} mnt)` : ''}</div>
                   </TableCell>
                   <TableCell>
+                    {r.aksesKode ? (
+                      <div className="flex items-center gap-1.5">
+                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">{String(r.aksesKode)}</code>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-1.5"
+                          onClick={() => {
+                            navigator.clipboard.writeText(String(r.aksesKode))
+                            toast.success('Kode akses disalin!')
+                          }}
+                          title="Salin kode"
+                        >
+                          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
                     <div className="flex justify-end gap-1 flex-wrap">
+                      {r.aksesKode && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => window.open('/api/ujian-online/page', '_blank')}
+                          title="Buka halaman ujian siswa"
+                        >
+                          🎓 Siswa
+                        </Button>
+                      )}
                       {!readOnly && canEdit(r) && (
                         <Button size="sm" variant="default" onClick={() => setSoalUjian(r)}>
                           <Plus className="h-3.5 w-3.5" /> Soal
