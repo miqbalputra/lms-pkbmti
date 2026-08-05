@@ -16,12 +16,11 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
 
 // ---------------------------------------------------------------------------
-// Database backup & restore (SQLite only).
+// Database backup & restore (SQLite and PostgreSQL).
 //
 // Goals (per operator request): back up the FULL database via the app, in a
 // portable SQL form and an exact binary form; triggerable from n8n over HTTP;
@@ -46,7 +45,7 @@ import (
 // minting a short-lived JWT. The write endpoints (trigger/restore) require an
 // admin JWT.
 //
-// PostgreSQL (DATABASE_URL set) is intentionally NOT supported by these
+// PostgreSQL (DATABASE_URL set) uses the pg_dump/psql CLI path in these
 // endpoints — use pg_dump/pg_restore for that. The app's default is SQLite.
 // ---------------------------------------------------------------------------
 
@@ -78,6 +77,9 @@ func backupUploadLimit() int {
 	mb, err := strconv.Atoi(env("BACKUP_MAX_UPLOAD_MB", "512"))
 	if err != nil || mb < 8 {
 		mb = 512
+	}
+	if mb > 4096 {
+		mb = 4096
 	}
 	return mb * 1024 * 1024
 }
@@ -112,6 +114,7 @@ type pgConnInfo struct {
 	User     string
 	Password string
 	DBName   string
+	SSLMode  string
 }
 
 // parseDatabaseURL extracts connection parameters from a PostgreSQL DATABASE_URL
@@ -121,7 +124,13 @@ func parseDatabaseURL(raw string) (pgConnInfo, error) {
 	if err != nil {
 		return pgConnInfo{}, fmt.Errorf("invalid DATABASE_URL: %w", err)
 	}
+	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+		return pgConnInfo{}, fmt.Errorf("DATABASE_URL must use postgres:// or postgresql://")
+	}
 	host := u.Hostname()
+	if host == "" || u.User == nil || u.User.Username() == "" {
+		return pgConnInfo{}, fmt.Errorf("DATABASE_URL must include host and user")
+	}
 	port := u.Port()
 	if port == "" {
 		port = "5432"
@@ -132,13 +141,24 @@ func parseDatabaseURL(raw string) (pgConnInfo, error) {
 	if dbName == "" {
 		dbName = "postgres"
 	}
+	sslMode := u.Query().Get("sslmode")
 	return pgConnInfo{
 		Host:     host,
 		Port:     port,
 		User:     user,
 		Password: pass,
 		DBName:   dbName,
+		SSLMode:  sslMode,
 	}, nil
+}
+
+func pgCommandEnv(info pgConnInfo) []string {
+	envVars := append([]string{}, os.Environ()...)
+	envVars = append(envVars, "PGPASSWORD="+info.Password)
+	if info.SSLMode != "" {
+		envVars = append(envVars, "PGSSLMODE="+info.SSLMode)
+	}
+	return envVars
 }
 
 // pgDump runs pg_dump to create a SQL backup of the PostgreSQL database.
@@ -159,7 +179,7 @@ func pgDump(destPath string) error {
 		"--if-exists",
 	}
 	cmd := exec.Command("pg_dump", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+info.Password)
+	cmd.Env = pgCommandEnv(info)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("pg_dump failed: %s — %w", strings.TrimSpace(string(out)), err)
@@ -179,11 +199,11 @@ func pgRestore(srcPath string) error {
 		"-U", info.User,
 		"-d", info.DBName,
 		"-f", srcPath,
-		"--no-owner",
-		"--no-privileges",
+		"--single-transaction",
+		"--set=ON_ERROR_STOP=1",
 	}
 	cmd := exec.Command("psql", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+info.Password)
+	cmd.Env = pgCommandEnv(info)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("psql restore failed: %s — %w", strings.TrimSpace(string(out)), err)
@@ -208,7 +228,7 @@ func pgDumpStream(w io.Writer) error {
 		"--if-exists",
 	}
 	cmd := exec.Command("pg_dump", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+info.Password)
+	cmd.Env = pgCommandEnv(info)
 	cmd.Stdout = w
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -231,19 +251,14 @@ func (s *Server) backupReadAuth(c *fiber.Ctx) error {
 			return c.Next()
 		}
 	}
-	h := strings.TrimPrefix(c.Get("Authorization"), "Bearer ")
-	if h == "" {
+	_, uid, role, err := s.parseAccessToken(c.Get("Authorization"))
+	if err != nil {
 		return fiber.NewError(401, "missing access token or backup key")
 	}
-	t, e := jwt.Parse(h, func(t *jwt.Token) (interface{}, error) { return []byte(s.cfg.AccessSecret), nil })
-	if e != nil || !t.Valid {
-		return fiber.NewError(401, "invalid access token")
-	}
-	claims := t.Claims.(jwt.MapClaims)
-	if claims["role"] != "admin" {
+	if role != "admin" {
 		return fiber.NewError(403, "admin access required")
 	}
-	c.Locals("userID", claims["sub"].(string))
+	c.Locals("userID", uid)
 	c.Locals("role", "admin")
 	return c.Next()
 }
@@ -354,7 +369,7 @@ func (s *Server) dumpSQL(w io.Writer) error {
 }
 
 // formatSQLValue renders a Go value (from database/sql Scan into interface{}) as
-// a SQLite literal. NULL → NULL; numbers bare; text single-quoted (with ''
+// a SQLite literal. NULL → NULL; numbers bare; text single-quoted (with ”
 // escaping); BLOB → X'hex'. Column type name disambiguates text vs blob (both
 // arrive as []byte).
 func formatSQLValue(v interface{}, typeName string) string {
@@ -384,7 +399,7 @@ func formatSQLValue(v interface{}, typeName string) string {
 }
 
 // sqlLit single-quotes a string for SQLite, escaping internal single quotes as
-// '' (the SQLite string-literal escape). Newlines inside are valid in SQLite
+// ” (the SQLite string-literal escape). Newlines inside are valid in SQLite
 // string literals and are left as-is.
 func sqlLit(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
@@ -649,7 +664,7 @@ func copyFile(src, dst string) error {
 }
 
 // splitSQLStatements splits a SQL dump into top-level statements on `;`
-// boundaries, respecting single-quote string literals ('' escape), double-quote
+// boundaries, respecting single-quote string literals (” escape), double-quote
 // identifiers, -- line comments and /* */ block comments. This mirrors the
 // `sqlite3 .dump` format and the output of dumpSQL above, so both this app's own
 // dumps and externally-produced dumps restore the same way.
@@ -833,7 +848,10 @@ func (s *Server) createBackupNow(c *fiber.Ctx) error {
 	}
 	uid := c.Locals("userID").(string)
 	s.audit(&uid, "backup", "system", "manual backup -> "+dest)
-	info, _ := os.Stat(dest)
+	info, err := os.Stat(dest)
+	if err != nil {
+		return fiber.NewError(500, "backup selesai tetapi file hasil tidak dapat diverifikasi")
+	}
 	return c.JSON(fiber.Map{"name": name, "size": info.Size(), "path": dest, "format": format})
 }
 
@@ -909,18 +927,32 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 		_ = os.Remove(tmpPath)
 		return fiber.NewError(500, "gagal menyimpan file restore")
 	}
+	stat, err := os.Stat(tmpPath)
+	if err != nil || stat.Size() == 0 {
+		_ = os.Remove(tmpPath)
+		return fiber.NewError(400, "file restore PostgreSQL kosong atau tidak dapat dibaca")
+	}
 	uid := c.Locals("userID").(string)
+	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
+		_ = os.Remove(tmpPath)
+		return fiber.NewError(500, "tidak dapat menyiapkan folder backup pengaman")
+	}
+	preRestorePath := filepath.Join(backupDir(), fmt.Sprintf("pre-restore-%s.sql", time.Now().Format("20060102-150405")))
+	if err := pgDump(preRestorePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fiber.NewError(500, "backup pengaman sebelum restore gagal")
+	}
 	if err := pgRestore(tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
-		s.audit(&uid, "restore", "system", "psql restore FAILED: "+err.Error())
-		return fiber.NewError(500, "gagal restore PostgreSQL: "+err.Error())
+		s.audit(&uid, "restore", "system", "psql restore FAILED; safety backup: "+preRestorePath+"; "+err.Error())
+		return fiber.NewError(500, "gagal restore PostgreSQL; backup pengaman tersimpan di "+preRestorePath)
 	}
 	_ = os.Remove(tmpPath)
-	s.audit(&uid, "restore", "system", "psql restore applied successfully")
+	s.audit(&uid, "restore", "system", "psql restore applied successfully; safety backup: "+preRestorePath)
 	return c.JSON(fiber.Map{
 		"ok":      true,
 		"mode":    "sql",
-		"message": "Restore PostgreSQL berhasil diterapkan langsung ke database.",
+		"message": "Restore PostgreSQL berhasil diterapkan. Backup pengaman tersimpan di " + preRestorePath + ".",
 	})
 }
 

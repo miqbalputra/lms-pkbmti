@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,11 +11,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/helmet"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
@@ -101,7 +106,7 @@ type TahunAjaran struct {
 	TanggalMulai              time.Time  `json:"tanggalMulai"`
 	TanggalSelesai            time.Time  `json:"tanggalSelesai"`
 	TanggalMulaiSemesterGenap *time.Time `json:"tanggalMulaiSemesterGenap"` // legacy — dipertahankan utk backward-compat; semester kini dikelola via model Semester
-	IsAktif                   bool       `json:"isAktif"`
+	IsAktif                   bool       `gorm:"index" json:"isAktif"`
 }
 
 // Semester merepresentasikan satu semester dalam sebuah tahun ajaran (Ganjil / Genap).
@@ -169,7 +174,7 @@ type PesertaDidik struct {
 	TanggalLahir *time.Time `json:"tanggalLahir"`
 	KelasID      string     `gorm:"index" json:"kelasId"`
 	PokjarID     string     `json:"pokjarId"`
-	OrangTuaID   string     `json:"orangTuaId"`
+	OrangTuaID   string     `gorm:"index" json:"orangTuaId"`
 	ProgramID    *string    `gorm:"index" json:"programId"` // Modul O — opsional
 	FotoPath     *string    `json:"fotoPath"`               // Modul P — foto kartu pelajar
 	Status       string     `gorm:"default:aktif" json:"status"`
@@ -510,11 +515,11 @@ type UjianSoal struct {
 type UjianPeserta struct {
 	Base
 	UjianID        string       `gorm:"uniqueIndex:ujian_peserta_uniq" json:"ujianId"`
-	PesertaDidikID string       `gorm:"uniqueIndex:ujian_peserta_uniq" json:"pesertaDidikId"`
+	PesertaDidikID string       `gorm:"index;uniqueIndex:ujian_peserta_uniq" json:"pesertaDidikId"`
 	Mulai          *time.Time   `json:"mulai"`
 	Selesai        *time.Time   `json:"selesai"`
 	Skor           *float64     `gorm:"type:decimal(6,2)" json:"skor"`
-	Status         string       `gorm:"default:mulai" json:"status"` // "mulai"|"selesai"|"dikunci"
+	Status         string       `gorm:"default:mulai;index" json:"status"` // "mulai"|"selesai"|"dikunci"
 	TabSwitch      int          `json:"tabSwitch"`
 	Ujian          Ujian        `gorm:"foreignKey:UjianID" json:"ujian"`
 	PesertaDidik   PesertaDidik `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik"`
@@ -557,15 +562,16 @@ type ChatMessage struct {
 // KalenderEvent — event kalender akademik.
 type KalenderEvent struct {
 	Base
-	Judul            string     `gorm:"not null" json:"judul"`
-	Deskripsi        string     `gorm:"type:text" json:"deskripsi"`
-	TanggalMulai     time.Time  `gorm:"index" json:"tanggalMulai"`
-	TanggalSelesai   *time.Time `json:"tanggalSelesai"`
-	Tipe             string     `json:"tipe"` // "libur"|"ujian"|"kegiatan"|"upacara"|"rapat"
-	Warna            string     `json:"warna"`
-	Semester         *string    `json:"semester"`
-	TahunAjaranID    *string    `gorm:"index" json:"tahunAjaranId"`
-	DibuatOlehUserID string     `gorm:"index" json:"dibuatOlehUserId"`
+	Judul            string       `gorm:"not null" json:"judul"`
+	Deskripsi        string       `gorm:"type:text" json:"deskripsi"`
+	TanggalMulai     time.Time    `gorm:"index" json:"tanggalMulai"`
+	TanggalSelesai   *time.Time   `json:"tanggalSelesai"`
+	Tipe             string       `json:"tipe"` // "libur"|"ujian"|"kegiatan"|"upacara"|"rapat"
+	Warna            string       `json:"warna"`
+	Semester         *string      `json:"semester"`
+	TahunAjaranID    *string      `gorm:"index" json:"tahunAjaranId"`
+	DibuatOlehUserID string       `gorm:"index" json:"dibuatOlehUserId"`
+	TahunAjaran      *TahunAjaran `gorm:"foreignKey:TahunAjaranID" json:"tahunAjaran,omitempty"`
 }
 
 // Modul O — Program (master, prd_fitur_simpkbm.md). Paket program kesetaraan (A/B/C).
@@ -729,6 +735,9 @@ func env(k, d string) string {
 }
 func main() {
 	cfg := Config{AccessSecret: env("JWT_ACCESS_SECRET", "development-access-secret-change-me-32-chars"), RefreshSecret: env("JWT_REFRESH_SECRET", "development-refresh-secret-change-me-32"), Env: env("APP_ENV", "development"), CookieDomain: os.Getenv("COOKIE_DOMAIN"), AccessTTL: duration("JWT_ACCESS_TTL", "15m"), RefreshTTL: duration("JWT_REFRESH_TTL", "168h")}
+	if err := validateConfig(cfg); err != nil {
+		panic(err)
+	}
 	// Apply any staged restore BEFORE opening the DB: a restore uploads a backup
 	// file to a pending location; it is applied here (with an automatic safety
 	// backup of the current DB) so the live file is never overwritten while open.
@@ -749,12 +758,22 @@ func main() {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
-		BodyLimit:    backupUploadLimit(), // supports full database restore uploads
+		// The restore endpoint accepts full database files; upload handlers still
+		// validate their own file sizes before writing anything to disk.
+		BodyLimit: backupUploadLimit(),
 	})
 	app.Use(logger.New())
 	app.Use(helmet.New())
+	app.Use(compress.New())
 	app.Use(cors.New(cors.Config{AllowOrigins: env("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), AllowHeaders: "Origin, Content-Type, Accept, Authorization", AllowCredentials: true}))
-	app.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"status": "ok"}) })
+	health := func(c *fiber.Ctx) error {
+		sqlDB, err := s.db.DB()
+		if err != nil || sqlDB.Ping() != nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "unhealthy"})
+		}
+		return c.JSON(fiber.Map{"status": "ok"})
+	}
+	app.Get("/health", health)
 	// Short public entry points. The page still calls its JSON endpoints under /api.
 	// Register these before the production SPA fallback so they do not render the
 	// administrator login page instead.
@@ -782,6 +801,8 @@ func main() {
 	// verifikasi QR sertifikat & kartu pelajar. Terdaftar sebelum group protected.
 	api.Get("/verify/sertifikat/:nomor", s.verifySertifikat)
 	api.Get("/verify/siswa/:nisn", s.verifySiswa)
+	// Keep the compose/reverse-proxy probe aligned with the public health probe.
+	api.Get("/health", health)
 	// Public materi share endpoints (Modul E) — no auth. Halaman share materi
 	// untuk peserta didik (publik atau password). Terdaftar sebelum group
 	// protected agar empty-prefix auth quirk tidak bocor ke sini.
@@ -796,14 +817,30 @@ func main() {
 	// Public Ujian Online page & API — no auth. Siswa masuk via NISN + Kode Akses.
 	api.Get("/ujian", s.serveUjianOnlinePage)
 	api.Get("/ujian-online/page", s.serveUjianOnlinePage) // backward compat redirect
-	api.Post("/ujian-online/cek", s.cekUjianOnline)
+	publicExamLoginMax := 60
+	publicParentLoginMax := 30
+	if cfg.Env == "production" {
+		publicExamLoginMax = 30
+		publicParentLoginMax = 10
+	}
+	api.Post("/ujian-online/cek", limiter.New(limiter.Config{
+		Max: publicExamLoginMax, Expiration: time.Minute,
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{"error": "Terlalu banyak percobaan. Silakan tunggu 1 menit."})
+		},
+	}), s.cekUjianOnline)
 	api.Post("/ujian-online/:ujianId/mulai", s.mulaiUjianOnline)
 	api.Get("/ujian-online/:ujianId/soal", s.getSoalUjianOnline)
 	api.Post("/ujian-online/:ujianId/jawab", s.jawabSoal)
 	api.Post("/ujian-online/:ujianId/selesai", s.selesaiUjianOnline)
 	api.Post("/ujian-online/:ujianId/tab-switch", s.tabSwitchUjianOnline)
 	// Public Orang Tua login endpoint — no JWT; login by NISN + Tanggal Lahir.
-	api.Post("/orang-tua/login", s.loginOrangTua)
+	api.Post("/orang-tua/login", limiter.New(limiter.Config{
+		Max: publicParentLoginMax, Expiration: time.Minute,
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{"error": "Terlalu banyak percobaan. Silakan tunggu 1 menit."})
+		},
+	}), s.loginOrangTua)
 	api.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage) // backward compat redirect
 	// SSE notification stream — accepts token via query param (EventSource can't set Authorization headers)
@@ -816,7 +853,78 @@ func main() {
 		app.Get("/*", func(c *fiber.Ctx) error { return c.SendFile("./public/index.html") })
 	}
 	s.startScheduler()
-	panic(app.Listen(":" + env("PORT", "8080")))
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- app.Listen(":" + env("PORT", "8080")) }()
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			panic(err)
+		}
+	case <-signalCh:
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := app.ShutdownWithContext(ctx); err != nil {
+			fmt.Printf("graceful shutdown failed: %v\n", err)
+		}
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}
+}
+
+func validateConfig(cfg Config) error {
+	if cfg.Env != "production" {
+		return nil
+	}
+	if unsafeSecret(cfg.AccessSecret) || unsafeSecret(cfg.RefreshSecret) {
+		return errors.New("production requires JWT_ACCESS_SECRET and JWT_REFRESH_SECRET with unique random values of at least 32 characters")
+	}
+	databaseURL := strings.ToLower(strings.TrimSpace(os.Getenv("DATABASE_URL")))
+	if databaseURL == "" || strings.Contains(databaseURL, "your_password") || strings.Contains(databaseURL, "password123") {
+		return errors.New("production requires DATABASE_URL; refusing to start with the SQLite fallback")
+	}
+	if _, err := parseDatabaseURL(os.Getenv("DATABASE_URL")); err != nil {
+		return fmt.Errorf("invalid production DATABASE_URL: %w", err)
+	}
+	origins := strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",")
+	if len(origins) == 0 || strings.TrimSpace(origins[0]) == "" {
+		return errors.New("production requires CORS_ALLOWED_ORIGINS")
+	}
+	for _, raw := range origins {
+		origin := strings.TrimSpace(raw)
+		lowerOrigin := strings.ToLower(origin)
+		if strings.Contains(lowerOrigin, "ganti") || strings.Contains(lowerOrigin, "your_domain") {
+			return fmt.Errorf("CORS_ALLOWED_ORIGINS still contains a placeholder: %q", origin)
+		}
+		u, err := url.Parse(origin)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return fmt.Errorf("invalid CORS_ALLOWED_ORIGINS value %q", origin)
+		}
+	}
+	if strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")) == "" || strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")) == "" {
+		return errors.New("production requires TURNSTILE_SECRET_KEY and TURNSTILE_SITE_KEY")
+	}
+	return nil
+}
+
+func unsafeSecret(v string) bool {
+	v = strings.ToLower(strings.TrimSpace(v))
+	return len(v) < 32 || strings.Contains(v, "development-") || strings.Contains(v, "change-me") || strings.Contains(v, "ganti_ini") || strings.Contains(v, "ubah-ini") || strings.Contains(v, "your_password") || strings.Contains(v, "your-secret")
+}
+
+func weakInitialPassword(v string) bool {
+	v = strings.ToLower(strings.TrimSpace(v))
+	return len(v) < 12 || v == "admin123" || strings.Contains(v, "ganti") || strings.Contains(v, "ubah-ini") || strings.Contains(v, "password")
+}
+
+func intEnv(key string, fallback int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
 }
 func duration(k, d string) time.Duration {
 	v, e := time.ParseDuration(env(k, d))
@@ -845,19 +953,45 @@ func duration(k, d string) time.Duration {
 //     reject existing orphan rows or inserts the manual guards don't cover.
 func openDB() (*gorm.DB, error) {
 	if url := os.Getenv("DATABASE_URL"); url != "" {
-		return gorm.Open(postgres.Open(url), &gorm.Config{})
+		db, err := gorm.Open(postgres.Open(url), &gorm.Config{TranslateError: true})
+		if err != nil {
+			return nil, err
+		}
+		configureDBPool(db, false)
+		return db, nil
 	}
 	dsn := "file:pkbm-lms.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
 		return nil, err
 	}
-	if sqlDB, e := db.DB(); e == nil {
+	configureDBPool(db, true)
+	return db, nil
+}
+
+func configureDBPool(db *gorm.DB, sqliteDB bool) {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return
+	}
+	if sqliteDB {
 		sqlDB.SetMaxOpenConns(1)
 		sqlDB.SetMaxIdleConns(1)
 		sqlDB.SetConnMaxIdleTime(0)
+		return
 	}
-	return db, nil
+	maxOpen := intEnv("DB_MAX_OPEN_CONNS", 25)
+	if maxOpen > 200 {
+		maxOpen = 200
+	}
+	maxIdle := intEnv("DB_MAX_IDLE_CONNS", 10)
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 }
 func (s *Server) migrate() error {
 	if e := s.migrateSchema(); e != nil {
@@ -937,9 +1071,21 @@ func (s *Server) migrateSchema() error {
 	// password change and unlock the account behind the operator's back on every
 	// restart. Override the initial password via ADMIN_DEFAULT_PASSWORD in prod.
 	var admin User
-	if s.db.Where("username = ?", "admin").First(&admin).Error != nil {
-		hash, _ := bcrypt.GenerateFromPassword([]byte(env("ADMIN_DEFAULT_PASSWORD", "Admin123")), bcrypt.DefaultCost)
-		s.db.Create(&User{Username: "admin", PasswordHash: string(hash), Role: "admin", IsActive: true})
+	adminErr := s.db.Where("username = ?", "admin").First(&admin).Error
+	if errors.Is(adminErr, gorm.ErrRecordNotFound) {
+		initialPassword := env("ADMIN_DEFAULT_PASSWORD", "Admin123")
+		if s.cfg.Env == "production" && weakInitialPassword(initialPassword) {
+			return errors.New("ADMIN_DEFAULT_PASSWORD must be set to a strong password before the first production start")
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(initialPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		if err := s.db.Create(&User{Username: "admin", PasswordHash: string(hash), Role: "admin", IsActive: true}).Error; err != nil {
+			return err
+		}
+	} else if adminErr != nil {
+		return adminErr
 	}
 	// Backfill default nilai settings (bobot + ambang predikat) for any pre-existing
 	// mapel that predates the Modul Nilai migration.
@@ -964,11 +1110,42 @@ func apiError(c *fiber.Ctx, err error) error {
 	if errors.As(err, &e) {
 		code = e.Code
 	}
-	return c.Status(code).JSON(fiber.Map{"error": err.Error()})
+	message := err.Error()
+	if code >= fiber.StatusInternalServerError && env("APP_ENV", "development") == "production" {
+		message = "Terjadi kesalahan internal. Silakan coba lagi."
+	}
+	return c.Status(code).JSON(fiber.Map{"error": message})
 }
 func (s *Server) token(user User, secret string, ttl time.Duration) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": user.ID, "role": user.Role, "exp": time.Now().Add(ttl).Unix()}).SignedString([]byte(secret))
 }
+
+func (s *Server) parseAccessToken(raw string) (jwt.MapClaims, string, string, error) {
+	raw = strings.TrimSpace(strings.TrimPrefix(raw, "Bearer "))
+	if raw == "" {
+		return nil, "", "", errors.New("missing access token")
+	}
+	t, err := jwt.ParseWithClaims(raw, jwt.MapClaims{}, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, errors.New("unexpected signing method")
+		}
+		return []byte(s.cfg.AccessSecret), nil
+	}, jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || t == nil || !t.Valid {
+		return nil, "", "", errors.New("invalid access token")
+	}
+	claims, ok := t.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, "", "", errors.New("invalid access token claims")
+	}
+	uid, uidOK := claims["sub"].(string)
+	role, roleOK := claims["role"].(string)
+	if !uidOK || strings.TrimSpace(uid) == "" || !roleOK || strings.TrimSpace(role) == "" {
+		return nil, "", "", errors.New("invalid access token claims")
+	}
+	return claims, uid, role, nil
+}
+
 func hash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
 func (s *Server) login(c *fiber.Ctx) error {
 	var in struct {
@@ -999,12 +1176,16 @@ func (s *Server) login(c *fiber.Ctx) error {
 			u.LockedUntil = &t
 			u.FailedLogins = 0
 		}
-		s.db.Save(&u)
+		if err := s.db.Save(&u).Error; err != nil {
+			return fiber.NewError(500, "gagal memperbarui status login")
+		}
 		return fiber.NewError(401, "Kata sandi yang Anda masukkan salah.")
 	}
 	u.FailedLogins = 0
 	u.LockedUntil = nil
-	s.db.Save(&u)
+	if err := s.db.Save(&u).Error; err != nil {
+		return fiber.NewError(500, "gagal memperbarui status login")
+	}
 	return s.issue(c, u)
 }
 func verifyTurnstile(token, ip string) bool {
@@ -1013,11 +1194,15 @@ func verifyTurnstile(token, ip string) bool {
 		// No secret configured -> Turnstile disabled. Callers gate on this too.
 		return true
 	}
-	r, e := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", map[string][]string{"secret": {key}, "response": {token}, "remoteip": {ip}})
+	client := &http.Client{Timeout: 8 * time.Second}
+	r, e := client.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", url.Values{"secret": {key}, "response": {token}, "remoteip": {ip}})
 	if e != nil {
 		return false
 	}
 	defer r.Body.Close()
+	if r.StatusCode < http.StatusOK || r.StatusCode >= http.StatusMultipleChoices {
+		return false
+	}
 	var result struct {
 		Success bool `json:"success"`
 	}
@@ -1044,7 +1229,9 @@ func (s *Server) issue(c *fiber.Ctx, u User) error {
 		return e
 	}
 	raw := uuid.NewString() + uuid.NewString()
-	s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)})
+	if err := s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)}).Error; err != nil {
+		return fiber.NewError(500, "gagal menyimpan sesi")
+	}
 	c.Cookie(&fiber.Cookie{Name: "refresh_token", Value: raw, HTTPOnly: true, Secure: s.cfg.Env == "production", SameSite: "Strict", Domain: s.cfg.CookieDomain, Expires: time.Now().Add(s.cfg.RefreshTTL), Path: "/api/auth"})
 	s.audit(&u.ID, "login", "auth", "")
 	return c.JSON(fiber.Map{"accessToken": access, "user": u})
@@ -1056,11 +1243,16 @@ func (s *Server) refresh(c *fiber.Ctx) error {
 		return fiber.NewError(401, "invalid refresh token")
 	}
 	now := time.Now()
-	rt.RevokedAt = &now
-	if e := s.db.Save(&rt).Error; e != nil {
+	result := s.db.Model(&RefreshToken{}).
+		Where("id = ? AND revoked_at IS NULL", rt.ID).
+		Updates(map[string]interface{}{"revoked_at": now})
+	if result.Error != nil {
 		// If we cannot revoke the old refresh token, do NOT issue a new pair:
 		// the old (still-valid) token could then be replayed indefinitely.
 		return fiber.NewError(500, "unable to rotate refresh token")
+	}
+	if result.RowsAffected != 1 {
+		return fiber.NewError(401, "invalid refresh token")
 	}
 	var u User
 	if s.db.First(&u, "id = ?", rt.UserID).Error != nil {
@@ -1080,17 +1272,12 @@ func (s *Server) logout(c *fiber.Ctx) error {
 	return c.SendStatus(204)
 }
 func (s *Server) auth(c *fiber.Ctx) error {
-	h := strings.TrimPrefix(c.Get("Authorization"), "Bearer ")
-	if h == "" {
-		return fiber.NewError(401, "missing access token")
+	_, uid, role, err := s.parseAccessToken(c.Get("Authorization"))
+	if err != nil {
+		return fiber.NewError(401, err.Error())
 	}
-	t, e := jwt.Parse(h, func(t *jwt.Token) (interface{}, error) { return []byte(s.cfg.AccessSecret), nil })
-	if e != nil || !t.Valid {
-		return fiber.NewError(401, "invalid access token")
-	}
-	claims := t.Claims.(jwt.MapClaims)
-	c.Locals("userID", claims["sub"].(string))
-	c.Locals("role", claims["role"].(string))
+	c.Locals("userID", uid)
+	c.Locals("role", role)
 	return c.Next()
 }
 func (s *Server) me(c *fiber.Ctx) error {
@@ -1215,7 +1402,9 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 	// Issue a refresh-token cookie (SameSite=Lax so it survives the cross-site
 	// redirect from Google). The SPA mints the access token via /auth/refresh.
 	raw := uuid.NewString() + uuid.NewString()
-	s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)})
+	if err := s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)}).Error; err != nil {
+		return fail("Gagal menyiapkan sesi Google. Silakan coba lagi.")
+	}
 	c.Cookie(&fiber.Cookie{
 		Name: "refresh_token", Value: raw, HTTPOnly: true,
 		Secure: s.cfg.Env == "production", SameSite: "Lax", Domain: s.cfg.CookieDomain,

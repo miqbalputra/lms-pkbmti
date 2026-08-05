@@ -346,10 +346,10 @@ export function BackupView({ token }: { token: string }) {
             <section className="space-y-2">
               <h3 className="text-sm font-semibold">A. Ikhtisar</h3>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Sistem ini mencadangkan <strong>seluruh database SQLite</strong> dalam dua format. Backup bisa dibuat
-                manual (tombol di kartu atas), terjadwal otomatis (env <code>BACKUP_CRON</code>), atau ditarik dari
-                luar oleh <strong>n8n</strong> via HTTP. Restore aman: ditahan saat server jalan, diterapkan saat
-                <strong> restart</strong>, dengan salinan DB lama sebagai pengaman.
+                Sistem ini mencadangkan <strong>seluruh database</strong> sesuai engine: SQLite memakai snapshot
+                <code>.db</code>/<code>.sql</code>, sedangkan PostgreSQL memakai dump penuh <code>.sql</code> via
+                <code>pg_dump</code>. Backup bisa dibuat manual, terjadwal otomatis (env <code>BACKUP_CRON</code>),
+                atau ditarik dari luar oleh <strong>n8n</strong> via HTTP.
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs">
@@ -360,14 +360,22 @@ export function BackupView({ token }: { token: string }) {
                     <li>Tidak bisa dibaca/diff sebagai teks.</li>
                   </ul>
                 </div>
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs">
+                {!isPG && <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs">
                   <p className="font-semibold">Format <code>.sql</code> (text)</p>
                   <ul className="mt-1 list-disc pl-4 space-y-0.5 text-muted-foreground">
                     <li>Dump portable mengikuti format <code>sqlite3 .dump</code>.</li>
                     <li>Bisa dibaca, diff, dan dipindahkan antar mesin.</li>
                     <li>Cocok untuk arsip n8n ke Google Drive/S3.</li>
                   </ul>
-                </div>
+                </div>}
+                {isPG && <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs sm:col-span-2">
+                  <p className="font-semibold">Format <code>.sql</code> (PostgreSQL)</p>
+                  <ul className="mt-1 list-disc pl-4 space-y-0.5 text-muted-foreground">
+                    <li>Dump penuh portable dibuat melalui <code>pg_dump</code>.</li>
+                    <li>Restore memakai <code>psql</code> dalam satu transaksi dengan backup pengaman.</li>
+                    <li>Bisa disimpan oleh n8n ke Google Drive/S3.</li>
+                  </ul>
+                </div>}
               </div>
             </section>
 
@@ -376,7 +384,7 @@ export function BackupView({ token }: { token: string }) {
               <h3 className="text-sm font-semibold">B. Backup Manual</h3>
               <ol className="list-decimal pl-5 space-y-1 text-xs text-muted-foreground">
                 <li>Buka kartu <strong>"Buat Backup Baru"</strong> di atas.</li>
-                <li>Klik <strong>"Backup .db (biner)"</strong> atau <strong>"Backup .sql (text)"</strong>. File muncul di folder <code>{dir || 'backups'}</code> dan langsung tercantum di tabel.</li>
+                <li>Klik tombol backup sesuai engine. PostgreSQL memakai <strong>"Backup pg_dump (.sql)"</strong>; SQLite menyediakan <strong>"Backup .db (biner)"</strong> dan <strong>"Backup .sql (text)"</strong>.</li>
                 <li>Untuk satu file database lengkap, klik <strong>"Download Database Full"</strong>. File langsung masuk ke folder Download browser.</li>
                 <li>Unduh file lama via tombol <em>Unduh</em> pada baris tabel; hapus via tombol tong sampah.</li>
               </ol>
@@ -425,25 +433,39 @@ export function BackupView({ token }: { token: string }) {
             {/* E. Restore */}
             <section className="space-y-2">
               <h3 className="text-sm font-semibold">E. Restore (Pemulihan)</h3>
-              <Alert>
+              {isPG && (
+                <Alert>
+                  <AlertDescription>
+                    Restore PostgreSQL membuat backup pengaman <code>pre-restore-&lt;waktu&gt;.sql</code> terlebih dahulu,
+                    lalu menerapkan dump upload dalam satu transaksi ke database production.
+                  </AlertDescription>
+                </Alert>
+              )}
+              {!isPG && <Alert>
                 <AlertDescription>
                   Restore <strong>tidak</strong> langsung menimpa DB yang sedang jalan (file terkunci). Ia disiapkan
                   lalu diterapkan saat <strong>restart</strong> berikutnya. DB lama otomatis disalin ke
                   <code> backups/pre-restore-&lt;waktu&gt;.db</code> sebagai pengaman.
                 </AlertDescription>
-              </Alert>
-              <ol className="list-decimal pl-5 space-y-1 text-xs text-muted-foreground">
+              </Alert>}
+              {isPG && <ol className="list-decimal pl-5 space-y-1 text-xs text-muted-foreground">
+                <li>Pilih file <code>.sql</code>, lalu klik <strong>"Restore Sekarang"</strong>.</li>
+                <li>Server memvalidasi file dan membuat backup pengaman sebelum restore.</li>
+                <li><code>psql</code> menerapkan dump dalam satu transaksi tanpa restart aplikasi.</li>
+                <li>Selesai. Verifikasi data di dashboard.</li>
+              </ol>}
+              {!isPG && <ol className="list-decimal pl-5 space-y-1 text-xs text-muted-foreground">
                 <li>Pilih file <code>.db</code> atau <code>.sql</code>, lalu klik <strong>"Restore Sekarang"</strong>.</li>
                 <li>Server memvalidasi file terlebih dahulu dan menyiapkan restore secara aman.</li>
                 <li>Di production, server restart otomatis dan restore diterapkan sebelum database dibuka.</li>
                 <li>Saat startup, <code>applyPendingRestore</code> membackup DB lama → lalu menukar file (.db) atau rebuild dari dump (.sql).</li>
                 <li>Selesai. Verifikasi data di dashboard.</li>
-              </ol>
-              <p className="text-xs text-muted-foreground">
+              </ol>}
+              {!isPG && <p className="text-xs text-muted-foreground">
                 <strong>Membatalkan restore</strong> bila salah: hentikan server → rename
                 <code> backups/pre-restore-*.db</code> menjadi <code>pkbm-lms.db</code> (hapus dulu file live) → start
                 ulang. Atau hapus file <code>.restore-pending*</code> sebelum restart untuk membatalkan sebelum diterapkan.
-              </p>
+              </p>}
             </section>
 
             {/* F. Env vars */}

@@ -537,10 +537,66 @@ func (s *Server) listAuditLogs(c *fiber.Ctx) error {
 	return c.JSON(logs)
 }
 
+func parseFlexibleDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{"2006-01-02", time.RFC3339Nano, time.RFC3339} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, errors.New("invalid date")
+}
+
+func validateAcademicYearDates(row *TahunAjaran) error {
+	if row.TanggalSelesai.Before(row.TanggalMulai) {
+		return fiber.NewError(400, "tanggalSelesai tidak boleh sebelum tanggalMulai")
+	}
+	if row.TanggalMulaiSemesterGenap != nil {
+		genap := *row.TanggalMulaiSemesterGenap
+		if genap.Before(row.TanggalMulai) || genap.After(row.TanggalSelesai) {
+			return fiber.NewError(400, "tanggalMulaiSemesterGenap harus berada dalam rentang tahun ajaran")
+		}
+	}
+	return nil
+}
+
 func (s *Server) createTahun(c *fiber.Ctx) error {
-	var row TahunAjaran
-	if e := c.BodyParser(&row); e != nil {
+	var in struct {
+		NamaTahunAjaran           string  `json:"namaTahunAjaran"`
+		TanggalMulai              string  `json:"tanggalMulai"`
+		TanggalSelesai            string  `json:"tanggalSelesai"`
+		TanggalMulaiSemesterGenap *string `json:"tanggalMulaiSemesterGenap"`
+		IsAktif                   bool    `json:"isAktif"`
+	}
+	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	start, err := parseFlexibleDate(in.TanggalMulai)
+	if err != nil {
+		return fiber.NewError(400, "format tanggalMulai tidak valid (YYYY-MM-DD)")
+	}
+	end, err := parseFlexibleDate(in.TanggalSelesai)
+	if err != nil {
+		return fiber.NewError(400, "format tanggalSelesai tidak valid (YYYY-MM-DD)")
+	}
+	row := TahunAjaran{
+		NamaTahunAjaran: in.NamaTahunAjaran,
+		TanggalMulai:    start,
+		TanggalSelesai:  end,
+		IsAktif:         in.IsAktif,
+	}
+	if in.TanggalMulaiSemesterGenap != nil && strings.TrimSpace(*in.TanggalMulaiSemesterGenap) != "" {
+		genap, e := parseFlexibleDate(*in.TanggalMulaiSemesterGenap)
+		if e != nil {
+			return fiber.NewError(400, "format tanggalMulaiSemesterGenap tidak valid (YYYY-MM-DD)")
+		}
+		row.TanggalMulaiSemesterGenap = &genap
+	}
+	if strings.TrimSpace(row.NamaTahunAjaran) == "" {
+		return fiber.NewError(400, "namaTahunAjaran wajib diisi")
+	}
+	if e := validateAcademicYearDates(&row); e != nil {
+		return e
 	}
 	uid := c.Locals("userID").(string)
 	return s.db.Transaction(func(tx *gorm.DB) error {
@@ -563,26 +619,27 @@ func (s *Server) updateTahun(c *fiber.Ctx) error {
 		return fiber.NewError(404, "record not found")
 	}
 	var in struct {
-		NamaTahunAjaran *string `json:"namaTahunAjaran"`
-		TanggalMulai    *string `json:"tanggalMulai"`
-		TanggalSelesai  *string `json:"tanggalSelesai"`
-		IsAktif         *bool   `json:"isAktif"`
+		NamaTahunAjaran           *string `json:"namaTahunAjaran"`
+		TanggalMulai              *string `json:"tanggalMulai"`
+		TanggalSelesai            *string `json:"tanggalSelesai"`
+		TanggalMulaiSemesterGenap *string `json:"tanggalMulaiSemesterGenap"`
+		IsAktif                   *bool   `json:"isAktif"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
 	if in.NamaTahunAjaran != nil {
-		row.NamaTahunAjaran = *in.NamaTahunAjaran
+		row.NamaTahunAjaran = strings.TrimSpace(*in.NamaTahunAjaran)
 	}
 	if in.TanggalMulai != nil {
-		t, e := time.Parse("2006-01-02", *in.TanggalMulai)
+		t, e := parseFlexibleDate(*in.TanggalMulai)
 		if e != nil {
 			return fiber.NewError(400, "format tanggalMulai tidak valid (YYYY-MM-DD)")
 		}
 		row.TanggalMulai = t
 	}
 	if in.TanggalSelesai != nil {
-		t, e := time.Parse("2006-01-02", *in.TanggalSelesai)
+		t, e := parseFlexibleDate(*in.TanggalSelesai)
 		if e != nil {
 			return fiber.NewError(400, "format tanggalSelesai tidak valid (YYYY-MM-DD)")
 		}
@@ -590,6 +647,23 @@ func (s *Server) updateTahun(c *fiber.Ctx) error {
 	}
 	if in.IsAktif != nil {
 		row.IsAktif = *in.IsAktif
+	}
+	if in.TanggalMulaiSemesterGenap != nil {
+		if strings.TrimSpace(*in.TanggalMulaiSemesterGenap) == "" {
+			row.TanggalMulaiSemesterGenap = nil
+		} else {
+			t, e := parseFlexibleDate(*in.TanggalMulaiSemesterGenap)
+			if e != nil {
+				return fiber.NewError(400, "format tanggalMulaiSemesterGenap tidak valid (YYYY-MM-DD)")
+			}
+			row.TanggalMulaiSemesterGenap = &t
+		}
+	}
+	if strings.TrimSpace(row.NamaTahunAjaran) == "" {
+		return fiber.NewError(400, "namaTahunAjaran wajib diisi")
+	}
+	if e := validateAcademicYearDates(&row); e != nil {
+		return e
 	}
 	uid := c.Locals("userID").(string)
 	return s.db.Transaction(func(tx *gorm.DB) error {
@@ -788,7 +862,8 @@ func isUniqueErr(err error) bool {
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
 		return true
 	}
-	return strings.Contains(err.Error(), "UNIQUE constraint")
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint") || strings.Contains(message, "duplicate key value")
 }
 func (s *Server) updateUser(c *fiber.Ctx) error {
 	var u User

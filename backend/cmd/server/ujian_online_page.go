@@ -10,7 +10,7 @@ import (
 func (s *Server) serveUjianOnlinePage(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
 	siteKey := os.Getenv("TURNSTILE_SITE_KEY")
-	if siteKey == "" {
+	if siteKey == "" && s.cfg.Env != "production" {
 		siteKey = "1x00000000000000000000AA"
 	}
 	html := strings.Replace(ujianOnlineHTML, "{{TURNSTILE_SITE_KEY}}", siteKey, 1)
@@ -171,7 +171,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 <div id="loginCard" class="login-card card">
   <div class="login-brand">
     <div class="brand-logo"><div class="brand-mark">TI</div><div><div class="brand-name">Tunas Ilmu Learn</div><div class="brand-subtitle">PKBM Tunas Ilmu</div></div></div>
-    <div class="brand-copy"><h2>Ujian Online yang Aman & Terarah.</h2><p>Kerjakan ujian dengan nyaman melalui platform pembelajaran Tunas Ilmu Learn yang terhubung dengan sekolah.</p><div class="brand-protected"><div class="brand-protected-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 5 6v5c0 4.5 2.9 8.5 7 10 4.1-1.5 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg></div><div><strong>Akses Terlindungi</strong><span>Verifikasi keamanan untuk setiap sesi masuk.</span></div></div></div>
+    <div class="brand-copy"><h2>Ujian Online Peserta Didik.</h2><p>Kerjakan ujian dengan nyaman melalui platform pembelajaran Tunas Ilmu Learn yang terhubung dengan sekolah.</p><div class="brand-protected"><div class="brand-protected-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 5 6v5c0 4.5 2.9 8.5 7 10 4.1-1.5 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg></div><div><strong>Akses Terlindungi</strong><span>Verifikasi keamanan untuk setiap sesi masuk.</span></div></div></div>
     <div class="brand-footer">© 2026 PKBM Tunas Ilmu • Tunas Ilmu Learn</div>
   </div>
   <div class="login-form-panel">

@@ -4,7 +4,7 @@
 
 - Coolify instance running
 - Domain name configured
-- Cloudflare Turnstile (optional, for login protection)
+- Cloudflare Turnstile (required in production, optional in local development)
 
 ## 1. Create New Project in Coolify
 
@@ -34,8 +34,11 @@ Add these environment variables in your application:
 | `APP_ENV` | Environment | `production` |
 | `PORT` | Server port | `8080` |
 | `DATABASE_URL` | PostgreSQL connection | `postgres://user:pass@db-host:5432/pkbm` |
+| `DB_MAX_OPEN_CONNS` | Batas koneksi database aktif | `25` |
+| `DB_MAX_IDLE_CONNS` | Batas koneksi idle database | `10` |
 | `JWT_ACCESS_SECRET` | Random 32+ chars | `your-secret-key-here` |
 | `JWT_REFRESH_SECRET` | Random 32+ chars | `another-secret-key` |
+| `ADMIN_DEFAULT_PASSWORD` | Password admin saat first start | Wajib kuat, minimal 12 karakter |
 | `CORS_ALLOWED_ORIGINS` | Your domain | `https://lms.example.com` |
 | `COOKIE_DOMAIN` | Your domain | `lms.example.com` |
 | `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret | Required in production |
@@ -60,15 +63,12 @@ Add these environment variables in your application:
 
 1. Click **Deploy** in Coolify
 2. Monitor build logs
-3. First run will auto-migrate database and seed default admin
+3. First run will auto-migrate database and seed the `admin` account using `ADMIN_DEFAULT_PASSWORD`
 
 ## Default Credentials
 
-After first deploy, login with:
-- **Username**: `admin`
-- **Password**: `Admin123`
-
-**Change this password immediately after first login!**
+Before first deploy, set `ADMIN_DEFAULT_PASSWORD` to a unique strong password (minimum 12 characters).
+Use that password with username `admin` for the first login, then rotate it through the application.
 
 ## Database Migration
 

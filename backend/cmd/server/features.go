@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
@@ -93,7 +92,17 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	if len(ujians) == 0 {
 		return fiber.NewError(404, "Tidak ada ujian aktif dengan kode akses tersebut untuk kelas Anda")
 	}
-	// For each exam, check if student already has a UjianPeserta record
+	// Load all existing sessions in one query instead of one query per exam.
+	ujianIDs := make([]string, 0, len(ujians))
+	for _, uj := range ujians {
+		ujianIDs = append(ujianIDs, uj.ID)
+	}
+	var sessions []UjianPeserta
+	s.db.Where("peserta_didik_id = ? AND ujian_id IN ?", pd.ID, ujianIDs).Find(&sessions)
+	sessionByExam := make(map[string]UjianPeserta, len(sessions))
+	for _, session := range sessions {
+		sessionByExam[session.UjianID] = session
+	}
 	type ujianRes struct {
 		Ujian
 		SudahMengerjakan bool     `json:"sudahMengerjakan"`
@@ -102,8 +111,7 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	var res []ujianRes
 	for _, uj := range ujians {
 		r := ujianRes{Ujian: uj, SudahMengerjakan: false, Skor: nil}
-		var up UjianPeserta
-		if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error == nil {
+		if up, ok := sessionByExam[uj.ID]; ok {
 			r.SudahMengerjakan = true
 			r.Skor = up.Skor
 		}
@@ -132,6 +140,13 @@ func (s *Server) mulaiUjianOnline(c *fiber.Ctx) error {
 		Status:         "mulai",
 	}
 	if e := s.db.Create(&up).Error; e != nil {
+		// Two tabs can submit "Mulai" at the same time. The unique index is the
+		// source of truth; return the winner's session instead of a 500.
+		if isUniqueErr(e) {
+			if lookupErr := s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error; lookupErr == nil {
+				return c.JSON(up)
+			}
+		}
 		return fiber.NewError(500, "Gagal memulai ujian: "+e.Error())
 	}
 	return c.Status(201).JSON(up)
@@ -534,18 +549,12 @@ func (s *Server) streamNotifikasi(c *fiber.Ctx) error {
 	if token == "" {
 		return fiber.NewError(401, "missing access token")
 	}
-	// Parse JWT to get userID
-	type jwtClaims struct {
-		Sub  string `json:"sub"`
-		Role string `json:"role"`
-	}
-	claims := jwt.MapClaims{}
-	t, e := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) { return []byte(s.cfg.AccessSecret), nil })
-	if e != nil || !t.Valid {
+	// Parse JWT to get userID. Use the same algorithm and claim validation as
+	// ordinary API requests so malformed SSE tokens cannot panic the process.
+	_, uid, _, err := s.parseAccessToken(token)
+	if err != nil {
 		return fiber.NewError(401, "invalid access token")
 	}
-	claims = t.Claims.(jwt.MapClaims)
-	uid := claims["sub"].(string)
 
 	c.Set(fiber.HeaderContentType, "text/event-stream")
 	c.Set(fiber.HeaderCacheControl, "no-cache")
@@ -741,6 +750,9 @@ func (s *Server) loginOrangTua(c *fiber.Ctx) error {
 		return fiber.NewError(400, "Format tanggal lahir tidak valid (DDMMYYYY)")
 	}
 	tl := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	if tl.Day() != day || int(tl.Month()) != month || tl.Year() != year {
+		return fiber.NewError(400, "Format tanggal lahir tidak valid (DDMMYYYY)")
+	}
 	// Find student by NISN
 	var pd PesertaDidik
 	if s.db.Preload("OrangTua").Preload("Kelas").Where("nisn = ?", in.NISN).First(&pd).Error != nil {
@@ -762,20 +774,24 @@ func (s *Server) loginOrangTua(c *fiber.Ctx) error {
 	var u User
 	if s.db.Where("orang_tua_id = ? AND role = ?", ortu.ID, "orang_tua").First(&u).Error != nil {
 		// Auto-create user account
-		username := "ortu-" + strings.ToLower(strings.ReplaceAll(ortu.NamaIbu, " ", "."))
-		if username == "ortu-" {
-			username = "ortu-" + ortu.ID[:8]
+		// Use the stable parent record ID instead of a name-derived username;
+		// two families may legitimately have the same mother's name.
+		username := "ortu-" + ortu.ID
+		passwordHash, hashErr := bcryptHash("OrangTua123")
+		if hashErr != nil {
+			return fiber.NewError(500, "gagal menyiapkan akun orang tua")
 		}
-		hash, _ := bcryptHash("OrangTua123")
 		u = User{
 			Username:     username,
 			Email:        username + "@pkbm.local",
-			PasswordHash: hash,
+			PasswordHash: passwordHash,
 			Role:         "orang_tua",
 			OrangTuaID:   &ortu.ID,
 			IsActive:     true,
 		}
-		s.db.Create(&u)
+		if err := s.db.Create(&u).Error; err != nil {
+			return fiber.NewError(500, "gagal membuat akun orang tua")
+		}
 	}
 	if !u.IsActive {
 		return fiber.NewError(403, "Akun orang tua nonaktif")
@@ -785,7 +801,9 @@ func (s *Server) loginOrangTua(c *fiber.Ctx) error {
 		return fiber.NewError(500, "gagal membuat token")
 	}
 	raw := uuid.NewString() + uuid.NewString()
-	s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)})
+	if err := s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)}).Error; err != nil {
+		return fiber.NewError(500, "gagal menyimpan sesi")
+	}
 	c.Cookie(&fiber.Cookie{
 		Name: "refresh_token", Value: raw, HTTPOnly: true,
 		Secure: s.cfg.Env == "production", SameSite: "Strict", Domain: s.cfg.CookieDomain,
@@ -915,7 +933,20 @@ func (s *Server) getTugasAnak(c *fiber.Ctx) error {
 	s.db.First(&pd, "id = ?", anakID)
 	var tugasList []Tugas
 	s.db.Preload("Mapel").Where("kelas_id = ?", pd.KelasID).Order("deadline desc").Find(&tugasList)
-	// Get pengumpulan for this student
+	// Get all submissions for this student in one query; the old loop caused an
+	// extra database round-trip for every task in the parent portal.
+	tugasIDs := make([]string, 0, len(tugasList))
+	for _, tugas := range tugasList {
+		tugasIDs = append(tugasIDs, tugas.ID)
+	}
+	var submissions []PengumpulanTugas
+	if len(tugasIDs) > 0 {
+		s.db.Where("peserta_didik_id = ? AND tugas_id IN ?", anakID, tugasIDs).Find(&submissions)
+	}
+	submissionByTask := make(map[string]PengumpulanTugas, len(submissions))
+	for _, submission := range submissions {
+		submissionByTask[submission.TugasID] = submission
+	}
 	type tugasRes struct {
 		Tugas
 		StatusPengumpulan string     `json:"statusPengumpulan"`
@@ -925,8 +956,7 @@ func (s *Server) getTugasAnak(c *fiber.Ctx) error {
 	var result []tugasRes
 	for _, t := range tugasList {
 		tr := tugasRes{Tugas: t, StatusPengumpulan: "belum"}
-		var pk PengumpulanTugas
-		if s.db.Where("tugas_id = ? AND peserta_didik_id = ?", t.ID, anakID).First(&pk).Error == nil {
+		if pk, ok := submissionByTask[t.ID]; ok {
 			tr.StatusPengumpulan = pk.Status
 			tr.Nilai = pk.Nilai
 			tr.TanggalKumpul = &pk.TanggalKumpul
