@@ -77,8 +77,8 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	if nisn == "" || kode == "" {
 		return fiber.NewError(400, "NISN dan Kode Akses wajib diisi")
 	}
-	if !verifyTurnstile(turnstileToken, c.IP()) {
-		return fiber.NewError(400, "Verifikasi keamanan gagal. Silakan coba lagi.")
+	if e := s.requireTurnstile(c, turnstileToken); e != nil {
+		return e
 	}
 	var pd PesertaDidik
 	if s.db.Where("nisn = ? AND status = ?", nisn, "aktif").First(&pd).Error != nil {
@@ -96,7 +96,7 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	// For each exam, check if student already has a UjianPeserta record
 	type ujianRes struct {
 		Ujian
-		SudahMengerjakan bool `json:"sudahMengerjakan"`
+		SudahMengerjakan bool     `json:"sudahMengerjakan"`
 		Skor             *float64 `json:"skor"`
 	}
 	var res []ujianRes
@@ -192,12 +192,12 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 	}
 	// Build response: strip answers
 	type soalRes struct {
-		ID           string   `json:"id"`
-		UjianID      string   `json:"ujianId"`
-		Bobot        float64  `json:"bobot"`
-		Pertanyaan   string   `json:"pertanyaan"`
-		Tipe         string   `json:"tipe"`
-		Opsi         []string `json:"opsi"`
+		ID         string   `json:"id"`
+		UjianID    string   `json:"ujianId"`
+		Bobot      float64  `json:"bobot"`
+		Pertanyaan string   `json:"pertanyaan"`
+		Tipe       string   `json:"tipe"`
+		Opsi       []string `json:"opsi"`
 		// Benar/Kunci are intentionally excluded
 	}
 	var res []soalRes
@@ -430,8 +430,8 @@ func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
 	up.Skor = &skor
 	s.db.Save(&up)
 	return c.JSON(fiber.Map{
-		"skor":    skor,
-		"status":  "selesai",
+		"skor":   skor,
+		"status": "selesai",
 	})
 }
 
@@ -618,14 +618,14 @@ func (s *Server) createKalenderEvent(c *fiber.Ctx) error {
 	}
 	uid := c.Locals("userID").(string)
 	var in struct {
-		Judul        string     `json:"judul"`
-		Deskripsi    string     `json:"deskripsi"`
-		TanggalMulai time.Time  `json:"tanggalMulai"`
+		Judul          string     `json:"judul"`
+		Deskripsi      string     `json:"deskripsi"`
+		TanggalMulai   time.Time  `json:"tanggalMulai"`
 		TanggalSelesai *time.Time `json:"tanggalSelesai"`
-		Tipe         string     `json:"tipe"`
-		Warna        string     `json:"warna"`
-		Semester     *string    `json:"semester"`
-		TahunAjaranID *string   `json:"tahunAjaranId"`
+		Tipe           string     `json:"tipe"`
+		Warna          string     `json:"warna"`
+		Semester       *string    `json:"semester"`
+		TahunAjaranID  *string    `json:"tahunAjaranId"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
@@ -662,14 +662,14 @@ func (s *Server) updateKalenderEvent(c *fiber.Ctx) error {
 		return fiber.NewError(404, "event tidak ditemukan")
 	}
 	var in struct {
-		Judul        string     `json:"judul"`
-		Deskripsi    string     `json:"deskripsi"`
-		TanggalMulai time.Time  `json:"tanggalMulai"`
+		Judul          string     `json:"judul"`
+		Deskripsi      string     `json:"deskripsi"`
+		TanggalMulai   time.Time  `json:"tanggalMulai"`
 		TanggalSelesai *time.Time `json:"tanggalSelesai"`
-		Tipe         string     `json:"tipe"`
-		Warna        string     `json:"warna"`
-		Semester     *string    `json:"semester"`
-		TahunAjaranID *string   `json:"tahunAjaranId"`
+		Tipe           string     `json:"tipe"`
+		Warna          string     `json:"warna"`
+		Semester       *string    `json:"semester"`
+		TahunAjaranID  *string    `json:"tahunAjaranId"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
@@ -720,15 +720,15 @@ func (s *Server) deleteKalenderEvent(c *fiber.Ctx) error {
 // Authenticates parent by NISN (child) + tanggal lahir (child), returns JWT with role=orang_tua.
 func (s *Server) loginOrangTua(c *fiber.Ctx) error {
 	var in struct {
-		NISN          string `json:"nisn"`
-		TanggalLahir  string `json:"tanggalLahir"` // format: DDMMYYYY
+		NISN           string `json:"nisn"`
+		TanggalLahir   string `json:"tanggalLahir"` // format: DDMMYYYY
 		TurnstileToken string `json:"cf-turnstile-response"`
 	}
 	if e := c.BodyParser(&in); e != nil || in.NISN == "" || in.TanggalLahir == "" {
 		return fiber.NewError(400, "NISN dan tanggal lahir wajib diisi")
 	}
-	if !verifyTurnstile(in.TurnstileToken, c.IP()) {
-		return fiber.NewError(400, "Verifikasi keamanan gagal. Silakan coba lagi.")
+	if e := s.requireTurnstile(c, in.TurnstileToken); e != nil {
+		return e
 	}
 	// Parse tanggal lahir DDMMYYYY
 	if len(in.TanggalLahir) != 8 {
@@ -918,8 +918,8 @@ func (s *Server) getTugasAnak(c *fiber.Ctx) error {
 	// Get pengumpulan for this student
 	type tugasRes struct {
 		Tugas
-		StatusPengumpulan string   `json:"statusPengumpulan"`
-		Nilai             *float64 `json:"nilai"`
+		StatusPengumpulan string     `json:"statusPengumpulan"`
+		Nilai             *float64   `json:"nilai"`
 		TanggalKumpul     *time.Time `json:"tanggalKumpul"`
 	}
 	var result []tugasRes

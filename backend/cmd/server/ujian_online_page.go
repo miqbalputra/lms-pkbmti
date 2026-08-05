@@ -10,6 +10,9 @@ import (
 func (s *Server) serveUjianOnlinePage(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
 	siteKey := os.Getenv("TURNSTILE_SITE_KEY")
+	if siteKey == "" {
+		siteKey = "1x00000000000000000000AA"
+	}
 	html := strings.Replace(ujianOnlineHTML, "{{TURNSTILE_SITE_KEY}}", siteKey, 1)
 	return c.SendString(html)
 }
@@ -24,7 +27,7 @@ var ujianOnlineHTML = `<!DOCTYPE html>
 <meta name="theme-color" content="#ffffff">
 <title>Ujian Online — PKBM Tunas Ilmu</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <style>
 :root{
   --background:#ffffff;--foreground:#0a0a0a;
@@ -39,8 +42,15 @@ var ujianOnlineHTML = `<!DOCTYPE html>
   --success:#22c55e;--warning:#f59e0b;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--background);color:var(--foreground);min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
-.wrap{max-width:480px;margin:0 auto;padding:24px 16px;padding:24px max(16px,env(safe-area-inset-left))}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f4f6fb;color:var(--foreground);min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.wrap{max-width:1120px;margin:0 auto;padding:32px 24px;padding:32px max(24px,env(safe-area-inset-left))}
+.login-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:620px;border-radius:18px;border-color:#dfe3eb;box-shadow:0 18px 50px rgba(15,23,42,.10);overflow:hidden}
+.login-brand{position:relative;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;padding:52px 48px;background:linear-gradient(135deg,#536dff 0%,#3441ed 56%,#3d42d9 100%);color:#fff}
+.login-brand:before,.login-brand:after{content:"";position:absolute;border-radius:999px;background:rgba(255,255,255,.10);filter:blur(2px);pointer-events:none}
+.login-brand:before{width:300px;height:300px;left:-160px;top:-130px}.login-brand:after{width:320px;height:320px;right:-170px;bottom:-190px}
+.brand-logo,.brand-copy,.brand-footer{position:relative;z-index:1}.brand-logo{display:flex;align-items:center;gap:14px}.brand-mark{display:flex;width:54px;height:54px;align-items:center;justify-content:center;border-radius:18px;background:#fff;color:#4354f5;font-size:24px;font-weight:800;box-shadow:0 8px 18px rgba(15,23,42,.15)}
+.brand-name{font-size:22px;font-weight:800;letter-spacing:-.04em}.brand-subtitle{margin-top:3px;font-size:13px;color:rgba(255,255,255,.80);font-weight:600}.brand-copy{margin:auto 0;padding:60px 0 42px}.brand-copy h2{max-width:430px;color:#fff;font-size:42px;line-height:1.12;letter-spacing:-.05em;font-weight:800}.brand-copy p{max-width:470px;margin-top:22px;color:rgba(255,255,255,.82);font-size:16px;line-height:1.7}.brand-protected{display:flex;align-items:center;gap:14px;margin-top:34px}.brand-protected-icon{display:flex;width:44px;height:44px;align-items:center;justify-content:center;border-radius:14px;background:rgba(255,255,255,.15)}.brand-protected strong{display:block;font-size:14px}.brand-protected span{display:block;margin-top:4px;color:rgba(255,255,255,.72);font-size:12px}.brand-footer{color:rgba(255,255,255,.65);font-size:12px;font-weight:600}
+.login-form-panel{display:flex;flex-direction:column;justify-content:center;padding:52px 56px;background:#fff}.login-heading{margin-bottom:28px}.login-heading .eyebrow{color:#4354f5;font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.login-heading h2{margin-top:10px;color:#101828;font-size:32px;line-height:1.15;letter-spacing:-.045em;font-weight:800}.login-heading p{margin-top:10px;color:#64748b;font-size:14px;line-height:1.6}.login-content{padding:0}.login-footer{padding:0;margin-top:22px}.login-footer .btn-lg{height:50px}.turnstile-wrap{min-height:70px;margin:4px 0 10px;display:flex;justify-content:center;align-items:center}
 
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 1px 2px 0 rgb(0 0 0 / 0.05);overflow:hidden}
 .card-header{padding:24px 24px 0}
@@ -111,6 +121,9 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 .result-detail strong{color:var(--foreground);font-weight:600}
 
 .hidden{display:none!important}
+.login-card .form-group{margin-bottom:18px}
+.login-card .input{height:48px;border-radius:10px}
+.login-card .btn-primary{background:#4354f5;border-color:#4354f5}.login-card .btn-primary:hover{background:#3441ed}
 
 .offline-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
 .offline-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:32px 24px;max-width:360px;width:90%;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.15)}
@@ -134,6 +147,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
   .nav-buttons{flex-wrap:wrap}
   .nav-buttons .btn{flex:1 1 calc(50% - 4px);min-width:0}
   .nav-buttons .btn:first-child{flex:1 1 100%}
+  .login-card{grid-template-columns:1fr;min-height:0}.login-brand{min-height:270px;padding:30px 28px}.brand-copy{padding:34px 0 20px}.brand-copy h2{font-size:30px}.brand-copy p{font-size:14px;margin-top:14px}.brand-protected{margin-top:20px}.brand-footer{display:none}.login-form-panel{padding:34px 28px 38px}.login-heading h2{font-size:27px}
 }
 @media(max-width:360px){
   .wrap{padding:8px 8px;padding:8px max(8px,env(safe-area-inset-left))}
@@ -146,6 +160,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
   .btn-lg{height:44px}
   .option{padding:12px;min-height:44px}
   .question-card{padding:16px 12px}
+  .login-brand{padding:24px 20px;min-height:238px}.brand-mark{width:46px;height:46px;border-radius:15px;font-size:20px}.brand-name{font-size:18px}.brand-subtitle{font-size:11px}.brand-copy{padding:28px 0 12px}.brand-copy h2{font-size:26px}.brand-copy p{font-size:13px;line-height:1.5}.brand-protected{margin-top:16px}.login-form-panel{padding:28px 20px 30px}.login-heading{margin-bottom:22px}.login-heading h2{font-size:25px}
 }
 </style>
 </head>
@@ -153,9 +168,15 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 <div class="wrap">
 
 <!-- Login -->
-<div id="loginCard" class="card">
-  <div class="card-header"><h1>Masuk Ujian Online</h1><p class="desc">Masukkan NISN dan kode akses dari guru Anda.</p></div>
-  <div class="card-content">
+<div id="loginCard" class="login-card card">
+  <div class="login-brand">
+    <div class="brand-logo"><div class="brand-mark">TI</div><div><div class="brand-name">Tunas Ilmu Learn</div><div class="brand-subtitle">PKBM Tunas Ilmu</div></div></div>
+    <div class="brand-copy"><h2>Ujian Online yang Aman & Terarah.</h2><p>Kerjakan ujian dengan nyaman melalui platform pembelajaran Tunas Ilmu Learn yang terhubung dengan sekolah.</p><div class="brand-protected"><div class="brand-protected-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 5 6v5c0 4.5 2.9 8.5 7 10 4.1-1.5 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg></div><div><strong>Akses Terlindungi</strong><span>Verifikasi keamanan untuk setiap sesi masuk.</span></div></div></div>
+    <div class="brand-footer">© 2026 PKBM Tunas Ilmu • Tunas Ilmu Learn</div>
+  </div>
+  <div class="login-form-panel">
+    <div class="login-heading"><span class="eyebrow">Ujian Online</span><h2>Masuk ke Ujian Online</h2><p>Masukkan NISN dan kode akses dari guru Anda untuk melanjutkan.</p></div>
+  <div class="card-content login-content">
     <div id="loginError" class="error-box"></div>
     <div class="form-group">
       <label for="nisn">NISN</label>
@@ -165,12 +186,13 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
       <label for="aksesKode">Kode Akses</label>
       <input class="input input-mono" type="text" id="aksesKode" placeholder="XXXXXX" maxlength="6" autocomplete="off" style="text-transform:uppercase">
     </div>
-    <div class="form-group" id="turnstileContainer">
-      <div class="cf-turnstile" data-sitekey="{{TURNSTILE_SITE_KEY}}" data-theme="light" data-callback="onTurnstileSuccess"></div>
+    <div class="form-group turnstile-wrap" id="turnstileContainer">
+      <div class="cf-turnstile" data-sitekey="{{TURNSTILE_SITE_KEY}}" data-theme="light" data-callback="onTurnstileSuccess" data-expired-callback="onTurnstileExpired" data-error-callback="onTurnstileError"></div>
     </div>
   </div>
-  <div class="card-footer">
-    <button class="btn btn-primary btn-lg" onclick="cekUjian()" id="cekBtn" style="width:100%">Cari Ujian</button>
+  <div class="card-footer login-footer">
+    <button class="btn btn-primary btn-lg" onclick="cekUjian()" id="cekBtn" style="width:100%">Masuk & Cari Ujian</button>
+  </div>
   </div>
 </div>
 
@@ -241,6 +263,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 <script>
 const API='/api';
 let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,ujianPesertaId:'',soal:[],jawaban:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[]};
+let turnstileToken='';
 
 // --- Connectivity Detection ---
 let isOnline=navigator.onLine;
@@ -288,19 +311,23 @@ async function reconnect(){
 
 function show(el){el.classList.remove('hidden')}
 function hide(el){el.classList.add('hidden')}
-function showLogin(){show(document.getElementById('loginCard'));hide(document.getElementById('listCard'));hide(document.getElementById('examCard'));hide(document.getElementById('resultCard'));clearInterval(state.timerInterval)}
+function showLogin(){resetTurnstile();show(document.getElementById('loginCard'));hide(document.getElementById('listCard'));hide(document.getElementById('examCard'));hide(document.getElementById('resultCard'));clearInterval(state.timerInterval)}
 function showError(id,msg){const e=document.getElementById(id);e.textContent=msg;show(e)}
+function onTurnstileSuccess(token){turnstileToken=token}
+function onTurnstileExpired(){turnstileToken=''}
+function onTurnstileError(){turnstileToken=''}
+function resetTurnstile(){turnstileToken='';if(window.turnstile)window.turnstile.reset()}
 
 async function cekUjian(){
 const nisn=document.getElementById('nisn').value.trim();
 const kode=document.getElementById('aksesKode').value.trim();
 if(!nisn||!kode){showError('loginError','NISN dan Kode Akses wajib diisi.');return}
+if(!turnstileToken){showError('loginError','Silakan selesaikan verifikasi keamanan terlebih dahulu.');return}
 document.getElementById('loginError').classList.remove('show');
 document.getElementById('cekBtn').disabled=true;document.getElementById('cekBtn').textContent='Mencari...';
 try{
 const fd=new FormData();fd.append('nisn',nisn);fd.append('aksesKode',kode);
-const tw=document.querySelector('[name="cf-turnstile-response"]');
-if(tw)fd.append('cf-turnstile-response',tw.value);
+fd.append('cf-turnstile-response',turnstileToken);
 const r=await fetch(API+'/ujian-online/cek',{method:'POST',body:fd});
 const d=await r.json();
 if(!r.ok)throw new Error(d.error||'Gagal');
@@ -308,7 +335,7 @@ state.nisn=nisn;state.aksesKode=kode;state.ujians=d;
 document.getElementById('displayNisn').textContent=nisn;
 renderExamList();
 hide(document.getElementById('loginCard'));show(document.getElementById('listCard'));
-}catch(e){showError('loginError',e.message)}
+}catch(e){showError('loginError',e.message);resetTurnstile()}
 finally{document.getElementById('cekBtn').disabled=false;document.getElementById('cekBtn').textContent='Cari Ujian'}
 }
 

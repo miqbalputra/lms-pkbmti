@@ -10,6 +10,9 @@ import (
 func (s *Server) serveOrangTuaPortalPage(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
 	siteKey := os.Getenv("TURNSTILE_SITE_KEY")
+	if siteKey == "" {
+		siteKey = "1x00000000000000000000AA"
+	}
 	html := strings.Replace(ortuPortalHTML, "{{TURNSTILE_SITE_KEY}}", siteKey, 1)
 	return c.SendString(html)
 }
@@ -24,7 +27,7 @@ var ortuPortalHTML = `<!DOCTYPE html>
 <meta name="theme-color" content="#ffffff">
 <title>Portal Orang Tua — PKBM Tunas Ilmu</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 :root{
@@ -40,8 +43,16 @@ var ortuPortalHTML = `<!DOCTYPE html>
   --success:#22c55e;--warning:#f59e0b;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--background);color:var(--foreground);min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
-.wrap{max-width:520px;margin:0 auto;padding:16px}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f4f6fb;color:var(--foreground);min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+.wrap{max-width:1120px;margin:0 auto;padding:32px 24px}
+.login-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:620px;border-radius:18px;border-color:#dfe3eb;box-shadow:0 18px 50px rgba(15,23,42,.10)}
+.login-brand{position:relative;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;padding:52px 48px;background:linear-gradient(135deg,#536dff 0%,#3441ed 56%,#3d42d9 100%);color:#fff}
+.login-brand:before,.login-brand:after{content:"";position:absolute;border-radius:999px;background:rgba(255,255,255,.10);filter:blur(2px);pointer-events:none}
+.login-brand:before{width:300px;height:300px;left:-160px;top:-130px}.login-brand:after{width:320px;height:320px;right:-170px;bottom:-190px}
+.brand-logo,.brand-copy,.brand-footer{position:relative;z-index:1}.brand-logo{display:flex;align-items:center;gap:14px}.brand-mark{display:flex;width:54px;height:54px;align-items:center;justify-content:center;border-radius:18px;background:#fff;color:#4354f5;font-size:24px;font-weight:800;box-shadow:0 8px 18px rgba(15,23,42,.15)}
+.brand-name{font-size:22px;font-weight:800;letter-spacing:-.04em}.brand-subtitle{margin-top:3px;font-size:13px;color:rgba(255,255,255,.80);font-weight:600}.brand-copy{margin:auto 0;padding:60px 0 42px}.brand-copy h2{max-width:430px;color:#fff;font-size:42px;line-height:1.12;letter-spacing:-.05em;font-weight:800}.brand-copy p{max-width:470px;margin-top:22px;color:rgba(255,255,255,.82);font-size:16px;line-height:1.7}.brand-protected{display:flex;align-items:center;gap:14px;margin-top:34px}.brand-protected-icon{display:flex;width:44px;height:44px;align-items:center;justify-content:center;border-radius:14px;background:rgba(255,255,255,.15)}.brand-protected strong{display:block;font-size:14px}.brand-protected span{display:block;margin-top:4px;color:rgba(255,255,255,.72);font-size:12px}.brand-footer{color:rgba(255,255,255,.65);font-size:12px;font-weight:600}
+.login-form-panel{display:flex;flex-direction:column;justify-content:center;padding:52px 56px;background:#fff}.login-heading{margin-bottom:28px}.login-heading .eyebrow{color:#4354f5;font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.login-heading h2{margin-top:10px;color:#101828;font-size:32px;line-height:1.15;letter-spacing:-.045em;font-weight:800}.login-heading p{margin-top:10px;color:#64748b;font-size:14px;line-height:1.6}.login-content{padding:0}.login-footer{padding:0;margin-top:22px}.login-footer .btn-lg{height:50px}
+.turnstile-wrap{min-height:70px;margin:4px 0 10px;display:flex;justify-content:center;align-items:center}
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 1px 2px 0 rgb(0 0 0 / 0.05);overflow:hidden;margin-bottom:12px}
 .card-header{padding:20px 20px 0}
 .card-content{padding:20px}
@@ -108,11 +119,13 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 .notif-dot{width:8px;height:8px;border-radius:50%;background:var(--primary);display:inline-block;margin-right:6px}
 
 .hidden{display:none!important}
+@media(max-width:820px){.wrap{padding:18px 14px}.login-card{grid-template-columns:1fr;min-height:0}.login-brand{min-height:270px;padding:30px 28px}.brand-copy{padding:34px 0 20px}.brand-copy h2{font-size:30px}.brand-copy p{font-size:14px;margin-top:14px}.brand-protected{margin-top:20px}.brand-footer{display:none}.login-form-panel{padding:34px 28px 38px}.login-heading h2{font-size:27px}}
 @media(max-width:480px){
   .wrap{padding:10px}
   .card-header{padding:16px 16px 0}
   .card-content{padding:16px}
   .card-footer{padding:0 16px 16px}
+  .login-brand{padding:24px 20px;min-height:238px}.brand-mark{width:46px;height:46px;border-radius:15px;font-size:20px}.brand-name{font-size:18px}.brand-subtitle{font-size:11px}.brand-copy{padding:28px 0 12px}.brand-copy h2{font-size:26px}.brand-copy p{font-size:13px;line-height:1.5}.brand-protected{margin-top:16px}.login-form-panel{padding:28px 20px 30px}.login-heading{margin-bottom:22px}.login-heading h2{font-size:25px}
 }
 </style>
 </head>
@@ -120,9 +133,15 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 <div class="wrap">
 
 <!-- Login -->
-<div id="loginCard" class="card">
-  <div class="card-header"><h1>Portal Orang Tua</h1><p class="desc">Masukkan NISN anak dan tanggal lahir.</p></div>
-  <div class="card-content">
+<div id="loginCard" class="login-card card">
+  <div class="login-brand">
+    <div class="brand-logo"><div class="brand-mark">TI</div><div><div class="brand-name">Tunas Ilmu Learn</div><div class="brand-subtitle">PKBM Tunas Ilmu</div></div></div>
+    <div class="brand-copy"><h2>Portal Orang Tua yang Terhubung & Modern.</h2><p>Pantau perkembangan belajar, nilai, presensi, dan aktivitas peserta didik melalui satu akses yang aman.</p><div class="brand-protected"><div class="brand-protected-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 5 6v5c0 4.5 2.9 8.5 7 10 4.1-1.5 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg></div><div><strong>Akses Terlindungi</strong><span>Verifikasi keamanan untuk setiap sesi masuk.</span></div></div></div>
+    <div class="brand-footer">© 2026 PKBM Tunas Ilmu • Tunas Ilmu Learn</div>
+  </div>
+  <div class="login-form-panel">
+    <div class="login-heading"><span class="eyebrow">Portal Orang Tua</span><h2>Masuk ke Portal Orang Tua</h2><p>Masukkan data anak untuk mengakses informasi pembelajaran.</p></div>
+  <div class="card-content login-content">
     <div id="loginError" class="error-box"></div>
     <div class="form-group">
       <label>NISN Anak</label>
@@ -132,9 +151,10 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
       <label>Tanggal Lahir Anak</label>
       <input class="input" type="text" id="tanggalLahir" placeholder="DDMMYYYY" maxlength="8" inputmode="numeric">
     </div>
-    <div class="form-group"><div class="cf-turnstile" data-sitekey="{{TURNSTILE_SITE_KEY}}" data-theme="light"></div></div>
+    <div class="form-group turnstile-wrap"><div class="cf-turnstile" data-sitekey="{{TURNSTILE_SITE_KEY}}" data-theme="light" data-callback="onTurnstileSuccess" data-expired-callback="onTurnstileExpired" data-error-callback="onTurnstileError"></div></div>
   </div>
-  <div class="card-footer"><button class="btn btn-primary btn-lg" onclick="doLogin()" id="loginBtn">Masuk</button></div>
+  <div class="card-footer login-footer"><button class="btn btn-primary btn-lg" onclick="doLogin()" id="loginBtn">Masuk</button></div>
+  </div>
 </div>
 
 <!-- Portal Main -->
@@ -153,6 +173,7 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 <script>
 const API='/api';
 let state={token:'',anakId:'',anakList:[],anakData:null};
+let turnstileToken='';
 const TABS=[
   {id:'identitas',label:'Identitas',icon:'👤'},
   {id:'performa',label:'Performa',icon:'📊'},
@@ -170,21 +191,25 @@ function show(el){el.classList.remove('hidden')}
 function hide(el){el.classList.add('hidden')}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function hdr(){return{Authorization:'Bearer '+state.token}}
+function onTurnstileSuccess(token){turnstileToken=token}
+function onTurnstileExpired(){turnstileToken=''}
+function onTurnstileError(){turnstileToken=''}
+function resetTurnstile(){turnstileToken='';if(window.turnstile)window.turnstile.reset()}
 
 async function doLogin(){
   const nisn=document.getElementById('nisn').value.trim();
   const tl=document.getElementById('tanggalLahir').value;
   if(!nisn||!tl){showErr('loginError','NISN dan tanggal lahir wajib diisi.');return}
+  if(!turnstileToken){showErr('loginError','Silakan selesaikan verifikasi keamanan terlebih dahulu.');return}
   hideErr('loginError');
   const btn=document.getElementById('loginBtn');btn.disabled=true;btn.textContent='Masuk...';
   try{
-    const tw=document.querySelector('[name="cf-turnstile-response"]');
-    const r=await fetch(API+'/orang-tua/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nisn,tanggalLahir:tl,'cf-turnstile-response':tw?tw.value:''})});
+    const r=await fetch(API+'/orang-tua/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nisn,tanggalLahir:tl,'cf-turnstile-response':turnstileToken})});
     const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
     state.token=d.accessToken;
     await loadAnak();
     hide(document.getElementById('loginCard'));show(document.getElementById('portalCard'));
-  }catch(e){showErr('loginError',e.message)}
+  }catch(e){showErr('loginError',e.message);resetTurnstile()}
   finally{btn.disabled=false;btn.textContent='Masuk'}
 }
 
@@ -395,7 +420,7 @@ async function loadBuku(c){
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
 }
 
-function doLogout(){state.token='';hide(document.getElementById('portalCard'));show(document.getElementById('loginCard'))}
+function doLogout(){state.token='';resetTurnstile();hide(document.getElementById('portalCard'));show(document.getElementById('loginCard'))}
 function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;show(e)}
 function hideErr(id){document.getElementById(id).classList.remove('show')}
 </script>

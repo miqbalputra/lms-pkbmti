@@ -109,12 +109,12 @@ type TahunAjaran struct {
 // semester yang sudah lewat dan membukanya kembali.
 type Semester struct {
 	Base
-	TahunAjaranID string    `gorm:"index" json:"tahunAjaranId"`
-	NamaSemester  string    `gorm:"index" json:"namaSemester"` // "Ganjil" / "Genap"
-	TanggalMulai  time.Time `json:"tanggalMulai"`
-	TanggalSelesai time.Time `json:"tanggalSelesai"`
-	IsArchived    bool      `json:"isArchived"`
-	TahunAjaran   TahunAjaran `json:"tahunAjaran"`
+	TahunAjaranID  string      `gorm:"index" json:"tahunAjaranId"`
+	NamaSemester   string      `gorm:"index" json:"namaSemester"` // "Ganjil" / "Genap"
+	TanggalMulai   time.Time   `json:"tanggalMulai"`
+	TanggalSelesai time.Time   `json:"tanggalSelesai"`
+	IsArchived     bool        `json:"isArchived"`
+	TahunAjaran    TahunAjaran `json:"tahunAjaran"`
 }
 
 type Kelas struct {
@@ -152,9 +152,9 @@ type KelasMapel struct {
 }
 type PenugasanGuruMapel struct {
 	Base
-	TutorID string `gorm:"uniqueIndex:penugasan" json:"tutorId"`
-	KelasID string `gorm:"uniqueIndex:penugasan" json:"kelasId"`
-	MapelID string `gorm:"uniqueIndex:penugasan" json:"mapelId"`
+	TutorID string         `gorm:"uniqueIndex:penugasan" json:"tutorId"`
+	KelasID string         `gorm:"uniqueIndex:penugasan" json:"kelasId"`
+	MapelID string         `gorm:"uniqueIndex:penugasan" json:"mapelId"`
 	Tutor   *Tutor         `gorm:"foreignKey:TutorID" json:"tutor,omitempty"`
 	Kelas   *Kelas         `gorm:"foreignKey:KelasID" json:"kelas,omitempty"`
 	Mapel   *MataPelajaran `gorm:"foreignKey:MapelID" json:"mapel,omitempty"`
@@ -398,24 +398,24 @@ type PengumpulanTugas struct {
 // internal staf (tanpa PesertaDidikID). File dilayani via scoped download handler.
 type Materi struct {
 	Base
-	MapelID          string           `gorm:"index" json:"mapelId"`
-	KelasID          string           `gorm:"index" json:"kelasId"`
-	Judul            string           `gorm:"not null" json:"judul"`
-	Deskripsi        string           `gorm:"type:text" json:"deskripsi"`
-	FilePath         string           `gorm:"not null" json:"filePath"` // relatif ke ./uploads/materi; "" bila materi hanya link
-	Tipe             string           `json:"tipe"`
-	Ukuran           int64            `json:"ukuran"`
-	Semester         string           `json:"semester"`
-	DibuatOlehUserID string           `gorm:"index" json:"dibuatOlehUserId"`
-	ModulID          *string          `gorm:"index" json:"modulId"` // Modul L — opsional, kaitkan ke modul pembelajaran
-	Urutan           int              `gorm:"default:0" json:"urutan"`
-	Tanggal          *time.Time       `gorm:"index" json:"tanggal"`
-	LinkURL          string           `gorm:"type:text" json:"linkUrl"`
-	ShareToken       *string          `gorm:"uniqueIndex" json:"shareToken,omitempty"`
-	SharePasswordHash *string         `json:"-"`
-	Mapel            MataPelajaran    `json:"mapel"`
-	Kelas            Kelas            `json:"kelas"`
-	Komentar         []KomentarMateri `gorm:"foreignKey:MateriID" json:"komentar"`
+	MapelID           string           `gorm:"index" json:"mapelId"`
+	KelasID           string           `gorm:"index" json:"kelasId"`
+	Judul             string           `gorm:"not null" json:"judul"`
+	Deskripsi         string           `gorm:"type:text" json:"deskripsi"`
+	FilePath          string           `gorm:"not null" json:"filePath"` // relatif ke ./uploads/materi; "" bila materi hanya link
+	Tipe              string           `json:"tipe"`
+	Ukuran            int64            `json:"ukuran"`
+	Semester          string           `json:"semester"`
+	DibuatOlehUserID  string           `gorm:"index" json:"dibuatOlehUserId"`
+	ModulID           *string          `gorm:"index" json:"modulId"` // Modul L — opsional, kaitkan ke modul pembelajaran
+	Urutan            int              `gorm:"default:0" json:"urutan"`
+	Tanggal           *time.Time       `gorm:"index" json:"tanggal"`
+	LinkURL           string           `gorm:"type:text" json:"linkUrl"`
+	ShareToken        *string          `gorm:"uniqueIndex" json:"shareToken,omitempty"`
+	SharePasswordHash *string          `json:"-"`
+	Mapel             MataPelajaran    `json:"mapel"`
+	Kelas             Kelas            `json:"kelas"`
+	Komentar          []KomentarMateri `gorm:"foreignKey:MateriID" json:"komentar"`
 }
 type KomentarMateri struct {
 	Base
@@ -430,21 +430,21 @@ type KomentarMateri struct {
 // jenjang tsb bisa lihat & download. File dilayani via scoped download handler.
 type RPP struct {
 	Base
-	TutorID          string     `gorm:"index" json:"tutorId"`
-	DibuatOlehUserID string     `gorm:"index" json:"dibuatOlehUserId"`
-	MapelID          string     `gorm:"index" json:"mapelId"`
-	Jenjang          int        `gorm:"index" json:"jenjang"`
-	TahunAjaranID    string     `gorm:"index" json:"tahunAjaranId"`
-	FaseID           *string    `gorm:"index" json:"faseId"`
-	Semester         string     `json:"semester"`
-	Judul            string     `gorm:"not null" json:"judul"`
-	PertemuanKe      *int       `json:"pertemuanKe"`
-	AlokasiWaktu     string     `json:"alokasiWaktu"`
-	Tanggal          *time.Time `gorm:"index" json:"tanggal"`
-	Deskripsi        string     `gorm:"type:text" json:"deskripsi"`
-	FilePath         string     `gorm:"not null" json:"filePath"` // relatif ke ./uploads/rpp; wajib (mode upload-only)
-	Tipe             string     `json:"tipe"`
-	Ukuran           int64      `json:"ukuran"`
+	TutorID          string        `gorm:"index" json:"tutorId"`
+	DibuatOlehUserID string        `gorm:"index" json:"dibuatOlehUserId"`
+	MapelID          string        `gorm:"index" json:"mapelId"`
+	Jenjang          int           `gorm:"index" json:"jenjang"`
+	TahunAjaranID    string        `gorm:"index" json:"tahunAjaranId"`
+	FaseID           *string       `gorm:"index" json:"faseId"`
+	Semester         string        `json:"semester"`
+	Judul            string        `gorm:"not null" json:"judul"`
+	PertemuanKe      *int          `json:"pertemuanKe"`
+	AlokasiWaktu     string        `json:"alokasiWaktu"`
+	Tanggal          *time.Time    `gorm:"index" json:"tanggal"`
+	Deskripsi        string        `gorm:"type:text" json:"deskripsi"`
+	FilePath         string        `gorm:"not null" json:"filePath"` // relatif ke ./uploads/rpp; wajib (mode upload-only)
+	Tipe             string        `json:"tipe"`
+	Ukuran           int64         `json:"ukuran"`
 	Tutor            *Tutor        `gorm:"foreignKey:TutorID" json:"tutor,omitempty"`
 	Mapel            MataPelajaran `json:"mapel"`
 	TahunAjaran      TahunAjaran   `json:"tahunAjaran"`
@@ -509,63 +509,63 @@ type UjianSoal struct {
 // Ujian Online — Sesi pengerjaan ujian online oleh peserta didik.
 type UjianPeserta struct {
 	Base
-	UjianID        string     `gorm:"uniqueIndex:ujian_peserta_uniq" json:"ujianId"`
-	PesertaDidikID string     `gorm:"uniqueIndex:ujian_peserta_uniq" json:"pesertaDidikId"`
-	Mulai          *time.Time `json:"mulai"`
-	Selesai        *time.Time `json:"selesai"`
-	Skor           *float64   `gorm:"type:decimal(6,2)" json:"skor"`
-	Status         string     `gorm:"default:mulai" json:"status"` // "mulai"|"selesai"|"dikunci"
-	TabSwitch      int        `json:"tabSwitch"`
-	Ujian          Ujian      `gorm:"foreignKey:UjianID" json:"ujian"`
+	UjianID        string       `gorm:"uniqueIndex:ujian_peserta_uniq" json:"ujianId"`
+	PesertaDidikID string       `gorm:"uniqueIndex:ujian_peserta_uniq" json:"pesertaDidikId"`
+	Mulai          *time.Time   `json:"mulai"`
+	Selesai        *time.Time   `json:"selesai"`
+	Skor           *float64     `gorm:"type:decimal(6,2)" json:"skor"`
+	Status         string       `gorm:"default:mulai" json:"status"` // "mulai"|"selesai"|"dikunci"
+	TabSwitch      int          `json:"tabSwitch"`
+	Ujian          Ujian        `gorm:"foreignKey:UjianID" json:"ujian"`
 	PesertaDidik   PesertaDidik `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik"`
 }
 
 // UjianJawaban — jawaban per soal oleh peserta didik ujian online.
 type UjianJawaban struct {
 	Base
-	UjianPesertaID string  `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"ujianPesertaId"`
-	SoalID         string  `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"soalId"`
-	Jawaban        string  `gorm:"type:text" json:"jawaban"`
-	Benar          *bool   `json:"benar"`
-	Nilai          float64 `gorm:"type:decimal(6,2)" json:"nilai"`
+	UjianPesertaID string   `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"ujianPesertaId"`
+	SoalID         string   `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"soalId"`
+	Jawaban        string   `gorm:"type:text" json:"jawaban"`
+	Benar          *bool    `json:"benar"`
+	Nilai          float64  `gorm:"type:decimal(6,2)" json:"nilai"`
 	Soal           BankSoal `gorm:"foreignKey:SoalID" json:"soal"`
 }
 
 // Notifikasi — push notification internal untuk user.
 type Notifikasi struct {
 	Base
-	UserID    string     `gorm:"index" json:"userId"`
-	Judul     string     `gorm:"not null" json:"judul"`
-	Isi       string     `gorm:"type:text" json:"isi"`
-	Tipe      string     `json:"tipe"` // "ujian"|"tugas"|"presensi"|"umum"|"rapor"
-	RefID     *string    `json:"refId"`
-	IsRead    bool       `gorm:"default:false" json:"isRead"`
+	UserID     string     `gorm:"index" json:"userId"`
+	Judul      string     `gorm:"not null" json:"judul"`
+	Isi        string     `gorm:"type:text" json:"isi"`
+	Tipe       string     `json:"tipe"` // "ujian"|"tugas"|"presensi"|"umum"|"rapor"
+	RefID      *string    `json:"refId"`
+	IsRead     bool       `gorm:"default:false" json:"isRead"`
 	DibacaPada *time.Time `json:"dibacaPada"`
 }
 
 // ChatMessage — pesan antara orang tua dan guru wali.
 type ChatMessage struct {
 	Base
-	PesertaDidikID string `gorm:"index" json:"pesertaDidikId"`
-	PengirimUserID string `gorm:"index" json:"pengirimUserId"` // siapa yang kirim
-	PenerimaUserID string `gorm:"index" json:"penerimaUserID"` // siapa yang terima
-	Isi            string `gorm:"type:text" json:"isi"`
-	Dibaca         bool   `gorm:"default:false" json:"dibaca"`
+	PesertaDidikID string     `gorm:"index" json:"pesertaDidikId"`
+	PengirimUserID string     `gorm:"index" json:"pengirimUserId"` // siapa yang kirim
+	PenerimaUserID string     `gorm:"index" json:"penerimaUserID"` // siapa yang terima
+	Isi            string     `gorm:"type:text" json:"isi"`
+	Dibaca         bool       `gorm:"default:false" json:"dibaca"`
 	DibacaPada     *time.Time `json:"dibacaPada"`
 }
 
 // KalenderEvent — event kalender akademik.
 type KalenderEvent struct {
 	Base
-	Judul        string     `gorm:"not null" json:"judul"`
-	Deskripsi    string     `gorm:"type:text" json:"deskripsi"`
-	TanggalMulai time.Time  `gorm:"index" json:"tanggalMulai"`
-	TanggalSelesai *time.Time `json:"tanggalSelesai"`
-	Tipe         string     `json:"tipe"` // "libur"|"ujian"|"kegiatan"|"upacara"|"rapat"
-	Warna        string     `json:"warna"`
-	Semester     *string    `json:"semester"`
-	TahunAjaranID *string   `gorm:"index" json:"tahunAjaranId"`
-	DibuatOlehUserID string `gorm:"index" json:"dibuatOlehUserId"`
+	Judul            string     `gorm:"not null" json:"judul"`
+	Deskripsi        string     `gorm:"type:text" json:"deskripsi"`
+	TanggalMulai     time.Time  `gorm:"index" json:"tanggalMulai"`
+	TanggalSelesai   *time.Time `json:"tanggalSelesai"`
+	Tipe             string     `json:"tipe"` // "libur"|"ujian"|"kegiatan"|"upacara"|"rapat"
+	Warna            string     `json:"warna"`
+	Semester         *string    `json:"semester"`
+	TahunAjaranID    *string    `gorm:"index" json:"tahunAjaranId"`
+	DibuatOlehUserID string     `gorm:"index" json:"dibuatOlehUserId"`
 }
 
 // Modul O — Program (master, prd_fitur_simpkbm.md). Paket program kesetaraan (A/B/C).
@@ -745,16 +745,21 @@ func main() {
 		panic(err)
 	}
 	app := fiber.New(fiber.Config{
-		ErrorHandler:  apiError,
-		ReadTimeout:   15 * time.Second,
-		WriteTimeout:  30 * time.Second,
-		IdleTimeout:   60 * time.Second,
-		BodyLimit:     8 * 1024 * 1024, // 8 MB — cukup untuk upload tanda tangan/bukti foto base64
+		ErrorHandler: apiError,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+		BodyLimit:    8 * 1024 * 1024, // 8 MB — cukup untuk upload tanda tangan/bukti foto base64
 	})
 	app.Use(logger.New())
 	app.Use(helmet.New())
 	app.Use(cors.New(cors.Config{AllowOrigins: env("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), AllowHeaders: "Origin, Content-Type, Accept, Authorization", AllowCredentials: true}))
 	app.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"status": "ok"}) })
+	// Short public entry points. The page still calls its JSON endpoints under /api.
+	// Register these before the production SPA fallback so they do not render the
+	// administrator login page instead.
+	app.Get("/ujian", s.serveUjianOnlinePage)
+	app.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api := app.Group("/api")
 	loginLimiterMax := 30
 	if cfg.Env == "production" {
@@ -820,6 +825,7 @@ func duration(k, d string) time.Duration {
 	}
 	return v
 }
+
 // openDB opens the database. SQLite is the default; set DATABASE_URL to switch to
 // PostgreSQL (the schema + isUniqueErr are portable). For SQLite we harden the
 // connection to stay safe under concurrent writers (25+ tutors inputting together):
@@ -973,14 +979,8 @@ func (s *Server) login(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil || in.Login == "" || in.Password == "" {
 		return fiber.NewError(400, "Username dan password wajib diisi")
 	}
-	// Turnstile is only enforced in production AND when a secret is configured.
-	// If TURNSTILE_SECRET_KEY is unset we fail open so a misconfigured deploy
-	// does not lock everyone out of login; the widget still renders (dummy sitekey)
-	// but verification is skipped.
-	if s.cfg.Env == "production" && os.Getenv("TURNSTILE_SECRET_KEY") != "" {
-		if in.TurnstileToken == "" || !verifyTurnstile(in.TurnstileToken, c.IP()) {
-			return fiber.NewError(401, "Verifikasi Turnstile gagal")
-		}
+	if e := s.requireTurnstile(c, in.TurnstileToken); e != nil {
+		return e
 	}
 	var u User
 	if e := s.db.Where("username = ? OR email = ?", in.Login, in.Login).First(&u).Error; e != nil {
@@ -1022,6 +1022,21 @@ func verifyTurnstile(token, ip string) bool {
 		Success bool `json:"success"`
 	}
 	return json.NewDecoder(r.Body).Decode(&result) == nil && result.Success
+}
+
+// requireTurnstile keeps local/test environments usable while making the
+// production login surface fail closed when Cloudflare is not configured.
+func (s *Server) requireTurnstile(c *fiber.Ctx, token string) error {
+	if s.cfg.Env != "production" {
+		return nil
+	}
+	if os.Getenv("TURNSTILE_SECRET_KEY") == "" {
+		return fiber.NewError(503, "Proteksi Turnstile belum dikonfigurasi oleh Administrator")
+	}
+	if token == "" || !verifyTurnstile(token, c.IP()) {
+		return fiber.NewError(401, "Verifikasi Turnstile gagal")
+	}
+	return nil
 }
 func (s *Server) issue(c *fiber.Ctx, u User) error {
 	access, e := s.token(u, s.cfg.AccessSecret, s.cfg.AccessTTL)

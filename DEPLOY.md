@@ -38,7 +38,9 @@ Add these environment variables in your application:
 | `JWT_REFRESH_SECRET` | Random 32+ chars | `another-secret-key` |
 | `CORS_ALLOWED_ORIGINS` | Your domain | `https://lms.example.com` |
 | `COOKIE_DOMAIN` | Your domain | `lms.example.com` |
-| `TURNSTILE_SECRET_KEY` | Cloudflare secret | (optional) |
+| `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret | Required in production |
+| `TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key for public pages | Required in production |
+| `VITE_TURNSTILE_SITE_KEY` | Same public site key for the main login build | Required in production |
 
 **Note**: Coolify can reference database variables automatically using Coolify's variable syntax.
 
