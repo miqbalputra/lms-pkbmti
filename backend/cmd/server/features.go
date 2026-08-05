@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
@@ -454,6 +455,77 @@ func (s *Server) bacaSemuaNotifikasi(c *fiber.Ctx) error {
 		Where("user_id = ? AND is_read = ?", uid, false).
 		Updates(map[string]interface{}{"is_read": true, "dibaca_pada": now})
 	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+// streamNotifikasi — Server-Sent Events: pushes new notifications to the client
+// in real-time. Uses a simple polling loop that checks every 5 seconds.
+// Accepts token via query param (EventSource can't set headers).
+func (s *Server) streamNotifikasi(c *fiber.Ctx) error {
+	// Accept token from query param since EventSource can't set Authorization header
+	token := c.Query("token")
+	if token == "" {
+		h := strings.TrimPrefix(c.Get("Authorization"), "Bearer ")
+		token = h
+	}
+	if token == "" {
+		return fiber.NewError(401, "missing access token")
+	}
+	// Parse JWT to get userID
+	type jwtClaims struct {
+		Sub  string `json:"sub"`
+		Role string `json:"role"`
+	}
+	claims := jwt.MapClaims{}
+	t, e := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) { return []byte(s.cfg.AccessSecret), nil })
+	if e != nil || !t.Valid {
+		return fiber.NewError(401, "invalid access token")
+	}
+	claims = t.Claims.(jwt.MapClaims)
+	uid := claims["sub"].(string)
+
+	c.Set(fiber.HeaderContentType, "text/event-stream")
+	c.Set(fiber.HeaderCacheControl, "no-cache")
+	c.Set(fiber.HeaderConnection, "keep-alive")
+	c.Set("X-Accel-Buffering", "no")
+
+	c.Context().SetBodyStream(nil, -1)
+	w := c.Response().BodyWriter()
+
+	flusher, ok := w.(interface{ Flush() })
+	if !ok {
+		return fiber.NewError(500, "streaming not supported")
+	}
+
+	// Send initial connection event
+	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
+	flusher.Flush()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var lastCheck time.Time = time.Now()
+
+	for {
+		select {
+		case <-c.Context().Done():
+			return nil
+		case <-ticker.C:
+			var newNotifs []Notifikasi
+			s.db.Where("user_id = ? AND created_at > ?", uid, lastCheck).
+				Order("created_at desc").Find(&newNotifs)
+			if len(newNotifs) > 0 {
+				data, _ := json.Marshal(newNotifs)
+				fmt.Fprintf(w, "event: notifikasi\ndata: %s\n\n", string(data))
+				flusher.Flush()
+			}
+			// Also send unread count
+			var count int64
+			s.db.Model(&Notifikasi{}).Where("user_id = ? AND is_read = ?", uid, false).Count(&count)
+			fmt.Fprintf(w, "event: unread\ndata: %d\n\n", count)
+			flusher.Flush()
+			lastCheck = time.Now()
+		}
+	}
 }
 
 // ============================================================================

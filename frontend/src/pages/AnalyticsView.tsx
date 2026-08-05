@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
-import { BarChart3, Users, School, BookOpen, CalendarCheck, Award, TrendingUp } from 'lucide-react'
+import { useEffect, useState, useMemo } from 'react'
+import { BarChart3, Users, School, BookOpen, CalendarCheck, Award, TrendingUp, Filter } from 'lucide-react'
 import { Card, CardContent } from '../components/ui/card'
 import { PageToolbar } from '../components/ui/page'
+import { Button } from '../components/ui/button'
 import { request } from '../lib/api'
 import {
   BarChart,
@@ -23,45 +24,79 @@ type DashboardData = Record<string, unknown>
 
 const COLORS = ['#1c5740', '#d4af37', '#2563eb', '#dc2626', '#9333ea', '#f59e0b', '#16a34a', '#0891b2']
 
+const SEMESTER_OPTIONS = [
+  { label: 'Semua', value: '' },
+  { label: 'Semester 1 (Jul–Des)', value: '1' },
+  { label: 'Semester 2 (Jan–Jun)', value: '2' },
+]
+
 export function AnalyticsView({ token }: { token: string }) {
   const [data, setData] = useState<DashboardData>({})
   const [mapel, setMapel] = useState<Record<string, unknown>[]>([])
   const [kelas, setKelas] = useState<Record<string, unknown>[]>([])
   const [siswa, setSiswa] = useState<Record<string, unknown>[]>([])
   const [loading, setLoading] = useState(true)
+  const [semester, setSemester] = useState('')
+  const [year, setYear] = useState(new Date().getFullYear())
+  const [ujian, setUjian] = useState<Record<string, unknown>[]>([])
 
   useEffect(() => {
     setLoading(true)
+    const params = new URLSearchParams()
+    if (semester) params.set('semester', semester)
+    if (year) params.set('year', String(year))
+    const qs = params.toString()
+    const base = '/dashboard' + (qs ? '?' + qs : '')
     Promise.all([
-      request('/dashboard', token).then(setData).catch(() => ({})),
+      request(base, token).then(setData).catch(() => ({})),
       request('/mapel', token).then(d => setMapel(Array.isArray(d) ? d : [])).catch(() => {}),
       request('/kelas', token).then(d => setKelas(Array.isArray(d) ? d : [])).catch(() => {}),
       request('/peserta-didik', token).then(d => setSiswa(Array.isArray(d) ? d : [])).catch(() => {}),
+      request('/ujian', token).then(d => setUjian(Array.isArray(d) ? d : [])).catch(() => {}),
     ]).finally(() => setLoading(false))
-  }, [token])
+  }, [token, semester, year])
+
+  const filteredSiswa = useMemo(() => {
+    if (!semester) return siswa
+    return siswa.filter(s => {
+      const created = s.createdAt ? new Date(String(s.createdAt)) : null
+      if (!created) return true
+      const sem = semester === '1' ? [7, 8, 9, 10, 11, 12] : [1, 2, 3, 4, 5, 6]
+      return created.getFullYear() === year && sem.includes(created.getMonth() + 1)
+    })
+  }, [siswa, semester, year])
 
   const perPokjar = (data.perPokjar as { label: string; total: number }[]) || []
   const perKelas = (data.perKelas as { label: string; total: number }[]) || []
 
-  // Compute analytics
+  // Compute analytics using filtered siswa
   const siswaByGender = [
-    { name: 'Laki-laki', value: siswa.filter(s => s.jenisKelamin === 'Laki-laki' || s.jenisKelamin === 'L').length },
-    { name: 'Perempuan', value: siswa.filter(s => s.jenisKelamin === 'Perempuan' || s.jenisKelamin === 'P').length },
+    { name: 'Laki-laki', value: filteredSiswa.filter(s => s.jenisKelamin === 'Laki-laki' || s.jenisKelamin === 'L').length },
+    { name: 'Perempuan', value: filteredSiswa.filter(s => s.jenisKelamin === 'Perempuan' || s.jenisKelamin === 'P').length },
   ]
 
   const siswaByStatus = [
-    { name: 'Aktif', value: siswa.filter(s => s.status === 'aktif').length },
-    { name: 'Lulus', value: siswa.filter(s => s.status === 'lulus').length },
-    { name: 'Nonaktif', value: siswa.filter(s => s.status !== 'aktif' && s.status !== 'lulus').length },
+    { name: 'Aktif', value: filteredSiswa.filter(s => s.status === 'aktif').length },
+    { name: 'Lulus', value: filteredSiswa.filter(s => s.status === 'lulus').length },
+    { name: 'Nonaktif', value: filteredSiswa.filter(s => s.status !== 'aktif' && s.status !== 'lulus').length },
   ]
 
   const kelasSize = kelas.map(k => ({
     name: `Kelas ${String(k.jenjang || '')}${String(k.namaRombel || '')}`,
-    siswa: siswa.filter(s => s.kelasId === k.id).length,
+    siswa: filteredSiswa.filter(s => s.kelasId === k.id).length,
   })).sort((a, b) => b.siswa - a.siswa).slice(0, 10)
 
+  // Ujian completion stats
+  const ujianStats = useMemo(() => {
+    if (!Array.isArray(ujian) || ujian.length === 0) return []
+    return ujian.slice(0, 10).map((u: any) => ({
+      name: String(u.judul || '-').slice(0, 20),
+      soal: Number(u.jumlahSoal || 0),
+    }))
+  }, [ujian])
+
   const kpis = [
-    { label: 'Total Peserta Didik', value: siswa.length, icon: Users },
+    { label: 'Total Peserta Didik', value: filteredSiswa.length, icon: Users },
     { label: 'Total Rombel', value: kelas.length, icon: School },
     { label: 'Mata Pelajaran', value: mapel.length, icon: BookOpen },
     { label: 'Kehadiran Tercatat', value: Number(data.hadir) || 0, icon: CalendarCheck },
@@ -72,6 +107,31 @@ export function AnalyticsView({ token }: { token: string }) {
       <PageToolbar
         title="Analytics Dashboard"
         description="Analitik dan ringkasan data LMS PKBM Tunas Ilmu."
+        actions={
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-3 py-2">
+              <Filter className="h-4 w-4 text-muted-foreground" />
+              <select
+                value={semester}
+                onChange={(e) => setSemester(e.target.value)}
+                className="bg-transparent text-sm border-none outline-none text-foreground cursor-pointer"
+              >
+                {SEMESTER_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <select
+                value={year}
+                onChange={(e) => setYear(Number(e.target.value))}
+                className="bg-transparent text-sm border-none outline-none text-foreground cursor-pointer"
+              >
+                {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        }
       />
 
       {/* KPI Cards */}

@@ -59,10 +59,12 @@ export function UjianView({
   token,
   user,
   readOnly,
+  setPage,
 }: {
   token: string
   user: User
   readOnly: boolean
+  setPage?: (p: string) => void
 }) {
   const [rows, setRows] = useState<Row[]>([])
   const [mapel, setMapel] = useState<Row[]>([])
@@ -312,6 +314,16 @@ export function UjianView({
                           title="Buka halaman ujian siswa"
                         >
                           🎓 Siswa
+                        </Button>
+                      )}
+                      {r.aksesKode && setPage && (
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={() => setPage('ujian-monitor')}
+                          title="Monitor ujian berlangsung"
+                        >
+                          📊 Monitor
                         </Button>
                       )}
                       {!readOnly && canEdit(r) && (

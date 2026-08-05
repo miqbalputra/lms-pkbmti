@@ -96,8 +96,38 @@ export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
 
   useEffect(() => {
     loadNotifs()
-    const interval = setInterval(loadNotifs, 30000) // poll every 30s
-    return () => clearInterval(interval)
+    // Use SSE for real-time notifications, fall back to polling
+    const apiBase = (import.meta as any).env?.VITE_API_URL || window.location.origin
+    let evtSource: EventSource | null = null
+    try {
+      evtSource = new EventSource(apiBase + '/api/notifikasi/stream?token=' + encodeURIComponent(token), { withCredentials: true } as any)
+      evtSource.addEventListener('notifikasi', (e) => {
+        try {
+          const newNotifs = JSON.parse(e.data)
+          setNotifs((prev) => {
+            const combined = [...newNotifs, ...prev]
+            const unique = Array.from(new Map(combined.map((n: any) => [n.id, n])).values())
+            return unique.slice(0, 10)
+          })
+          toast.info('Notifikasi baru diterima', { description: newNotifs[0]?.judul || '' })
+        } catch {}
+      })
+      evtSource.addEventListener('unread', (e) => {
+        setUnreadCount(Number(e.data) || 0)
+      })
+      evtSource.onerror = () => {
+        evtSource?.close()
+        evtSource = null
+        // Fall back to polling
+        const interval = setInterval(loadNotifs, 30000)
+        return () => clearInterval(interval)
+      }
+    } catch {
+      // SSE not supported, use polling
+      const interval = setInterval(loadNotifs, 30000)
+      return () => clearInterval(interval)
+    }
+    return () => { evtSource?.close() }
   }, [loadNotifs])
 
   const markNotifRead = (id: string) => {

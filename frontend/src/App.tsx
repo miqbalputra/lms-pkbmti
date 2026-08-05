@@ -1,6 +1,8 @@
 import { Component, type ReactNode, useEffect, useState, lazy, Suspense } from 'react'
 import {
+  Bell,
   CalendarCheck,
+  CalendarClock,
   School,
   UserCheck,
   Users,
@@ -159,6 +161,7 @@ export default function App() {
           <ErrorBoundary key={page}>
             <Workspace
               page={page}
+              setPage={setPage}
               token={token}
               user={user}
               readOnly={user.role !== 'admin'}
@@ -173,12 +176,14 @@ export default function App() {
 
 function Workspace({
   page,
+  setPage,
   token,
   user,
   readOnly,
   attendanceReadOnly,
 }: {
   page: string
+  setPage: (p: string) => void
   token: string
   user: User
   readOnly: boolean
@@ -208,7 +213,7 @@ function Workspace({
   if (page === 'rpp') return <RppView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'kelas-virtual') return <KelasVirtualView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'bank-soal') return <BankSoalView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
-  if (page === 'ujian') return <UjianView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
+  if (page === 'ujian') return <UjianView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} setPage={setPage} />
   if (page === 'sertifikat') return <SertifikatView token={token} readOnly={user.role !== 'admin'} />
   if (page === 'kartu-pelajar') return <KartuPelajarView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'perilaku') return <PerilakuView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
@@ -225,6 +230,11 @@ function Workspace({
   if (page === 'notifikasi') return <NotifikasiView token={token} />
   if (page === 'kalender') return <KalenderView token={token} user={user} readOnly={user.role === 'kepala_sekolah' || user.role === 'guru'} />
   if (page === 'analytics') return <AnalyticsView token={token} />
+  if (page === 'portal-ortu') {
+    window.open('/api/orang-tua/portal', '_blank')
+    setPage('dashboard')
+    return null
+  }
   return <MasterData resource={page} token={token} readOnly={readOnly} />
 }
 
@@ -242,9 +252,6 @@ function Dashboard({ token }: { token: string }) {
   const [loading, setLoading] = useState<boolean>(true)
 
   useEffect(() => {
-    // AbortController membatalkan fetch bila token berubah atau komponen
-    // unmount sebelum respons tiba — mencegah state update setelah lepas
-    // dan race antar permintaan.
     const ctrl = new AbortController()
     setLoading(true)
     Promise.all([
@@ -260,6 +267,9 @@ function Dashboard({ token }: { token: string }) {
       .finally(() => setLoading(false))
     return () => ctrl.abort()
   }, [token])
+
+  const upcomingEvents = (data.upcomingEvents as { id: string; judul: string; jenis: string; tanggal_mulai: string; tanggal_selesai: string }[]) || []
+  const unreadNotif = Number(data.unreadNotif) || 0
 
   const kpis = [
     {
@@ -282,14 +292,31 @@ function Dashboard({ token }: { token: string }) {
       value: Number(data.hadir) || 0,
       icon: CalendarCheck,
     },
+    {
+      label: 'Notifikasi Belum Dibaca',
+      value: unreadNotif,
+      icon: Bell,
+    },
+    {
+      label: 'Acara Mendatang',
+      value: upcomingEvents.length,
+      icon: CalendarClock,
+    },
   ]
+
+  const eventColors: Record<string, string> = {
+    ujian: 'bg-orange-100 text-orange-700',
+    libur: 'bg-red-100 text-red-700',
+    kegiatan: 'bg-blue-100 text-blue-700',
+    ppdb: 'bg-green-100 text-green-700',
+  }
 
   return (
     <div className="space-y-6">
-      {/* Stat Cards Grid (TailAdmin Exact Demo Style) */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 md:gap-6">
+      {/* Stat Cards Grid */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 md:gap-6">
         {loading
-          ? Array.from({ length: 4 }).map((_, i) => (
+          ? Array.from({ length: 6 }).map((_, i) => (
               <Card key={i} className="rounded-2xl border border-border bg-card p-6 shadow-2xs">
                 <div className="h-12 w-12 bg-muted animate-pulse rounded-full" />
                 <div className="h-8 w-20 bg-muted animate-pulse rounded mt-4" />
@@ -303,12 +330,9 @@ function Dashboard({ token }: { token: string }) {
                   key={kpi.label}
                   className="rounded-2xl border border-border bg-card p-6 shadow-2xs transition-all hover:shadow-md"
                 >
-                  {/* Top Row: Icon Container Circle */}
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary/80 text-primary shadow-xs">
                     <Icon className="h-6 w-6" />
                   </div>
-
-                  {/* Bottom Row: Number + Label */}
                   <div className="mt-4 flex items-end justify-between">
                     <div>
                       <h4 className="text-2xl md:text-3xl font-extrabold text-foreground tracking-tight">
@@ -324,7 +348,47 @@ function Dashboard({ token }: { token: string }) {
             })}
       </div>
 
-      {/* TailAdmin Charts Grid */}
+      {/* Upcoming Events Section */}
+      {!loading && upcomingEvents.length > 0 && (
+        <Card className="rounded-2xl border border-border bg-card shadow-2xs">
+          <div className="px-6 py-4 border-b border-border/60">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                <CalendarClock className="h-4 w-4" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-foreground">Acara Mendatang (30 Hari)</h3>
+                <p className="text-xs text-muted-foreground">Kalender akademik yang akan datang</p>
+              </div>
+            </div>
+          </div>
+          <CardContent className="p-4">
+            <div className="space-y-2">
+              {upcomingEvents.map((evt) => (
+                <div
+                  key={evt.id}
+                  className="flex items-center justify-between rounded-xl border border-border/60 px-4 py-3 hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${eventColors[evt.jenis] || 'bg-gray-100 text-gray-700'}`}>
+                      {evt.jenis}
+                    </span>
+                    <span className="text-sm font-medium text-foreground">{evt.judul}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {new Date(evt.tanggal_mulai).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {evt.tanggal_selesai && evt.tanggal_selesai !== evt.tanggal_mulai && (
+                      <> — {new Date(evt.tanggal_selesai).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Charts */}
       <Suspense
         fallback={
           <Card className="rounded-2xl border p-6">

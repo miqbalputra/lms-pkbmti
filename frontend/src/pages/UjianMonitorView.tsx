@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Monitor, RefreshCw } from 'lucide-react'
+import { Monitor, RefreshCw, Download } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { EmptyState, PageToolbar } from '../components/ui/page'
@@ -39,6 +39,27 @@ export function UjianMonitorView({
       .finally(() => setLoading(false))
   }
 
+  const exportResults = async () => {
+    if (!selected) return
+    try {
+      const apiBase = (import.meta as any).env?.VITE_API_URL || window.location.origin
+      const res = await fetch(apiBase + '/api/ujian/' + selected + '/export', {
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('Gagal export')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'hasil-ujian.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      // silently fail
+    }
+  }
+
   const fmt = (v: unknown) => (v ? String(v).slice(0, 16).replace('T', ' ') : '-')
 
   return (
@@ -48,9 +69,14 @@ export function UjianMonitorView({
         description="Pantau status pengerjaan ujian online siswa secara real-time."
         actions={
           selected ? (
-            <Button variant="outline" onClick={() => loadMonitor(selected)}>
-              <RefreshCw className="h-4 w-4" /> Refresh
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={exportResults}>
+                <Download className="h-4 w-4" /> Export CSV
+              </Button>
+              <Button variant="outline" onClick={() => loadMonitor(selected)}>
+                <RefreshCw className="h-4 w-4" /> Refresh
+              </Button>
+            </div>
           ) : undefined
         }
       />

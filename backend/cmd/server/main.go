@@ -784,6 +784,8 @@ func main() {
 	// Public Orang Tua login endpoint — no JWT; login by NIK + NISN.
 	api.Post("/orang-tua/login", s.loginOrangTua)
 	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage)
+	// SSE notification stream — accepts token via query param (EventSource can't set Authorization headers)
+	api.Get("/notifikasi/stream", s.streamNotifikasi)
 	protected := api.Group("", s.auth)
 	protected.Get("/dashboard", s.dashboard)
 	s.routes(protected)

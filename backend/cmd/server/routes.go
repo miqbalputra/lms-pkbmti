@@ -152,6 +152,7 @@ func (s *Server) routes(api fiber.Router) {
 	api.Post("/ujian/:id/soal", s.addUjianSoal)
 	api.Delete("/ujian/:id/soal/:sid", s.deleteUjianSoal)
 	api.Get("/ujian/:id/print", s.printUjian)
+	api.Get("/ujian/:id/export", s.exportUjianResults)
 
 	// Modul Notifikasi — CRUD notifikasi user.
 	api.Get("/notifikasi", s.listNotifikasi)
@@ -1602,6 +1603,24 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 	studentQ := s.db.Model(&PesertaDidik{}).Where("peserta_didiks.status = ?", "aktif")
 	classQ := s.db.Model(&Kelas{})
 	attendanceQ := s.db.Model(&PresensiDetail{}).Where("status_kehadiran = ?", "Hadir")
+	// Semester/year filter for attendance
+	if sem := c.Query("semester"); sem != "" {
+		year := c.Query("year")
+		if year == "" {
+			year = strconv.Itoa(time.Now().Year())
+		}
+		y, _ := strconv.Atoi(year)
+		var startMonth, endMonth int
+		if sem == "1" {
+			startMonth, endMonth = 7, 12
+		} else {
+			startMonth, endMonth = 1, 6
+		}
+		start := time.Date(y, time.Month(startMonth), 1, 0, 0, 0, 0, time.Local)
+		end := time.Date(y, time.Month(endMonth+1), 1, 0, 0, 0, 0, time.Local)
+		attendanceQ = attendanceQ.Joins("JOIN presensis ON presensis.id = presensi_details.presensi_id").
+			Where("presensis.tanggal >= ? AND presensis.tanggal < ?", start, end)
+	}
 	if c.Locals("role") == "guru" {
 		var user User
 		if s.db.First(&user, "id = ?", c.Locals("userID")).Error != nil || user.TutorID == nil {
@@ -1642,7 +1661,22 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 	for _, r := range kRows {
 		perKelas = append(perKelas, countRow{Label: "Kelas " + strconv.Itoa(r.Jenjang) + r.NamaRombel, Total: r.Total})
 	}
-	return c.JSON(fiber.Map{"pesertaDidik": students, "kelas": classes, "hadir": attendance, "perPokjar": perPokjar, "perKelas": perKelas})
+	// Upcoming kalender events (next 30 days)
+	var upcomingEvents []KalenderEvent
+	s.db.Where("tanggal_mulai >= ? AND tanggal_mulai <= ?", time.Now(), time.Now().AddDate(0, 0, 30)).
+		Order("tanggal_mulai").Limit(5).Find(&upcomingEvents)
+	// Unread notification count
+	var unreadCount int64
+	s.db.Model(&Notifikasi{}).Where("user_id = ? AND is_read = ?", c.Locals("userID"), false).Count(&unreadCount)
+	return c.JSON(fiber.Map{
+		"pesertaDidik":    students,
+		"kelas":           classes,
+		"hadir":           attendance,
+		"perPokjar":       perPokjar,
+		"perKelas":        perKelas,
+		"upcomingEvents":  upcomingEvents,
+		"unreadNotif":     unreadCount,
+	})
 }
 func (s *Server) arsip(c *fiber.Ctx) error {
 	ta := c.Query("tahunAjaranId")
@@ -4115,6 +4149,19 @@ func (s *Server) printUjian(c *fiber.Ctx) error {
 		pdf.CellFormat(40, 6, "Catatan", "", 0, "L", false, 0, "")
 		pdf.CellFormat(140, 6, ": Soal & opsi diacak (urutan identik di naskah & kunci)", "", 1, "L", false, 0, "")
 	}
+	// QR code: tautan ke halaman ujian online siswa
+	if uj.AksesKode != "" && !kunciMode {
+		studentURL := publicBase() + "/api/ujian-online/page"
+		if qrBytes, err := qrPNG(studentURL); err == nil {
+			opts := gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}
+			pdf.RegisterImageOptionsReader("qrujian", opts, bytes.NewReader(qrBytes))
+			pdf.ImageOptions("qrujian", 155, pdf.GetY()-28, 25, 0, false, opts, 0, "")
+			pdf.SetXY(155, pdf.GetY()-2)
+			pdf.SetFont("Helvetica", "", 7)
+			pdf.CellFormat(25, 4, "Scan untuk ujian", "", 1, "C", false, 0, "")
+			pdf.SetXY(15, pdf.GetY()+2)
+		}
+	}
 	pdf.Ln(4)
 
 	totalBobot := 0.0
@@ -4168,6 +4215,75 @@ func (s *Server) printUjian(c *fiber.Ctx) error {
 	}
 	c.Attachment(fname + ".pdf")
 	return pdf.Output(c.Response().BodyWriter())
+}
+
+// exportUjianResults exports ujian participants and their scores as CSV.
+func (s *Server) exportUjianResults(c *fiber.Ctx) error {
+	var uj Ujian
+	if e := s.db.First(&uj, "id = ?", id(c)).Error; e != nil {
+		return fiber.NewError(404, "ujian not found")
+	}
+	if e := s.scopeUjian(c, &uj); e != nil {
+		return e
+	}
+
+	// Get participants with their answers
+	var participants []UjianPeserta
+	s.db.Preload("PesertaDidik").Preload("PesertaDidik.Kelas").
+		Where("ujian_id = ?", uj.ID).Find(&participants)
+
+	var answers []UjianJawaban
+	s.db.Where("ujian_id = ?", uj.ID).Find(&answers)
+
+	// Build answer map: participantID -> soalID -> jawaban
+	answerMap := map[string]map[string]string{}
+	for _, a := range answers {
+		if answerMap[a.UjianPesertaID] == nil {
+			answerMap[a.UjianPesertaID] = map[string]string{}
+		}
+		answerMap[a.UjianPesertaID][a.SoalID] = a.Jawaban
+	}
+
+	// Get soal count
+	var soalCount int64
+	s.db.Model(&UjianSoal{}).Where("ujian_id = ?", uj.ID).Count(&soalCount)
+
+	// Get soal IDs in order for consistent column layout
+	var soalIDs []string
+	s.db.Model(&UjianSoal{}).Where("ujian_id = ?", uj.ID).Order("created_at").Pluck("soal_id", &soalIDs)
+
+	// Build CSV
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	// Header
+	header := []string{"No", "Nama Siswa", "NISN", "Kelas", "Status", "Skor"}
+	for i := range soalIDs {
+		header = append(header, fmt.Sprintf("Soal %d", i+1))
+	}
+	w.Write(header)
+
+	// Data rows
+	for i, p := range participants {
+		row := []string{
+			strconv.Itoa(i + 1),
+			p.PesertaDidik.Nama,
+			p.PesertaDidik.NISN,
+			fmt.Sprintf("Kelas %d%s", p.PesertaDidik.Kelas.Jenjang, p.PesertaDidik.Kelas.NamaRombel),
+			p.Status,
+			fmt.Sprintf("%.1f", *p.Skor),
+		}
+		if pMap, ok := answerMap[p.ID]; ok {
+			for _, sid := range soalIDs {
+				row = append(row, pMap[sid])
+			}
+		}
+		w.Write(row)
+	}
+	w.Flush()
+
+	c.Set(fiber.HeaderContentType, "text/csv")
+	c.Attachment("hasil-ujian-" + uj.Judul + ".csv")
+	return c.Send(buf.Bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -5521,6 +5637,8 @@ func (s *Server) importTemplate(c *fiber.Ctx) error {
 		return s.nilaiKompetensiTemplate(c)
 	case "tutor":
 		return s.tutorTemplate(c)
+	case "orang_tua":
+		return s.orangTuaTemplate(c)
 	default:
 		return fiber.NewError(400, "tipe template tidak dikenal")
 	}
@@ -5594,6 +5712,33 @@ func (s *Server) tutorTemplate(c *fiber.Ctx) error {
 	_ = xlsx.SetPanes(sheet, &excelize.Panes{Freeze: true, Split: false, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
 	c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	c.Attachment("template-import-tutor.xlsx")
+	return xlsx.Write(c.Response().BodyWriter())
+}
+
+func (s *Server) orangTuaTemplate(c *fiber.Ctx) error {
+	xlsx := excelize.NewFile()
+	sheet := xlsx.GetSheetName(0)
+	_ = xlsx.SetSheetName(sheet, "Orang Tua")
+	headers := []string{"nama", "nik", "no_hp", "alamat", "username", "password"}
+	if err := xlsx.SetSheetRow(sheet, "A1", &headers); err != nil {
+		return err
+	}
+	examples := []struct{ row []string }{
+		{[]string{"Budi Santoso", "3303060110700001", "08123456789", "Jl. Merdeka No. 10, Jakarta", "ortu.budi", "OrangTua123"}},
+		{[]string{"Siti Aminah", "3303060110720002", "08567890123", "Jl. Pendidikan No. 5, Bandung", "ortu.siti", "OrangTua123"}},
+	}
+	for i, ex := range examples {
+		cell, _ := excelize.CoordinatesToCellName(1, i+2)
+		_ = xlsx.SetSheetRow(sheet, cell, &ex.row)
+	}
+	widths := []float64{28, 22, 18, 40, 20, 18}
+	for i, w := range widths {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		_ = xlsx.SetColWidth(sheet, col, col, w)
+	}
+	_ = xlsx.SetPanes(sheet, &excelize.Panes{Freeze: true, Split: false, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+	c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Attachment("template-import-orang-tua.xlsx")
 	return xlsx.Write(c.Response().BodyWriter())
 }
 
@@ -5979,6 +6124,72 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				continue
 			}
 			namaSeen[nama] = true
+			berhasil++
+		}
+	case "orang_tua":
+		if role != "admin" {
+			return fiber.NewError(403, "import orang tua hanya admin")
+		}
+		expected := []string{"nama", "nik", "no_hp", "alamat", "username", "password"}
+		if e := validateImportHeaders(rows[0], expected); e != nil {
+			return fiber.NewError(400, e.Error())
+		}
+		if total > 500 {
+			return fiber.NewError(400, "import orang tua dibatasi 500 baris")
+		}
+		nikSeen := map[string]bool{}
+		usernameSeen := map[string]bool{}
+		for index, row := range rows[1:] {
+			line := index + 2
+			if len(row) < len(expected) {
+				issues = append(issues, importIssue{line, "kolom tidak lengkap"})
+				continue
+			}
+			nama := strings.TrimSpace(row[0])
+			nik := strings.TrimSpace(row[1])
+			noHP := strings.TrimSpace(row[2])
+			alamat := strings.TrimSpace(row[3])
+			username := strings.TrimSpace(row[4])
+			password := strings.TrimSpace(row[5])
+			if nama == "" || nik == "" || username == "" || password == "" {
+				issues = append(issues, importIssue{line, "nama, nik, username, password wajib"})
+				continue
+			}
+			if nikSeen[nik] {
+				issues = append(issues, importIssue{line, "duplikat NIK dalam file"})
+				continue
+			}
+			if usernameSeen[username] {
+				issues = append(issues, importIssue{line, "duplikat username dalam file"})
+				continue
+			}
+			// Check NIK uniqueness in DB
+			var existing OrangTua
+			if s.db.Where("nik = ?", nik).First(&existing).Error == nil {
+				issues = append(issues, importIssue{line, "NIK sudah terdaftar"})
+				continue
+			}
+			// Check username uniqueness in DB
+			var existingUser User
+			if s.db.Where("username = ?", username).First(&existingUser).Error == nil {
+				issues = append(issues, importIssue{line, "username sudah digunakan"})
+				continue
+			}
+			// Create OrangTua record
+			ortu := OrangTua{NamaBapak: nama, NIKAyah: nik, NamaIbu: noHP, NIKIbu: alamat}
+			if e := s.db.Create(&ortu).Error; e != nil {
+				issues = append(issues, importIssue{line, "gagal insert orang tua: " + e.Error()})
+				continue
+			}
+			// Create User account for the parent
+			hashed, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			user := User{Username: username, PasswordHash: string(hashed), Role: "orang_tua", OrangTuaID: &ortu.ID}
+			if e := s.db.Create(&user).Error; e != nil {
+				issues = append(issues, importIssue{line, "gagal buat akun: " + e.Error()})
+				continue
+			}
+			nikSeen[nik] = true
+			usernameSeen[username] = true
 			berhasil++
 		}
 	default:
