@@ -51,6 +51,7 @@ const emptyForm = {
   waktuMulai: '',
   waktuSelesai: '',
   durasiMenit: '60',
+  batasTabSwitch: '0',
   acakSoal: false,
   aksesKode: '',
 }
@@ -114,6 +115,7 @@ export function UjianView({
       waktuMulai: String(r.waktuMulai || '').slice(0, 16),
       waktuSelesai: String(r.waktuSelesai || '').slice(0, 16),
       durasiMenit: String(r.durasiMenit ?? '60'),
+      batasTabSwitch: String(r.batasTabSwitch ?? '0'),
       acakSoal: !!r.acakSoal,
       aksesKode: String(r.aksesKode || ''),
     })
@@ -138,6 +140,7 @@ export function UjianView({
       waktuMulai: form.waktuMulai ? new Date(form.waktuMulai).toISOString() : undefined,
       waktuSelesai: form.waktuSelesai ? new Date(form.waktuSelesai).toISOString() : undefined,
       durasiMenit: Number(form.durasiMenit) || 0,
+      batasTabSwitch: Number(form.batasTabSwitch) || 0,
       acakSoal: form.acakSoal,
       aksesKode: form.aksesKode || '',
     }
@@ -246,6 +249,11 @@ export function UjianView({
               <Label>Durasi (menit)</Label>
               <Input type="number" value={form.durasiMenit} onChange={(e) => setForm({ ...form, durasiMenit: e.target.value })} />
             </div>
+            <div className="grid gap-2">
+              <Label>Batas Tab Switch (0 = tanpa batas)</Label>
+              <Input type="number" min="0" value={form.batasTabSwitch} onChange={(e) => setForm({ ...form, batasTabSwitch: e.target.value })} />
+              <p className="text-xs text-muted-foreground">Jika terlampaui, ujian otomatis dikunci & dinilai.</p>
+            </div>
             <div className="flex items-center gap-2">
               <Checkbox id="acak" checked={form.acakSoal} onChange={(e) => setForm({ ...form, acakSoal: e.target.checked })} />
               <Label htmlFor="acak" className="cursor-pointer">Acak soal & opsi (deterministik per ujian)</Label>
@@ -305,6 +313,7 @@ export function UjianView({
                   <TableCell className="text-sm text-muted-foreground">
                     <div>{fmtDateTime(r.waktuMulai) || '—'}</div>
                     <div className="text-xs">s/d {fmtDateTime(r.waktuSelesai) || '—'}{r.durasiMenit ? ` (${r.durasiMenit} mnt)` : ''}</div>
+                    {r.batasTabSwitch ? <div className="text-xs text-orange-600">Max {r.batasTabSwitch}x pindah tab</div> : null}
                   </TableCell>
                   <TableCell>
                     {r.aksesKode ? (

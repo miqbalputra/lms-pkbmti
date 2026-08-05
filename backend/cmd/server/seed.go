@@ -354,7 +354,7 @@ func (s *Server) seedDummy() (string, error) {
 		s.db.Create(&bs)
 		soalIDs = append(soalIDs, bs.ID)
 	}
-	ujian := Ujian{MapelID: mapelIDs["Matematika"], KelasID: kelas7A, Judul: "Ulangan Harian Bilangan Bulat", WaktuMulai: time.Date(2025, 10, 1, 8, 0, 0, 0, time.UTC), WaktuSelesai: time.Date(2025, 10, 1, 9, 30, 0, 0, time.UTC), DurasiMenit: 90, AcakSoal: true, Semester: "Ganjil", DibuatOlehUserID: userIDs["guru1"]}
+	ujian := Ujian{MapelID: mapelIDs["Matematika"], KelasID: kelas7A, Judul: "Ulangan Harian Bilangan Bulat", WaktuMulai: time.Date(2025, 10, 1, 8, 0, 0, 0, time.UTC), WaktuSelesai: time.Date(2025, 10, 1, 9, 30, 0, 0, time.UTC), DurasiMenit: 90, BatasTabSwitch: 3, AcakSoal: true, Semester: "Ganjil", DibuatOlehUserID: userIDs["guru1"]}
 	s.db.Create(&ujian)
 	for i, sid := range soalIDs {
 		bobot := 25.0

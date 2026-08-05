@@ -295,30 +295,15 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "ok"})
 }
 
-// selesaiUjianOnline — POST /ujian-online/:ujianId/selesai {nisn, aksesKode}
-// Auto-grades PG answers, computes score, returns result.
-func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
-	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
-	if err != nil {
-		return err
-	}
-	var up UjianPeserta
-	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
-		return fiber.NewError(400, "Anda belum memulai ujian ini")
-	}
-	if up.Status == "selesai" || up.Status == "dikunci" {
-		return fiber.NewError(403, "Ujian sudah selesai")
-	}
-	now := time.Now()
-	up.Selesai = &now
-	up.Status = "selesai"
-
+// gradeUjianPeserta auto-grades all answers for a participant and computes the
+// final score. Used by selesaiUjianOnline (manual finish) and
+// autoFinishUjianSessions (server-side timeout/tab-lock).
+func (s *Server) gradeUjianPeserta(up *UjianPeserta, uj *Ujian) float64 {
 	var jawabans []UjianJawaban
 	s.db.Where("ujian_peserta_id = ?", up.ID).Find(&jawabans)
 	var ujianSoals []UjianSoal
 	s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&ujianSoals)
 
-	// Build lookup: soalID -> UjianSoal (with Soal.Tipe and Bobot)
 	soalLookup := map[string]UjianSoal{}
 	for _, us := range ujianSoals {
 		soalLookup[us.SoalID] = us
@@ -342,9 +327,8 @@ func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
 		var benar bool
 		switch us.Soal.Tipe {
 		case "essay":
-			// Case-insensitive contains: jawaban must contain kunci (or vice versa)
 			benar = strings.Contains(strings.ToLower(jawaban), strings.ToLower(kunci))
-		default: // "pg" — exact match on index
+		default:
 			benar = kunci == jawaban
 		}
 		jawabans[i].Benar = &benar
@@ -359,12 +343,55 @@ func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
 	if totalBobot > 0 {
 		skor = (totalSkor / totalBobot) * 100
 	}
+	return skor
+}
+
+// autoFinishUjianSessions runs every 30s and closes any ujian session whose
+// DurasiMenit has expired. This ensures exams are graded even if the student
+// closes their browser without clicking "Selesai".
+func (s *Server) autoFinishUjianSessions() {
+	var pesertas []UjianPeserta
+	s.db.Preload("Ujian").Where("status = ? AND mulai IS NOT NULL", "mulai").Find(&pesertas)
+	now := time.Now()
+	for _, up := range pesertas {
+		if up.Ujian.DurasiMenit == 0 || up.Mulai == nil {
+			continue
+		}
+		batas := up.Mulai.Add(time.Duration(up.Ujian.DurasiMenit) * time.Minute)
+		if now.After(batas) {
+			up.Selesai = &now
+			up.Status = "selesai"
+			skor := s.gradeUjianPeserta(&up, &up.Ujian)
+			up.Skor = &skor
+			s.db.Save(&up)
+		}
+	}
+}
+
+// selesaiUjianOnline — POST /ujian-online/:ujianId/selesai {nisn, aksesKode}
+// Auto-grades PG answers, computes score, returns result.
+func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
+	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	var up UjianPeserta
+	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
+		return fiber.NewError(400, "Anda belum memulai ujian ini")
+	}
+	if up.Status == "selesai" || up.Status == "dikunci" {
+		return fiber.NewError(403, "Ujian sudah selesai")
+	}
+	now := time.Now()
+	up.Selesai = &now
+	up.Status = "selesai"
+
+	skor := s.gradeUjianPeserta(&up, uj)
+
 	up.Skor = &skor
 	s.db.Save(&up)
 	return c.JSON(fiber.Map{
 		"skor":    skor,
-		"benar":   totalSkor,
-		"total":   totalBobot,
 		"status":  "selesai",
 	})
 }
@@ -383,6 +410,16 @@ func (s *Server) tabSwitchUjianOnline(c *fiber.Ctx) error {
 		return fiber.NewError(403, "Ujian sudah selesai")
 	}
 	up.TabSwitch++
+	// Auto-lock if batas terlampaui
+	if uj.BatasTabSwitch > 0 && up.TabSwitch >= uj.BatasTabSwitch {
+		now := time.Now()
+		up.Selesai = &now
+		up.Status = "dikunci"
+		skor := s.gradeUjianPeserta(&up, uj)
+		up.Skor = &skor
+		s.db.Save(&up)
+		return c.JSON(fiber.Map{"tabSwitch": up.TabSwitch, "locked": true, "skor": skor})
+	}
 	s.db.Save(&up)
 	return c.JSON(fiber.Map{"tabSwitch": up.TabSwitch})
 }

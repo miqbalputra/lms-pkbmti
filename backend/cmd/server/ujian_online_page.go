@@ -329,7 +329,14 @@ hide(document.getElementById('examCard'));show(document.getElementById('resultCa
 document.addEventListener('visibilitychange',()=>{
 if(document.hidden&&state.currentUjian&&!document.getElementById('examCard').classList.contains('hidden')){
 const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);
-fetch(API+'/ujian-online/'+state.currentUjian.id+'/tab-switch',{method:'POST',body:fd}).catch(()=>{});
+fetch(API+'/ujian-online/'+state.currentUjian.id+'/tab-switch',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+  if(d.locked){
+    if(state.timerInterval)clearInterval(state.timerInterval);
+    document.getElementById('scoreValue').textContent=Math.round(d.skor||0);
+    document.getElementById('scoreDetail').innerHTML='Ujian dikunci (terlalu sering pindah tab).<br>Skor: <strong>'+Math.round(d.skor||0)+'</strong>';
+    hide(document.getElementById('examCard'));show(document.getElementById('resultCard'));
+  }
+}).catch(()=>{});
 }
 });
 

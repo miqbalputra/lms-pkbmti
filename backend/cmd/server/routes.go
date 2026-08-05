@@ -3916,14 +3916,15 @@ func (s *Server) deleteBankSoal(c *fiber.Ctx) error {
 }
 
 type ujianInput struct {
-	MapelID      string    `json:"mapelId"`
-	KelasID      string    `json:"kelasId"`
-	Judul        string    `json:"judul"`
-	WaktuMulai   time.Time `json:"waktuMulai"`
-	WaktuSelesai time.Time `json:"waktuSelesai"`
-	DurasiMenit  int       `json:"durasiMenit"`
-	AcakSoal     bool      `json:"acakSoal"`
-	AksesKode    string    `json:"aksesKode"` // kode akses siswa ujian online
+	MapelID        string    `json:"mapelId"`
+	KelasID        string    `json:"kelasId"`
+	Judul          string    `json:"judul"`
+	WaktuMulai     time.Time `json:"waktuMulai"`
+	WaktuSelesai   time.Time `json:"waktuSelesai"`
+	DurasiMenit    int       `json:"durasiMenit"`
+	BatasTabSwitch int       `json:"batasTabSwitch"`
+	AcakSoal       bool      `json:"acakSoal"`
+	AksesKode      string    `json:"aksesKode"` // kode akses siswa ujian online
 }
 
 func (s *Server) scopeUjian(c *fiber.Ctx, u *Ujian) error {
@@ -3982,6 +3983,7 @@ func (s *Server) createUjian(c *fiber.Ctx) error {
 		WaktuMulai:       in.WaktuMulai,
 		WaktuSelesai:     in.WaktuSelesai,
 		DurasiMenit:      in.DurasiMenit,
+		BatasTabSwitch:   in.BatasTabSwitch,
 		AcakSoal:         in.AcakSoal,
 		AksesKode:        in.AksesKode,
 		Semester:         s.semester(in.WaktuMulai),
@@ -4028,6 +4030,7 @@ func (s *Server) updateUjian(c *fiber.Ctx) error {
 		uj.WaktuSelesai = in.WaktuSelesai
 	}
 	uj.DurasiMenit = in.DurasiMenit
+	uj.BatasTabSwitch = in.BatasTabSwitch
 	uj.AcakSoal = in.AcakSoal
 	uj.AksesKode = in.AksesKode
 	if e := s.db.Save(&uj).Error; e != nil {
@@ -6538,6 +6541,13 @@ func (s *Server) startScheduler() {
 		}
 	}
 	cr.Start()
+	// Auto-finish expired ujian online sessions every 30 seconds.
+	go func() {
+		for {
+			time.Sleep(30 * time.Second)
+			s.autoFinishUjianSessions()
+		}
+	}()
 }
 func (s *Server) generateAttendance(loc *time.Location) {
 	var setting PengaturanJadwal
