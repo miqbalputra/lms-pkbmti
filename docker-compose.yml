@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build: 
+      context: .
+      args:
+        VITE_TURNSTILE_SITE_KEY: ${VITE_TURNSTILE_SITE_KEY:-}
     restart: unless-stopped
     environment:
       APP_ENV: production

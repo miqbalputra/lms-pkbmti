@@ -1,4 +1,6 @@
 FROM node:24-slim AS frontend-build
+ARG VITE_TURNSTILE_SITE_KEY
+ENV VITE_TURNSTILE_SITE_KEY=$VITE_TURNSTILE_SITE_KEY
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
