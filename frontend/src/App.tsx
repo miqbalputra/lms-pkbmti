@@ -131,6 +131,33 @@ export default function App() {
     return () => setOnUnauthorized(null)
   }, [token])
 
+  // Keep-alive: refresh access token periodically while user is active.
+  // Access token TTL is 15 min; we refresh every 5 min on user activity
+  // so the token never expires as long as the user is interacting.
+  useEffect(() => {
+    if (!token) return
+    let timer: ReturnType<typeof setTimeout>
+    const REFRESH_MS = 5 * 60 * 1000 // 5 minutes
+
+    function schedule() {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        void request('/auth/refresh', '', 'POST')
+          .then((r) => { setToken(r.accessToken); setUser(r.user) })
+          .catch(() => {})
+      }, REFRESH_MS)
+    }
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart']
+    events.forEach((e) => document.addEventListener(e, schedule, { passive: true }))
+    schedule() // start initial timer
+
+    return () => {
+      clearTimeout(timer)
+      events.forEach((e) => document.removeEventListener(e, schedule))
+    }
+  }, [token])
+
   if (!ready) {
     return (
       <div className="grid min-h-screen place-items-center bg-background text-sm text-muted-foreground">
