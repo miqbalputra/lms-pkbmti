@@ -95,9 +95,23 @@ type TahunAjaran struct {
 	NamaTahunAjaran           string     `gorm:"uniqueIndex" json:"namaTahunAjaran"`
 	TanggalMulai              time.Time  `json:"tanggalMulai"`
 	TanggalSelesai            time.Time  `json:"tanggalSelesai"`
-	TanggalMulaiSemesterGenap *time.Time `json:"tanggalMulaiSemesterGenap"` // titik potong semester genap; opsional — bila kosong, semester dihitung dari bulan (fallback)
+	TanggalMulaiSemesterGenap *time.Time `json:"tanggalMulaiSemesterGenap"` // legacy — dipertahankan utk backward-compat; semester kini dikelola via model Semester
 	IsAktif                   bool       `json:"isAktif"`
 }
+
+// Semester merepresentasikan satu semester dalam sebuah tahun ajaran (Ganjil / Genap).
+// Setiap TahunAjaran otomatis memiliki 2 record Semester. Admin dapat mengarsipkan
+// semester yang sudah lewat dan membukanya kembali.
+type Semester struct {
+	Base
+	TahunAjaranID string    `gorm:"index" json:"tahunAjaranId"`
+	NamaSemester  string    `gorm:"index" json:"namaSemester"` // "Ganjil" / "Genap"
+	TanggalMulai  time.Time `json:"tanggalMulai"`
+	TanggalSelesai time.Time `json:"tanggalSelesai"`
+	IsArchived    bool      `json:"isArchived"`
+	TahunAjaran   TahunAjaran `json:"tahunAjaran"`
+}
+
 type Kelas struct {
 	Base
 	Jenjang       int         `gorm:"uniqueIndex:kelas_identitas" json:"jenjang"`
@@ -781,7 +795,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}); e != nil {
 		return e
 	}
 	// Modul K — alur approve/reject jurnal dihapus; jurnal langsung final. Sekali
@@ -798,6 +812,16 @@ func (s *Server) migrateSchema() error {
 	if s.db.Where("is_aktif = ?", true).First(&active).Error != nil {
 		now := time.Now()
 		s.db.Create(&TahunAjaran{NamaTahunAjaran: fmt.Sprintf("%d/%d", now.Year(), now.Year()+1), TanggalMulai: now, TanggalSelesai: now.AddDate(1, 0, 0), IsAktif: true})
+	}
+	// Backfill Semester records untuk semua TahunAjaran yang belum punya.
+	var allTA []TahunAjaran
+	s.db.Find(&allTA)
+	for i := range allTA {
+		var cnt int64
+		s.db.Model(&Semester{}).Where("tahun_ajaran_id = ?", allTA[i].ID).Count(&cnt)
+		if cnt == 0 {
+			s.syncSemesters(s.db, &allTA[i])
+		}
 	}
 	var setting PengaturanJadwal
 	if s.db.First(&setting).Error != nil {

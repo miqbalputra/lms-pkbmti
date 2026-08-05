@@ -50,6 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'orang-tua', label: 'Orang Tua', icon: Users, roles: ['admin', 'kepala_sekolah'] },
       { id: 'pokjar', label: 'Pokjar', icon: Building2, roles: ['admin', 'kepala_sekolah'] },
       { id: 'tahun-ajaran', label: 'Tahun Ajaran', icon: CalendarDays, roles: ['admin', 'kepala_sekolah'] },
+      { id: 'semester', label: 'Semester', icon: CalendarDays, roles: ['admin'] },
       { id: 'mapel', label: 'Mata Pelajaran', icon: BookOpen, roles: ['admin', 'kepala_sekolah'] },
       { id: 'program', label: 'Program (Paket)', icon: School, roles: ['admin', 'kepala_sekolah'] },
       { id: 'fase', label: 'Fase', icon: BookOpen, roles: ['admin', 'kepala_sekolah'] },

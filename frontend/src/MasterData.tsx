@@ -74,6 +74,9 @@ type Schema = {
   description: string
   fields: Field[]
   columns: Column[]
+  createDisabled?: boolean
+  deleteDisabled?: boolean
+  readOnly?: string[]
 }
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -171,12 +174,6 @@ const schemas: Record<string, Schema> = {
       { key: 'namaTahunAjaran', label: 'Tahun Ajaran', required: true, placeholder: 'Contoh: 2025/2026' },
       { key: 'tanggalMulai', label: 'Tanggal Mulai', type: 'date', required: true },
       { key: 'tanggalSelesai', label: 'Tanggal Selesai', type: 'date', required: true },
-      {
-        key: 'tanggalMulaiSemesterGenap',
-        label: 'Mulai Semester Genap',
-        type: 'date',
-        required: false,
-      },
     ],
     columns: [
       { key: 'namaTahunAjaran', label: 'Tahun Ajaran', primary: true },
@@ -184,6 +181,32 @@ const schemas: Record<string, Schema> = {
       { key: '_active', label: 'Status Keaktifan', render: 'activeStatus' },
       { key: '_updated', label: 'Diperbarui', render: 'date' },
     ],
+  },
+  semester: {
+    title: 'Semester',
+    description: 'Daftar semester per tahun ajaran. Arsipkan semester yang sudah lewat.',
+    createDisabled: true,
+    deleteDisabled: true,
+    fields: [
+      {
+        key: 'tahunAjaranId',
+        label: 'Tahun Ajaran',
+        type: 'select',
+        required: true,
+      },
+      { key: 'namaSemester', label: 'Nama Semester', required: true, placeholder: 'Ganjil / Genap' },
+      { key: 'tanggalMulai', label: 'Tanggal Mulai', type: 'date', required: true },
+      { key: 'tanggalSelesai', label: 'Tanggal Selesai', type: 'date', required: true },
+      { key: 'isArchived', label: 'Diarsipkan', type: 'checkbox' },
+    ],
+    columns: [
+      { key: '_tahunAjaran', label: 'Tahun Ajaran', render: 'text' },
+      { key: 'namaSemester', label: 'Semester', primary: true },
+      { key: '_periode', label: 'Periode', render: 'dateRange' },
+      { key: '_archive', label: 'Status', render: 'archiveStatus' },
+      { key: '_updated', label: 'Diperbarui', render: 'date' },
+    ],
+    readOnly: ['namaSemester'],
   },
   mapel: {
     title: 'Mata Pelajaran',
@@ -321,6 +344,7 @@ export function MasterData({
   const [deletingRow, setDeletingRow] = useState<Row | null>(null)
   const [activatingRow, setActivatingRow] = useState<Row | null>(null)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
+  const [taOptions, setTaOptions] = useState<Row[]>([])
 
   const loadData = () => {
     setLoading(true)
@@ -343,6 +367,11 @@ export function MasterData({
     setSearchQuery('')
     setCurrentPage(1)
     loadData()
+    if (resource === 'semester') {
+      request('/tahun-ajaran', token)
+        .then((d) => { if (Array.isArray(d)) setTaOptions(d as Row[]) })
+        .catch(() => undefined)
+    }
   }, [resource, token])
 
   const filteredRows = useMemo(() => {
@@ -387,9 +416,11 @@ export function MasterData({
 
     if (resource === 'tahun-ajaran') {
       body.isAktif = editingRow?.isAktif ?? false
-      // tanggalMulaiSemesterGenap is optional. Send null (not "") so the Go
-      // *time.Time parses cleanly to nil instead of erroring on an empty string.
-      body.tanggalMulaiSemesterGenap = body.tanggalMulaiSemesterGenap ? String(body.tanggalMulaiSemesterGenap).slice(0, 10) : null
+    }
+    if (resource === 'semester') {
+      body.isArchived = formData.has('isArchived')
+      body.tanggalMulai = body.tanggalMulai ? String(body.tanggalMulai).slice(0, 10) : undefined
+      body.tanggalSelesai = body.tanggalSelesai ? String(body.tanggalSelesai).slice(0, 10) : undefined
     }
     if (resource === 'mapel') {
       body.isActive = editingRow?.isActive ?? true
@@ -536,9 +567,11 @@ export function MasterData({
         return (
           <TableCell key={col.key} className="text-muted-foreground text-xs">
             <div>{formatDate(row.tanggalMulai)} — {formatDate(row.tanggalSelesai)}</div>
-            <div className="text-[10px] text-muted-foreground/80">
-              Genap mulai: {formatDate(row.tanggalMulaiSemesterGenap)}
-            </div>
+            {row.tanggalMulaiSemesterGenap ? (
+              <div className="text-[10px] text-muted-foreground/80">
+                Genap mulai: {formatDate(row.tanggalMulaiSemesterGenap)}
+              </div>
+            ) : null}
           </TableCell>
         )
       case 'info':
@@ -585,6 +618,34 @@ export function MasterData({
             )}
           </TableCell>
         )
+      case 'archiveStatus':
+        return (
+          <TableCell key={col.key}>
+            {row.isArchived ? (
+              <Badge variant="outline" className="text-muted-foreground font-medium text-xs">
+                Diarsipkan
+              </Badge>
+            ) : (
+              <Badge className="bg-success hover:bg-success/90 text-success-foreground font-medium flex items-center gap-1 w-fit text-xs">
+                <CheckCircle2 className="h-3 w-3" />
+                Aktif
+              </Badge>
+            )}
+          </TableCell>
+        )
+      case 'text':
+        if (col.key === '_tahunAjaran') {
+          return (
+            <TableCell key={col.key} className="text-muted-foreground text-xs">
+              {(row.tahunAjaran as Row)?.namaTahunAjaran || String(row.tahunAjaranId || '-')}
+            </TableCell>
+          )
+        }
+        return (
+          <TableCell key={col.key} className={cellClass}>
+            {String(row[col.key] || '-')}
+          </TableCell>
+        )
       default:
         return (
           <TableCell key={col.key} className={cellClass}>
@@ -600,7 +661,7 @@ export function MasterData({
         title={`Data Master ${schema.title}`}
         description={schema.description || `${rows.length} data ${schema.title.toLowerCase()} tercatat dalam sistem.`}
         actions={
-          !readOnly && (
+          !readOnly && !schema.createDisabled && (
             <Button onClick={handleOpenAdd} className="shadow-2xs">
               <Plus className="h-4 w-4 mr-1" />
               Tambah {schema.title}
@@ -664,7 +725,7 @@ export function MasterData({
                         ? `Tidak ada data yang cocok dengan kata kunci "${searchQuery}". Coba gunakan kata kunci lain.`
                         : `Silakan tambahkan data ${schema.title.toLowerCase()} baru untuk mengisi daftar.`}
                     </p>
-                    {!readOnly && !searchQuery && (
+                    {!readOnly && !searchQuery && !schema.createDisabled && (
                       <Button size="sm" className="mt-2" onClick={handleOpenAdd}>
                         <Plus className="h-3.5 w-3.5 mr-1" />
                         Tambah {schema.title}
@@ -689,15 +750,17 @@ export function MasterData({
                           <Pencil className="h-3.5 w-3.5 mr-1" />
                           Ubah
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="h-8 px-2.5 text-xs"
-                          onClick={() => setDeletingRow(row)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5 mr-1" />
-                          Hapus
-                        </Button>
+                        {!schema.deleteDisabled && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="h-8 px-2.5 text-xs"
+                            onClick={() => setDeletingRow(row)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1" />
+                            Hapus
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   )}
@@ -780,12 +843,19 @@ export function MasterData({
                     name={field.key}
                     defaultValue={String(editingRow?.[field.key] || field.options?.[0]?.value || '')}
                     required={field.required}
+                    disabled={schema.readOnly?.includes(field.key)}
                   >
-                    {field.options?.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
+                    {field.key === 'tahunAjaranId' && resource === 'semester'
+                      ? taOptions.map((ta) => (
+                          <option key={ta.id} value={ta.id}>
+                            {String(ta.namaTahunAjaran || ta.id)}
+                          </option>
+                        ))
+                      : field.options?.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
                   </Select>
                 ) : field.type === 'date' ? (
                   <Input
@@ -794,6 +864,7 @@ export function MasterData({
                     type="date"
                     defaultValue={formatDateForInput(editingRow?.[field.key])}
                     required={field.required}
+                    disabled={schema.readOnly?.includes(field.key)}
                   />
                 ) : (
                   <Input
@@ -803,6 +874,7 @@ export function MasterData({
                     defaultValue={String(editingRow?.[field.key] || '')}
                     placeholder={field.placeholder}
                     required={field.required}
+                    disabled={schema.readOnly?.includes(field.key)}
                   />
                 )}
               </div>

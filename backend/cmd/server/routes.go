@@ -220,6 +220,7 @@ func (s *Server) routes(api fiber.Router) {
 	s.crudOrangTua(admin)
 	s.crudPokjar(admin)
 	s.crudTahunAjaran(admin)
+	s.crudSemester(admin)
 	s.crudMapel(admin)
 	s.crudUsers(admin)
 	admin.Post("/kelas", s.createKelas)
@@ -486,6 +487,7 @@ func (s *Server) createTahun(c *fiber.Ctx) error {
 		if e := tx.Create(&row).Error; e != nil {
 			return fiber.NewError(400, e.Error())
 		}
+		s.syncSemesters(tx, &row)
 		s.auditTx(tx, &uid, "create", "tahun_ajaran", row.NamaTahunAjaran)
 		return c.Status(201).JSON(row)
 	})
@@ -508,10 +510,108 @@ func (s *Server) updateTahun(c *fiber.Ctx) error {
 		if e := tx.Save(&row).Error; e != nil {
 			return e
 		}
+		s.syncSemesters(tx, &row)
 		s.auditTx(tx, &uid, "update", "tahun_ajaran", row.NamaTahunAjaran)
 		return c.JSON(row)
 	})
 }
+
+// syncSemesters memastikan setiap TahunAjaran memiliki 2 record Semester
+// (Ganjil & Genap). Tanggal semester diturunkan dari tanggalMulaiSemesterGenap
+// bila ada, atau dari titik tengah rentang tahun ajaran.
+func (s *Server) syncSemesters(tx *gorm.DB, ta *TahunAjaran) {
+	genapStart := ta.TanggalMulai
+	if ta.TanggalMulaiSemesterGenap != nil && !ta.TanggalMulaiSemesterGenap.IsZero() {
+		genapStart = *ta.TanggalMulaiSemesterGenap
+	} else {
+		dur := ta.TanggalSelesai.Sub(ta.TanggalMulai)
+		genapStart = ta.TanggalMulai.Add(dur / 2)
+	}
+
+	// Ganjil: mulai tahun ajaran s.d. hari sebelum genap
+	ganjilEnd := genapStart.AddDate(0, 0, -1)
+	if ganjilEnd.Before(ta.TanggalMulai) {
+		ganjilEnd = ta.TanggalMulai
+	}
+
+	// Upsert Ganjil
+	var g Semester
+	if tx.Where("tahun_ajaran_id = ? AND nama_semester = ?", ta.ID, "Ganjil").First(&g).Error != nil {
+		g = Semester{TahunAjaranID: ta.ID, NamaSemester: "Ganjil", TanggalMulai: ta.TanggalMulai, TanggalSelesai: ganjilEnd}
+		tx.Create(&g)
+	} else {
+		tx.Model(&g).Updates(map[string]interface{}{
+			"tanggal_mulai":  ta.TanggalMulai,
+			"tanggal_selesai": ganjilEnd,
+		})
+	}
+
+	// Upsert Genap
+	var ge Semester
+	if tx.Where("tahun_ajaran_id = ? AND nama_semester = ?", ta.ID, "Genap").First(&ge).Error != nil {
+		ge = Semester{TahunAjaranID: ta.ID, NamaSemester: "Genap", TanggalMulai: genapStart, TanggalSelesai: ta.TanggalSelesai}
+		tx.Create(&ge)
+	} else {
+		tx.Model(&ge).Updates(map[string]interface{}{
+			"tanggal_mulai":  genapStart,
+			"tanggal_selesai": ta.TanggalSelesai,
+		})
+	}
+}
+
+func (s *Server) crudSemester(r fiber.Router) {
+	r.Get("/semester", func(c *fiber.Ctx) error {
+		q := s.db.Preload("TahunAjaran").Order("tahun_ajaran_id desc, nama_semester asc")
+		if v := c.Query("tahunAjaranId"); v != "" {
+			q = q.Where("tahun_ajaran_id = ?", v)
+		}
+		var rows []Semester
+		if e := q.Find(&rows).Error; e != nil {
+			return e
+		}
+		return c.JSON(rows)
+	})
+	r.Put("/semester/:id", s.updateSemester)
+}
+
+func (s *Server) updateSemester(c *fiber.Ctx) error {
+	var row Semester
+	if e := s.db.First(&row, "id = ?", id(c)).Error; e != nil {
+		return fiber.NewError(404, "record not found")
+	}
+	var in struct {
+		TanggalMulai   *string `json:"tanggalMulai"`
+		TanggalSelesai *string `json:"tanggalSelesai"`
+		IsArchived     *bool   `json:"isArchived"`
+	}
+	if e := c.BodyParser(&in); e != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if in.TanggalMulai != nil {
+		t, e := time.Parse("2006-01-02", *in.TanggalMulai)
+		if e != nil {
+			return fiber.NewError(400, "format tanggalMulai tidak valid (YYYY-MM-DD)")
+		}
+		row.TanggalMulai = t
+	}
+	if in.TanggalSelesai != nil {
+		t, e := time.Parse("2006-01-02", *in.TanggalSelesai)
+		if e != nil {
+			return fiber.NewError(400, "format tanggalSelesai tidak valid (YYYY-MM-DD)")
+		}
+		row.TanggalSelesai = t
+	}
+	if in.IsArchived != nil {
+		row.IsArchived = *in.IsArchived
+	}
+	uid := c.Locals("userID").(string)
+	if e := s.db.Save(&row).Error; e != nil {
+		return e
+	}
+	s.audit(&uid, "update", "semester", row.NamaSemester)
+	return c.JSON(row)
+}
+
 func (s *Server) createUser(c *fiber.Ctx) error {
 	var in struct {
 		Username, Email, Password, Role string
@@ -6039,14 +6139,31 @@ func (s *Server) semester(t time.Time) string {
 		t = t.In(loc)
 	}
 	var ta TahunAjaran
-	if s.db.Where("is_aktif = ?", true).First(&ta).Error == nil &&
-		ta.TanggalMulaiSemesterGenap != nil && !ta.TanggalMulaiSemesterGenap.IsZero() {
-		genap := ta.TanggalMulaiSemesterGenap.In(loc)
-		if t.Before(genap) {
-			return "Ganjil"
+	if s.db.Where("is_aktif = ?", true).First(&ta).Error == nil {
+		// Cari semester yang mencakup waktu t
+		var sems []Semester
+		s.db.Where("tahun_ajaran_id = ?", ta.ID).Find(&sems)
+		for _, sem := range sems {
+			mulai := sem.TanggalMulai
+			selesai := sem.TanggalSelesai
+			if loc != nil {
+				mulai = mulai.In(loc)
+				selesai = selesai.In(loc)
+			}
+			if !t.Before(mulai) && !t.After(selesai) {
+				return sem.NamaSemester
+			}
 		}
-		return "Genap"
+		// Fallback: gunakan tanggalMulaiSemesterGenap bila ada
+		if ta.TanggalMulaiSemesterGenap != nil && !ta.TanggalMulaiSemesterGenap.IsZero() {
+			genap := ta.TanggalMulaiSemesterGenap.In(loc)
+			if t.Before(genap) {
+				return "Ganjil"
+			}
+			return "Genap"
+		}
 	}
+	// Legacy fallback
 	if t.Month() >= 7 {
 		return "Ganjil"
 	}
