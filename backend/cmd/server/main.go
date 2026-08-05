@@ -789,7 +789,8 @@ func main() {
 	api.Get("/backup/download", s.backupReadAuth, s.downloadBackup)
 	api.Get("/backup/file/:name", s.backupReadAuth, s.downloadBackupFile)
 	// Public Ujian Online page & API — no auth. Siswa masuk via NISN + Kode Akses.
-	api.Get("/ujian-online/page", s.serveUjianOnlinePage)
+	api.Get("/ujian", s.serveUjianOnlinePage)
+	api.Get("/ujian-online/page", s.serveUjianOnlinePage) // backward compat redirect
 	api.Post("/ujian-online/cek", s.cekUjianOnline)
 	api.Post("/ujian-online/:ujianId/mulai", s.mulaiUjianOnline)
 	api.Get("/ujian-online/:ujianId/soal", s.getSoalUjianOnline)
@@ -798,7 +799,8 @@ func main() {
 	api.Post("/ujian-online/:ujianId/tab-switch", s.tabSwitchUjianOnline)
 	// Public Orang Tua login endpoint — no JWT; login by NISN + Tanggal Lahir.
 	api.Post("/orang-tua/login", s.loginOrangTua)
-	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage)
+	api.Get("/orangtua", s.serveOrangTuaPortalPage)
+	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage) // backward compat redirect
 	// SSE notification stream — accepts token via query param (EventSource can't set Authorization headers)
 	api.Get("/notifikasi/stream", s.streamNotifikasi)
 	protected := api.Group("", s.auth)
