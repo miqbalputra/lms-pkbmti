@@ -15,124 +15,169 @@ var ujianOnlineHTML = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ujian Online — PKBM Tunas Ilmu</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--brand:#1c5740;--gold:#d4af37;--bg:#f5f7f6;--card:#fff;--border:#e5e7eb;--text:#222;--muted:#666;--success:#16a34a;--danger:#dc2626;--warning:#f59e0b}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-.wrap{max-width:800px;margin:0 auto;padding:16px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:16px}
-.head{background:var(--brand);color:#fff;padding:20px 24px}
-.head .org{font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.85}
-.head .name{font-size:20px;font-weight:700;margin-top:2px}
-.gold{height:3px;background:var(--gold)}
-.pad{padding:24px}
-h1{font-size:20px;margin:0 0 16px}
-h2{font-size:17px;margin:0 0 12px}
-label{display:block;font-size:13px;font-weight:600;margin-bottom:4px;color:var(--muted)}
-input,select{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-size:14px;margin-bottom:12px}
-input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(28,87,64,.1)}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:10px;border:none;font-weight:600;font-size:14px;cursor:pointer;transition:all .15s}
-.btn-primary{background:var(--brand);color:#fff}.btn-primary:hover{opacity:.9}
-.btn-success{background:var(--success);color:#fff}.btn-success:hover{opacity:.9}
-.btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{opacity:.9}
-.btn-outline{background:#fff;border:1px solid var(--border);color:var(--text)}.btn-outline:hover{background:#f9fafb}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-.error{background:#fef2f2;border:1px solid #fecaca;color:var(--danger);padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:12px;display:none}
-.error.show{display:block}
-.timer{font-size:24px;font-weight:700;color:var(--brand);text-align:center;padding:12px;background:#f0fdf4;border-radius:10px;margin-bottom:16px}
-.timer.warning{color:var(--warning);background:#fffbeb}
-.timer.danger{color:var(--danger);background:#fef2f2}
-@media(max-width:640px){
-  .wrap{padding:8px}
-  .pad{padding:16px}
-  h1{font-size:18px}
-  .timer{font-size:20px;padding:10px}
-  .option{padding:8px 10px;font-size:13px}
-  .btn{padding:8px 14px;font-size:13px}
+:root{
+  --background:#ffffff;--foreground:#0a0a0a;
+  --card:#ffffff;--card-foreground:#0a0a0a;
+  --primary:#18181b;--primary-foreground:#fafafa;
+  --secondary:#f4f4f5;--secondary-foreground:#18181b;
+  --muted:#f4f4f5;--muted-foreground:#71717a;
+  --accent:#f4f4f5;--accent-foreground:#18181b;
+  --destructive:#ef4444;--destructive-foreground:#fafafa;
+  --border:#e4e4e7;--input:#e4e4e7;--ring:#18181b;
+  --radius:0.5rem;
+  --success:#22c55e;--warning:#f59e0b;
 }
-.exam-item{border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px;transition:all .15s}
-.exam-item:hover{border-color:var(--brand);box-shadow:0 2px 8px rgba(0,0,0,.08)}
-.exam-item h3{font-size:16px;margin:0 0 4px}
-.exam-item .meta{font-size:13px;color:var(--muted);margin:0 0 12px}
-.exam-item .actions{display:flex;gap:8px;align-items:center}
-.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
-.badge-done{background:#dcfce7;color:var(--success)}
-.badge-active{background:#dbeafe;color:#2563eb}
-.question{border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px}
-.question .num{font-weight:700;color:var(--brand);margin-bottom:8px}
-.question .text{font-size:15px;line-height:1.6;margin-bottom:12px}
-.option{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;cursor:pointer;transition:all .15s}
-.option:hover{border-color:var(--brand);background:#f0fdf4}
-.option.selected{border-color:var(--brand);background:#dcfce7}
-.option input{margin:0}
-.progress{height:6px;background:var(--border);border-radius:3px;margin-bottom:16px;overflow:hidden}
-.progress-bar{height:100%;background:var(--brand);border-radius:3px;transition:width .3s}
-.hidden{display:none}
-.result-box{text-align:center;padding:32px}
-.result-box .score{font-size:48px;font-weight:800;color:var(--brand)}
-.result-box .label{font-size:14px;color:var(--muted);margin-top:4px}
-.result-box .detail{margin-top:16px;font-size:15px;line-height:1.8}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--background);color:var(--foreground);min-height:100vh;-webkit-font-smoothing:antialiased}
+.wrap{max-width:480px;margin:0 auto;padding:24px 16px}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 1px 2px 0 rgb(0 0 0 / 0.05);overflow:hidden}
+.card-header{padding:24px 24px 0}
+.card-content{padding:24px}
+.card-footer{padding:0 24px 24px;display:flex;gap:8px}
+
+h1{font-size:18px;font-weight:600;letter-spacing:-0.025em;margin:0}
+p.desc{font-size:14px;color:var(--muted-foreground);margin-top:1.5px}
+
+.form-group{margin-bottom:16px}
+.form-group:last-child{margin-bottom:0}
+label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(--foreground)}
+.input{width:100%;height:36px;padding:0 12px;border:1px solid var(--input);border-radius:var(--radius);font-size:14px;font-family:inherit;background:var(--background);color:var(--foreground);transition:border-color .15s,box-shadow .15s}
+.input:focus{outline:none;border-color:var(--ring);box-shadow:0 0 0 2px rgba(24,24,27,.1)}
+.input::placeholder{color:var(--muted-foreground)}
+.input-mono{font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.15em;font-size:16px;text-transform:uppercase}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;height:36px;padding:0 16px;border-radius:var(--radius);font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;transition:background .15s,border-color .15s,color .15s;border:1px solid transparent;text-decoration:none}
+.btn:disabled{opacity:.5;pointer-events:none}
+.btn-primary{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+.btn-primary:hover{background:#27272a}
+.btn-outline{background:var(--background);color:var(--foreground);border-color:var(--input)}
+.btn-outline:hover{background:var(--accent);color:var(--accent-foreground)}
+.btn-destructive{background:var(--destructive);color:var(--destructive-foreground)}
+.btn-destructive:hover{opacity:.9}
+.btn-ghost{background:transparent;color:var(--foreground);border-color:transparent}
+.btn-ghost:hover{background:var(--accent);color:var(--accent-foreground)}
+.btn-success{background:var(--success);color:#fff;border-color:var(--success)}
+.btn-success:hover{opacity:.9}
+.btn-sm{height:32px;padding:0 12px;font-size:13px}
+.btn-lg{height:40px;padding:0 24px}
+
+.error-box{background:#fef2f2;border:1px solid #fecaca;color:var(--destructive);padding:10px 14px;border-radius:var(--radius);font-size:13px;margin-bottom:16px;display:none}
+.error-box.show{display:block}
+
+.timer{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;text-align:center;padding:12px;border-radius:var(--radius);margin-bottom:16px;background:var(--secondary);color:var(--foreground);letter-spacing:-0.025em}
+.timer.warning{color:var(--warning);background:#fefce8;border:1px solid #fef08a}
+.timer.danger{color:var(--destructive);background:#fef2f2;border:1px solid #fecaca}
+
+.progress{height:6px;background:var(--secondary);border-radius:3px;margin-bottom:16px;overflow:hidden}
+.progress-bar{height:100%;background:var(--primary);border-radius:3px;transition:width .3s}
+
+.badge{display:inline-flex;align-items:center;border-radius:9999px;padding:2px 8px;font-size:11px;font-weight:600;line-height:1}
+.badge-default{background:var(--primary);color:var(--primary-foreground)}
+.badge-secondary{background:var(--secondary);color:var(--secondary-foreground);border:1px solid var(--border)}
+.badge-success{background:#dcfce7;color:#166534}
+.badge-outline{background:transparent;color:var(--foreground);border:1px solid var(--border)}
+
+.exam-item{border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:8px;transition:border-color .15s,box-shadow .15s}
+.exam-item:hover{border-color:#a1a1aa;box-shadow:0 1px 3px 0 rgb(0 0 0 / 0.1)}
+.exam-item h3{font-size:15px;font-weight:600;margin:0 0 4px}
+.exam-meta{font-size:13px;color:var(--muted-foreground);display:flex;flex-wrap:wrap;gap:4px 12px;margin:0 0 12px}
+
+.question-card{border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:8px}
+.question-num{font-size:13px;font-weight:600;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px}
+.question-text{font-size:15px;line-height:1.6;margin-bottom:16px;color:var(--foreground)}
+
+.option{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;cursor:pointer;transition:all .15s;background:var(--background)}
+.option:hover{border-color:#a1a1aa;background:var(--secondary)}
+.option.selected{border-color:var(--primary);background:var(--secondary);box-shadow:0 0 0 1px var(--primary)}
+.option input[type="radio"]{width:16px;height:16px;margin:0;accent-color:var(--primary);flex-shrink:0}
+.option-label{font-size:14px;line-height:1.5}
+
+.textarea{width:100%;min-height:120px;padding:12px;border:1px solid var(--input);border-radius:var(--radius);font-size:14px;font-family:inherit;resize:vertical;background:var(--background);color:var(--foreground);transition:border-color .15s,box-shadow .15s}
+.textarea:focus{outline:none;border-color:var(--ring);box-shadow:0 0 0 2px rgba(24,24,27,.1)}
+
+.nav-buttons{display:flex;gap:8px;margin-top:16px}
+
+.result-box{text-align:center;padding:32px 16px}
+.result-score{font-size:56px;font-weight:700;color:var(--foreground);letter-spacing:-0.025em;line-height:1}
+.result-label{font-size:14px;color:var(--muted-foreground);margin-top:4px}
+.result-detail{margin-top:20px;font-size:14px;color:var(--muted-foreground);line-height:1.8}
+.result-detail strong{color:var(--foreground);font-weight:600}
+
+.hidden{display:none!important}
+@media(max-width:640px){.wrap{padding:12px 8px}.card-content{padding:16px}.card-header{padding:16px 16px 0}.card-footer{padding:0 16px 16px}.timer{font-size:22px}}
 </style>
 </head>
 <body>
 <div class="wrap">
-<!-- Login Form -->
+
+<!-- Login -->
 <div id="loginCard" class="card">
-<div class="head"><div class="org">PKBM Tunas Ilmu</div><div class="name">Ujian Online</div></div>
-<div class="gold"></div>
-<div class="pad">
-<h1>Masuk Ujian Online</h1>
-<div id="loginError" class="error"></div>
-<div id="loginForm">
-<label>NISN (Nomor Induk Siswa Nasional)</label>
-<input type="text" id="nisn" placeholder="Masukkan NISN" maxlength="20" autocomplete="off">
-<label>Kode Akses Ujian</label>
-<input type="text" id="aksesKode" placeholder="Masukkan kode akses dari guru" maxlength="50" autocomplete="off">
-<button class="btn btn-primary" onclick="cekUjian()" id="cekBtn">Cari Ujian</button>
-</div>
-</div>
+  <div class="card-header"><h1>Masuk Ujian Online</h1><p class="desc">Masukkan NISN dan kode akses dari guru Anda.</p></div>
+  <div class="card-content">
+    <div id="loginError" class="error-box"></div>
+    <div class="form-group">
+      <label for="nisn">NISN</label>
+      <input class="input" type="text" id="nisn" placeholder="Nomor Induk Siswa Nasional" maxlength="20" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="aksesKode">Kode Akses</label>
+      <input class="input input-mono" type="text" id="aksesKode" placeholder="XXXXXX" maxlength="6" autocomplete="off" style="text-transform:uppercase">
+    </div>
+  </div>
+  <div class="card-footer">
+    <button class="btn btn-primary btn-lg" onclick="cekUjian()" id="cekBtn" style="width:100%">Cari Ujian</button>
+  </div>
 </div>
 
 <!-- Exam List -->
 <div id="listCard" class="card hidden">
-<div class="head"><div class="org">PKBM Tunas Ilmu</div><div class="name">Daftar Ujian</div></div>
-<div class="gold"></div>
-<div class="pad">
-<h1>Ujian Tersedia</h1>
-<p style="color:var(--muted);font-size:13px;margin-bottom:16px">NISN: <strong id="displayNisn"></strong></p>
-<div id="examList"></div>
-<button class="btn btn-outline" onclick="showLogin()" style="margin-top:8px">Ganti Akun</button>
-</div>
+  <div class="card-header"><h1>Daftar Ujian</h1><p class="desc">NISN: <strong id="displayNisn"></strong></p></div>
+  <div class="card-content">
+    <div id="examList"></div>
+  </div>
+  <div class="card-footer">
+    <button class="btn btn-outline" onclick="showLogin()" style="width:100%">Ganti Akun</button>
+  </div>
 </div>
 
 <!-- Exam Taking -->
 <div id="examCard" class="card hidden">
-<div class="head"><div class="org">PKBM Tunas Ilmu</div><div class="name" id="examTitle">Ujian</div></div>
-<div class="gold"></div>
-<div class="pad">
-<div class="timer" id="timer">00:00:00</div>
-<div class="progress"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
-<p style="font-size:13px;color:var(--muted);margin-bottom:12px">Soal <span id="soalNum">0</span> / <span id="soalTotal">0</span></p>
-<div id="soalContainer"></div>
-<div style="display:flex;gap:8px;margin-top:16px">
-<button class="btn btn-outline" onclick="prevSoal()" id="prevBtn" disabled>Sebelumnya</button>
-<button class="btn btn-primary" onclick="nextSoal()" id="nextBtn">Selanjutnya</button>
-<button class="btn btn-success hidden" onclick="selesaiUjian()" id="selesaiBtn">Selesai Ujian</button>
-</div>
-</div>
+  <div class="card-header">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h1 id="examTitle">Ujian</h1>
+      <span class="badge badge-secondary" id="soalBadge">0/0</span>
+    </div>
+  </div>
+  <div class="card-content">
+    <div class="timer" id="timer">00:00:00</div>
+    <div class="progress"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+    <div id="soalContainer"></div>
+    <div class="nav-buttons">
+      <button class="btn btn-outline" onclick="prevSoal()" id="prevBtn" disabled style="flex:0 0 auto">Sebelumnya</button>
+      <button class="btn btn-primary" onclick="nextSoal()" id="nextBtn" style="flex:1">Selanjutnya</button>
+      <button class="btn btn-success hidden" onclick="selesaiUjian()" id="selesaiBtn" style="flex:1">Selesai</button>
+    </div>
+  </div>
 </div>
 
 <!-- Result -->
 <div id="resultCard" class="card hidden">
-<div class="head"><div class="org">PKBM Tunas Ilmu</div><div class="name">Hasil Ujian</div></div>
-<div class="gold"></div>
-<div class="pad result-box">
-<div class="score" id="scoreValue">0</div>
-<div class="label">Nilai Anda</div>
-<div class="detail" id="scoreDetail"></div>
-<button class="btn btn-primary" onclick="showLogin()" style="margin-top:24px">Kembali ke Awal</button>
+  <div class="card-header"><h1>Hasil Ujian</h1></div>
+  <div class="card-content">
+    <div class="result-box">
+      <div class="result-score" id="scoreValue">0</div>
+      <div class="result-label">Nilai Anda</div>
+      <div class="result-detail" id="scoreDetail"></div>
+    </div>
+  </div>
+  <div class="card-footer" style="justify-content:center">
+    <button class="btn btn-primary" onclick="showLogin()">Kembali ke Awal</button>
+  </div>
 </div>
-</div>
+
 </div>
 
 <script>
@@ -147,7 +192,7 @@ function showError(id,msg){const e=document.getElementById(id);e.textContent=msg
 async function cekUjian(){
 const nisn=document.getElementById('nisn').value.trim();
 const kode=document.getElementById('aksesKode').value.trim();
-if(!nisn||!kode){showError('loginError','NISN dan Kode Akses wajib diisi');return}
+if(!nisn||!kode){showError('loginError','NISN dan Kode Akses wajib diisi.');return}
 document.getElementById('loginError').classList.remove('show');
 document.getElementById('cekBtn').disabled=true;document.getElementById('cekBtn').textContent='Mencari...';
 try{
@@ -165,13 +210,12 @@ finally{document.getElementById('cekBtn').disabled=false;document.getElementById
 
 function renderExamList(){
 const c=document.getElementById('examList');
-if(!state.ujians.length){c.innerHTML='<p style="color:var(--muted)">Tidak ada ujian aktif.</p>';return}
+if(!state.ujians.length){c.innerHTML='<p style="color:var(--muted-foreground);font-size:14px;text-align:center;padding:24px 0">Tidak ada ujian aktif untuk kode ini.</p>';return}
 c.innerHTML=state.ujians.map(u=>{
-const mulai=new Date(u.waktuMulai).toLocaleString('id-ID');
-const selesai=new Date(u.waktuSelesai).toLocaleString('id-ID');
-let badge='';
-if(u.sudahMengerjakan)badge='<span class="badge badge-done">Selesai</span>';
-return '<div class="exam-item"><h3>'+esc(u.judul)+'</h3><p class="meta">'+esc(u.mapel?.namaMapel||'')+' &middot; '+mulai+' &mdash; '+selesai+' &middot; '+u.durasiMenit+' menit '+badge+'</p><div class="actions"><button class="btn btn-primary" onclick="mulaiUjian(\''+u.id+'\')" '+(u.sudahMengerjakan?'disabled':'')+'>Mulai</button></div></div>'
+const mulai=new Date(u.waktuMulai).toLocaleString('id-ID',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+const selesai=new Date(u.waktuSelesai).toLocaleString('id-ID',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+let badge=u.sudahMengerjakan?'<span class="badge badge-success">Selesai</span>':'';
+return '<div class="exam-item"><h3>'+esc(u.judul)+'</h3><div class="exam-meta"><span>'+esc(u.mapel?.namaMapel||'')+'</span><span>'+u.durasiMenit+' menit</span><span>'+mulai+' — '+selesai+'</span></div><div style="display:flex;align-items:center;gap:8px">'+badge+'<button class="btn btn-primary btn-sm" onclick="mulaiUjian(\''+u.id+'\')" '+(u.sudahMengerjakan?'disabled':'')+'>Mulai</button></div></div>'
 }).join('');
 }
 
@@ -200,18 +244,17 @@ state.currentIdx=0;renderSoal();
 function renderSoal(){
 const total=state.soal.length;if(!total)return;
 const s=state.soal[state.currentIdx];
-document.getElementById('soalNum').textContent=state.currentIdx+1;
-document.getElementById('soalTotal').textContent=total;
+document.getElementById('soalBadge').textContent=(state.currentIdx+1)+'/'+total;
 document.getElementById('progressBar').style.width=((state.currentIdx+1)/total*100)+'%';
 const c=document.getElementById('soalContainer');
-let html='<div class="question"><div class="num">Soal '+(state.currentIdx+1)+'</div><div class="text">'+esc(s.pertanyaan)+'</div>';
+let html='<div class="question-card"><div class="question-num">Soal '+state.currentIdx+' dari '+total+'</div><div class="question-text">'+esc(s.pertanyaan)+'</div>';
 if(s.tipe==='pg'&&s.opsi){
 s.opsi.forEach((op,i)=>{
 const sel=state.jawaban[s.id]===String(i)?'selected':'';
-html+='<div class="option '+sel+'" onclick="jawab(\''+s.id+'','+i+')"><input type="radio" name="soal_'+s.id+'" '+(sel?'checked':'')+'><span><strong>'+String.fromCharCode(65+i)+'</strong>. '+esc(op)+'</span></div>';
+html+='<label class="option '+sel+'" onclick="jawab(\''+s.id+'','+i+')"><input type="radio" name="soal_'+s.id+'" '+(sel?'checked':'')+'><span class="option-label"><strong>'+String.fromCharCode(65+i)+'</strong>. '+esc(op)+'</span></label>';
 });
 }else{
-html+='<textarea style="width:100%;min-height:120px;padding:10px;border:1px solid var(--border);border-radius:10px;font-size:14px" oninput="jawabTeks(\''+s.id+'',this.value)" placeholder="Tulis jawaban Anda...">'+esc(state.jawaban[s.id]||'')+'</textarea>';
+html+='<textarea class="textarea" oninput="jawabTeks(\''+s.id+'',this.value)" placeholder="Tulis jawaban Anda di sini...">'+esc(state.jawaban[s.id]||'')+'</textarea>';
 }
 html+='</div>';
 c.innerHTML=html;
@@ -256,12 +299,11 @@ const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state
 const r=await fetch(API+'/ujian-online/'+state.currentUjian.id+'/selesai',{method:'POST',body:fd});
 const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
 document.getElementById('scoreValue').textContent=Math.round(d.skor||0);
-document.getElementById('scoreDetail').innerHTML='Benar: <strong>'+d.benar+'</strong> dari <strong>'+d.total+'</strong> poin soal<br>Status: <strong>Selesai</strong>';
+document.getElementById('scoreDetail').innerHTML='Benar: <strong>'+d.benar+'</strong> dari <strong>'+d.total+'</strong> soal<br>Status: <strong>Selesai</strong>';
 hide(document.getElementById('examCard'));show(document.getElementById('resultCard'));
 }catch(e){alert(e.message)}
 }
 
-// Anti-cheat: report tab switch
 document.addEventListener('visibilitychange',()=>{
 if(document.hidden&&state.currentUjian&&!document.getElementById('examCard').classList.contains('hidden')){
 const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);
