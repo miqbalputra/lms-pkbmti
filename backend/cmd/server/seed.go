@@ -237,6 +237,7 @@ func (s *Server) seedDummy() (string, error) {
 		s.db.Create(&ot)
 		pd := PesertaDidik{
 			Nama: sd.nama, JenisKelamin: sd.jk, NIS: sd.nis, NISN: sd.nisn, NIK: sd.nik,
+			TanggalLahir: timePtr(time.Date(2010+int(sd.nisn[0]-'0'), time.Month(1+int(sd.nisn[1]-'0')), 1+int(sd.nisn[2]-'0'), 0, 0, 0, 0, time.UTC)),
 			KelasID: kelasIDs[sd.kelas], PokjarID: pokjars["Pokjar Tunas Ilmu Pusat"], OrangTuaID: ot.ID,
 			ProgramID: strPtr(programs[sd.program]), Status: "aktif",
 		}

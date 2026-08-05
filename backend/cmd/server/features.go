@@ -709,28 +709,37 @@ func (s *Server) deleteKalenderEvent(c *fiber.Ctx) error {
 // Portal Orang Tua — login by NIK + NISN (no JWT), then JWT session
 // ============================================================================
 
-// loginOrangTua — POST /orang-tua/login {nik, nisn}
-// Authenticates parent by NIK (parent) + NISN (child), returns JWT with role=orang_tua.
+// loginOrangTua — POST /orang-tua/login {nisn, tanggalLahir}
+// Authenticates parent by NISN (child) + tanggal lahir (child), returns JWT with role=orang_tua.
 func (s *Server) loginOrangTua(c *fiber.Ctx) error {
 	var in struct {
-		NIK  string `json:"nik"`
-		NISN string `json:"nisn"`
+		NISN         string `json:"nisn"`
+		TanggalLahir string `json:"tanggalLahir"` // format: YYYY-MM-DD
 	}
-	if e := c.BodyParser(&in); e != nil || in.NIK == "" || in.NISN == "" {
-		return fiber.NewError(400, "NIK dan NISN wajib diisi")
+	if e := c.BodyParser(&in); e != nil || in.NISN == "" || in.TanggalLahir == "" {
+		return fiber.NewError(400, "NISN dan tanggal lahir wajib diisi")
+	}
+	// Parse tanggal lahir
+	tl, err := time.Parse("2006-01-02", in.TanggalLahir)
+	if err != nil {
+		return fiber.NewError(400, "Format tanggal lahir tidak valid (YYYY-MM-DD)")
 	}
 	// Find student by NISN
 	var pd PesertaDidik
 	if s.db.Preload("OrangTua").Preload("Kelas").Where("nisn = ?", in.NISN).First(&pd).Error != nil {
 		return fiber.NewError(401, "NISN tidak ditemukan")
 	}
-	// Verify NIK matches parent
+	// Verify tanggal lahir matches
+	if pd.TanggalLahir == nil {
+		return fiber.NewError(401, "Data tanggal lahir siswa belum diisi. Hubungi admin sekolah.")
+	}
+	if pd.TanggalLahir.Year() != tl.Year() || pd.TanggalLahir.Month() != tl.Month() || pd.TanggalLahir.Day() != tl.Day() {
+		return fiber.NewError(401, "Tanggal lahir tidak cocok")
+	}
+	// Check parent exists
 	ortu := pd.OrangTua
 	if ortu.ID == "" {
 		return fiber.NewError(401, "Peserta didik tidak memiliki data orang tua")
-	}
-	if ortu.NIKIbu != in.NIK && ortu.NIKAyah != in.NIK {
-		return fiber.NewError(401, "NIK tidak cocok dengan data orang tua")
 	}
 	// Find or create user account for this orang tua
 	var u User

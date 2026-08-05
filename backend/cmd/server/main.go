@@ -161,19 +161,20 @@ type PenugasanGuruMapel struct {
 }
 type PesertaDidik struct {
 	Base
-	Nama         string   `json:"nama"`
-	JenisKelamin string   `json:"jenisKelamin"`
-	NIS          string   `gorm:"uniqueIndex" json:"nis"`
-	NISN         string   `gorm:"uniqueIndex" json:"nisn"`
-	NIK          string   `json:"nik"` // NIK anak, wajib; keunikan dicek di handler
-	KelasID      string   `gorm:"index" json:"kelasId"`
-	PokjarID     string   `json:"pokjarId"`
-	OrangTuaID   string   `json:"orangTuaId"`
-	ProgramID    *string  `gorm:"index" json:"programId"` // Modul O — opsional
-	FotoPath     *string  `json:"fotoPath"`               // Modul P — foto kartu pelajar
-	Status       string   `gorm:"default:aktif" json:"status"`
-	Kelas        Kelas    `json:"kelas"`
-	OrangTua     OrangTua `json:"orangTua"`
+	Nama         string     `json:"nama"`
+	JenisKelamin string     `json:"jenisKelamin"`
+	NIS          string     `gorm:"uniqueIndex" json:"nis"`
+	NISN         string     `gorm:"uniqueIndex" json:"nisn"`
+	NIK          string     `json:"nik"` // NIK anak, wajib; keunikan dicek di handler
+	TanggalLahir *time.Time `json:"tanggalLahir"`
+	KelasID      string     `gorm:"index" json:"kelasId"`
+	PokjarID     string     `json:"pokjarId"`
+	OrangTuaID   string     `json:"orangTuaId"`
+	ProgramID    *string    `gorm:"index" json:"programId"` // Modul O — opsional
+	FotoPath     *string    `json:"fotoPath"`               // Modul P — foto kartu pelajar
+	Status       string     `gorm:"default:aktif" json:"status"`
+	Kelas        Kelas      `json:"kelas"`
+	OrangTua     OrangTua   `json:"orangTua"`
 }
 type RiwayatKelasPesertaDidik struct {
 	Base
@@ -784,7 +785,7 @@ func main() {
 	api.Post("/ujian-online/:ujianId/jawab", s.jawabSoal)
 	api.Post("/ujian-online/:ujianId/selesai", s.selesaiUjianOnline)
 	api.Post("/ujian-online/:ujianId/tab-switch", s.tabSwitchUjianOnline)
-	// Public Orang Tua login endpoint — no JWT; login by NIK + NISN.
+	// Public Orang Tua login endpoint — no JWT; login by NISN + Tanggal Lahir.
 	api.Post("/orang-tua/login", s.loginOrangTua)
 	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage)
 	// SSE notification stream — accepts token via query param (EventSource can't set Authorization headers)

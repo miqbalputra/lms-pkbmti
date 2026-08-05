@@ -127,16 +127,16 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 
 <!-- Login -->
 <div id="loginCard" class="card">
-  <div class="card-header"><h1>Portal Orang Tua</h1><p class="desc">Masukkan NIK Anda dan NISN anak untuk melihat data akademik.</p></div>
+  <div class="card-header"><h1>Portal Orang Tua</h1><p class="desc">Masukkan NISN anak dan tanggal lahir untuk melihat data akademik.</p></div>
   <div class="card-content">
     <div id="loginError" class="error-box"></div>
     <div class="form-group">
-      <label for="nik">NIK Orang Tua</label>
-      <input class="input" type="text" id="nik" placeholder="16 digit NIK" maxlength="20" inputmode="numeric" autocomplete="off">
-    </div>
-    <div class="form-group">
       <label for="nisn">NISN Anak</label>
       <input class="input" type="text" id="nisn" placeholder="Nomor Induk Siswa Nasional" maxlength="20" inputmode="numeric" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="tanggalLahir">Tanggal Lahir Anak</label>
+      <input class="input" type="date" id="tanggalLahir" autocomplete="off">
     </div>
   </div>
   <div class="card-footer">
@@ -188,13 +188,13 @@ function showPortal(){show(document.getElementById('portalCard'));hide(document.
 function showLogin(){show(document.getElementById('loginCard'));hide(document.getElementById('portalCard'));hide(document.getElementById('detailCard'));state.token='';state.anakId=''}
 
 async function doLogin(){
-const nik=document.getElementById('nik').value.trim();
 const nisn=document.getElementById('nisn').value.trim();
-if(!nik||!nisn){showError('loginError','NIK dan NISN wajib diisi.');return}
+const tanggalLahir=document.getElementById('tanggalLahir').value;
+if(!nisn||!tanggalLahir){showError('loginError','NISN dan tanggal lahir wajib diisi.');return}
 document.getElementById('loginError').classList.remove('show');
 document.getElementById('loginBtn').disabled=true;document.getElementById('loginBtn').textContent='Masuk...';
 try{
-const r=await fetch(API+'/orang-tua/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nik,nisn})});
+const r=await fetch(API+'/orang-tua/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nisn,tanggalLahir})});
 const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
 state.token=d.accessToken;
 await loadAnak();
