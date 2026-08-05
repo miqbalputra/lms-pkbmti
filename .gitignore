@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+backend/bin/
+backend/pkbm-server
+backend/pkbm-server.exe
+
+# Environment files
+.env
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Uploads (keep .gitkeep)
+backend/cmd/server/uploads/*
+!backend/cmd/server/uploads/.gitkeep
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Data files
+*.xlsx
+*.xls
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Test/build artifacts
+coverage/
+test-results/
