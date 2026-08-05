@@ -106,6 +106,17 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 
 .hidden{display:none!important}
 
+.offline-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.offline-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:32px 24px;max-width:360px;width:90%;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.15)}
+.offline-icon{width:56px;height:56px;margin:0 auto 16px;background:#fef2f2;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.offline-icon svg{width:28px;height:28px;color:var(--destructive)}
+.offline-title{font-size:17px;font-weight:600;margin:0 0 8px;color:var(--foreground)}
+.offline-desc{font-size:14px;color:var(--muted-foreground);margin:0 0 20px;line-height:1.5}
+.offline-status{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:var(--muted-foreground);margin-bottom:16px}
+.offline-dot{width:8px;height:8px;border-radius:50%;background:var(--destructive);animation:pulse 1.5s ease-in-out infinite}
+.offline-dot.online{background:var(--success)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
 @media(max-width:640px){
   .wrap{padding:12px 12px;padding:12px max(12px,env(safe-area-inset-left))}
   .card-header{padding:20px 16px 0}
@@ -202,9 +213,69 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 
 </div>
 
+<!-- Offline Popup -->
+<div id="offlineOverlay" class="offline-overlay hidden">
+  <div class="offline-box">
+    <div class="offline-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path><path d="M10.71 5.05A16 16 0 0 1 22.56 9"></path><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>
+    </div>
+    <div class="offline-status"><span class="offline-dot" id="offlineDot"></span><span id="offlineStatusText">Memeriksa koneksi...</span></div>
+    <p class="offline-title">Akses Internet Terputus</p>
+    <p class="offline-desc">Jawaban Anda tersimpan secara lokal. Sambungkan ulang untuk menyinkronkan dengan server.</p>
+    <button class="btn btn-primary btn-lg" onclick="reconnect()" id="reconnectBtn" style="width:100%">Sambungkan Ulang</button>
+  </div>
+</div>
+
+<!-- Connection Restored Toast -->
+<div id="toastReconnect" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--success);color:#fff;padding:12px 20px;border-radius:var(--radius);font-size:14px;font-weight:500;z-index:10000;box-shadow:0 4px 12px rgba(0,0,0,.15);display:none">Koneksi tersambung kembali</div>
+
 <script>
 const API='/api';
-let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,ujianPesertaId:'',soal:[],jawaban:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null};
+let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,ujianPesertaId:'',soal:[],jawaban:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[]};
+
+// --- Connectivity Detection ---
+let isOnline=navigator.onLine;
+function updateOnlineStatus(){
+  const wasOnline=isOnline;isOnline=navigator.onLine;
+  if(!isOnline){showOfflinePopup()}
+  else if(!wasOnline&&isOnline){hideOfflinePopup();onReconnect()}
+}
+window.addEventListener('online',()=>{document.getElementById('offlineStatusText').textContent='Menyambungkan...';document.getElementById('offlineDot').className='offline-dot online';setTimeout(updateOnlineStatus,500)});
+window.addEventListener('offline',updateOnlineStatus);
+
+function showOfflinePopup(){
+  document.getElementById('offlineDot').className='offline-dot';
+  document.getElementById('offlineStatusText').textContent='Internet terputus';
+  show(document.getElementById('offlineOverlay'));
+}
+function hideOfflinePopup(){hide(document.getElementById('offlineOverlay'));document.getElementById('toastReconnect').style.display='block';setTimeout(()=>{document.getElementById('toastReconnect').style.display='none'},3000)}
+
+function onReconnect(){
+  // Sync queued jawaban
+  while(state.offlineQueue.length){
+    const j=state.offlineQueue.shift();sendJawaban(j.soalId,j.val);
+  }
+  // Reload soal to sync with server
+  if(state.currentUjian){loadSoal(state.currentUjian.id).catch(()=>{})}
+}
+
+async function reconnect(){
+  const btn=document.getElementById('reconnectBtn');btn.disabled=true;btn.textContent='Menyambungkan...';
+  try{
+    // Test connection
+    const r=await fetch(API+'/health');if(!r.ok)throw new Error();
+    // If in exam, reload soal
+    if(state.currentUjian){
+      await loadSoal(state.currentUjian.id);
+      hideOfflinePopup();
+      document.getElementById('toastReconnect').style.display='block';
+      setTimeout(()=>{document.getElementById('toastReconnect').style.display='none'},3000);
+    }
+  }catch(e){
+    document.getElementById('offlineStatusText').textContent='Masih tidak ada koneksi';
+    document.getElementById('offlineDot').className='offline-dot';
+  }finally{btn.disabled=false;btn.textContent='Sambungkan Ulang'}
+}
 
 function show(el){el.classList.remove('hidden')}
 function hide(el){el.classList.add('hidden')}
@@ -295,13 +366,16 @@ document.getElementById('selesaiBtn').classList.toggle('hidden',state.currentIdx
 
 function jawab(soalId,val){
 state.jawaban[soalId]=String(val);
-const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);fd.append('ujianSoalId',soalId);fd.append('jawaban',String(val));
-fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd}).catch(()=>{});
+sendJawaban(soalId,String(val));
 renderSoal();
 }
 function jawabTeks(soalId,val){state.jawaban[soalId]=val;
+sendJawaban(soalId,val);
+}
+function sendJawaban(soalId,val){
+if(!isOnline){state.offlineQueue.push({soalId,val});return}
 const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);fd.append('ujianSoalId',soalId);fd.append('jawaban',val);
-fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd}).catch(()=>{});
+fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd}).catch(()=>{state.offlineQueue.push({soalId,val})});
 }
 function prevSoal(){if(state.currentIdx>0){state.currentIdx--;renderSoal()}}
 function nextSoal(){if(state.currentIdx<state.soal.length-1){state.currentIdx++;renderSoal()}}
@@ -343,6 +417,7 @@ if(sisaG<=0){clearInterval(state.timerInterval);selesaiUjian(true)}
 
 async function selesaiUjian(auto){
 if(!auto&&!confirm('Yakin ingin menyelesaikan ujian?'))return;
+if(!isOnline){showOfflinePopup();return}
 clearInterval(state.timerInterval);
 try{
 const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);
