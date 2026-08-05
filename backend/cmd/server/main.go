@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -1147,6 +1148,10 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 		return fail("Gagal mengambil info akun Google.")
 	}
 	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 512))
+		return fail(fmt.Sprintf("Google userinfo gagal (HTTP %d): %s", r.StatusCode, string(body)))
+	}
 	var info struct {
 		Sub           string `json:"sub"`
 		Email         string `json:"email"`
