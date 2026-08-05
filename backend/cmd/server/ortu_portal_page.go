@@ -132,7 +132,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     <div id="loginError" class="error-box"></div>
     <div class="form-group">
       <label for="nisn">NISN Anak</label>
-      <input class="input" type="text" id="nisn" placeholder="Nomor Induk Siswa Nasional" maxlength="20" inputmode="numeric" autocomplete="off">
+      <input class="input" type="text" id="nisn" placeholder="10 digit NISN" maxlength="10" inputmode="numeric" autocomplete="off">
     </div>
     <div class="form-group">
       <label for="tanggalLahir">Tanggal Lahir Anak</label>
