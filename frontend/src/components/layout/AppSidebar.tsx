@@ -14,6 +14,7 @@ import {
   GraduationCap,
   IdCard,
   LayoutDashboard,
+  Monitor,
   School,
   Settings,
   ShieldCheck,
@@ -41,6 +42,7 @@ export const NAV_GROUPS: NavGroup[] = [
     groupLabel: 'MENU UTAMA',
     items: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'kalender', label: 'Kalender Akademik', icon: CalendarDays, roles: ['admin', 'kepala_sekolah', 'guru'] },
     ],
   },
   {
@@ -98,6 +100,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'bank-soal', label: 'Bank Soal', icon: BookOpen, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'ujian', label: 'Ujian (Luring)', icon: ClipboardList, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'ujian-online', label: 'Ujian Online', icon: Monitor, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'ujian-monitor', label: 'Monitor Ujian', icon: Monitor, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'sertifikat', label: 'Sertifikat', icon: Award, roles: ['admin', 'kepala_sekolah'] },
       { id: 'kartu-pelajar', label: 'Kartu Pelajar', icon: IdCard, roles: ['admin', 'kepala_sekolah', 'guru'] },
     ],
@@ -106,6 +110,7 @@ export const NAV_GROUPS: NavGroup[] = [
     groupLabel: 'LAPORAN & IMPORT',
     items: [
       { id: 'laporan', label: 'Pusat Laporan', icon: FileBarChart, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'analytics', label: 'Analytics Dashboard', icon: FileBarChart, roles: ['admin', 'kepala_sekolah'] },
       { id: 'import', label: 'Import Terpusat', icon: FileUp, roles: ['admin', 'guru'] },
     ],
   },

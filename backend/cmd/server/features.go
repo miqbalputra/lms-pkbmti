@@ -1,0 +1,759 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+)
+
+// ============================================================================
+// Ujian Online — public endpoints (no JWT; authenticated by NISN + AksesKode)
+// ============================================================================
+
+// ujianOnlineAuth validates NISN + AksesKode and returns the PesertaDidik if valid.
+func (s *Server) ujianOnlineAuth(c *fiber.Ctx) (*PesertaDidik, error) {
+	nisn := strings.TrimSpace(c.Query("nisn"))
+	if nisn == "" {
+		nisn = strings.TrimSpace(c.FormValue("nisn"))
+	}
+	kode := strings.TrimSpace(c.Query("aksesKode"))
+	if kode == "" {
+		kode = strings.TrimSpace(c.FormValue("aksesKode"))
+	}
+	if nisn == "" || kode == "" {
+		return nil, fiber.NewError(400, "NISN dan Kode Akses wajib diisi")
+	}
+	var pd PesertaDidik
+	if s.db.Preload("Kelas").Where("nisn = ? AND status = ?", nisn, "aktif").First(&pd).Error != nil {
+		return nil, fiber.NewError(401, "NISN tidak ditemukan atau tidak aktif")
+	}
+	return &pd, nil
+}
+
+// ujianOnlineKodeAuth validates NISN + AksesKode against a specific Ujian.
+func (s *Server) ujianOnlineKodeAuth(c *fiber.Ctx, ujianID string) (*PesertaDidik, *Ujian, error) {
+	pd, err := s.ujianOnlineAuth(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	var uj Ujian
+	if s.db.First(&uj, "id = ?", ujianID).Error != nil {
+		return nil, nil, fiber.NewError(404, "Ujian tidak ditemukan")
+	}
+	if uj.AksesKode == "" {
+		return nil, nil, fiber.NewError(403, "Ujian ini tidak memiliki kode akses")
+	}
+	if strings.TrimSpace(uj.AksesKode) != strings.TrimSpace(c.Query("aksesKode")) &&
+		strings.TrimSpace(uj.AksesKode) != strings.TrimSpace(c.FormValue("aksesKode")) {
+		return nil, nil, fiber.NewError(403, "Kode akses salah")
+	}
+	if pd.KelasID != uj.KelasID {
+		return nil, nil, fiber.NewError(403, "Anda tidak terdaftar di kelas ujian ini")
+	}
+	now := time.Now()
+	if now.Before(uj.WaktuMulai) {
+		return nil, nil, fiber.NewError(403, "Ujian belum dimulai")
+	}
+	if now.After(uj.WaktuSelesai) {
+		return nil, nil, fiber.NewError(403, "Ujian sudah berakhir")
+	}
+	return pd, &uj, nil
+}
+
+// cekUjianOnline — POST /ujian-online/cek {nisn, aksesKode}
+// Returns list of exams available for the student's class that match the access code.
+func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
+	nisn := strings.TrimSpace(c.FormValue("nisn"))
+	kode := strings.TrimSpace(c.FormValue("aksesKode"))
+	if nisn == "" || kode == "" {
+		return fiber.NewError(400, "NISN dan Kode Akses wajib diisi")
+	}
+	var pd PesertaDidik
+	if s.db.Where("nisn = ? AND status = ?", nisn, "aktif").First(&pd).Error != nil {
+		return fiber.NewError(401, "NISN tidak ditemukan atau tidak aktif")
+	}
+	var ujians []Ujian
+	s.db.Preload("Mapel").Preload("Kelas").
+		Where("akses_kode = ? AND kelas_id = ?", strings.TrimSpace(kode), pd.KelasID).
+		Where("waktu_mulai <= ? AND waktu_selesai >= ?", time.Now(), time.Now()).
+		Order("waktu_mulai desc").
+		Find(&ujians)
+	if len(ujians) == 0 {
+		return fiber.NewError(404, "Tidak ada ujian aktif dengan kode akses tersebut untuk kelas Anda")
+	}
+	// For each exam, check if student already has a UjianPeserta record
+	type ujianRes struct {
+		Ujian
+		SudahMengerjakan bool `json:"sudahMengerjakan"`
+		Skor             *float64 `json:"skor"`
+	}
+	var res []ujianRes
+	for _, uj := range ujians {
+		r := ujianRes{Ujian: uj, SudahMengerjakan: false, Skor: nil}
+		var up UjianPeserta
+		if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error == nil {
+			r.SudahMengerjakan = true
+			r.Skor = up.Skor
+		}
+		res = append(res, r)
+	}
+	return c.JSON(res)
+}
+
+// mulaiUjianOnline — POST /ujian-online/:ujianId/mulai {nisn, aksesKode}
+// Creates a UjianPeserta record (idempotent: returns existing if already started).
+func (s *Server) mulaiUjianOnline(c *fiber.Ctx) error {
+	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	// Idempotent: if already has a session, return it
+	var up UjianPeserta
+	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error == nil {
+		return c.JSON(up)
+	}
+	now := time.Now()
+	up = UjianPeserta{
+		UjianID:        uj.ID,
+		PesertaDidikID: pd.ID,
+		Mulai:          &now,
+		Status:         "mulai",
+	}
+	if e := s.db.Create(&up).Error; e != nil {
+		return fiber.NewError(500, "Gagal memulai ujian: "+e.Error())
+	}
+	return c.Status(201).JSON(up)
+}
+
+// getSoalUjianOnline — GET /ujian-online/:ujianId/soal?nisn=...&aksesKode=...
+// Returns shuffled soal list (without answers) for the exam.
+func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
+	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	// Check or create UjianPeserta
+	var up UjianPeserta
+	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
+		now := time.Now()
+		up = UjianPeserta{UjianID: uj.ID, PesertaDidikID: pd.ID, Mulai: &now, Status: "mulai"}
+		s.db.Create(&up)
+	}
+	if up.Status == "selesai" || up.Status == "dikunci" {
+		return fiber.NewError(403, "Anda sudah menyelesaikan ujian ini")
+	}
+	// Check if time is up
+	if up.Mulai != nil && uj.DurasiMenit > 0 {
+		batas := up.Mulai.Add(time.Duration(uj.DurasiMenit) * time.Minute)
+		if time.Now().After(batas) {
+			// Auto-finish
+			up.Status = "selesai"
+			up.Selesai = &time.Time{}
+			s.db.Save(&up)
+			return fiber.NewError(403, "Waktu ujian sudah habis")
+		}
+	}
+	var us []UjianSoal
+	s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Order("created_at").Find(&us)
+	// Shuffle if AcakSoal
+	order := us
+	if uj.AcakSoal {
+		seed := seedFromID(uj.ID)
+		cp := make([]UjianSoal, len(us))
+		copy(cp, us)
+		r := make([]int, len(us))
+		for i := range r {
+			r[i] = i
+		}
+		// deterministic shuffle
+		for i := len(r) - 1; i > 0; i-- {
+			seed = (seed*1103515245 + 12345) & 0x7fffffff
+			j := int(seed) % (i + 1)
+			r[i], r[j] = r[j], r[i]
+		}
+		shuffled := make([]UjianSoal, len(us))
+		for i, idx := range r {
+			shuffled[i] = cp[idx]
+		}
+		order = shuffled
+	}
+	// Build response: strip answers
+	type soalRes struct {
+		ID           string   `json:"id"`
+		UjianID      string   `json:"ujianId"`
+		Bobot        float64  `json:"bobot"`
+		Pertanyaan   string   `json:"pertanyaan"`
+		Tipe         string   `json:"tipe"`
+		Opsi         []string `json:"opsi"`
+		// Benar/Kunci are intentionally excluded
+	}
+	var res []soalRes
+	for _, item := range order {
+		r := soalRes{
+			ID:         item.ID,
+			UjianID:    item.UjianID,
+			Bobot:      item.Bobot,
+			Pertanyaan: item.Soal.Pertanyaan,
+			Tipe:       item.Soal.Tipe,
+		}
+		if item.Soal.Tipe == "pg" && item.Soal.Opsi != "" {
+			var opsi []string
+			if json.Unmarshal([]byte(item.Soal.Opsi), &opsi) == nil {
+				r.Opsi = opsi
+			}
+		}
+		res = append(res, r)
+	}
+	// Also return existing answers
+	type jawabanRes struct {
+		UjianSoalID string `json:"ujianSoalId"`
+		Jawaban     string `json:"jawaban"`
+	}
+	var jawabans []UjianJawaban
+	s.db.Where("ujian_peserta_id = ?", up.ID).Find(&jawabans)
+	var jawabanList []jawabanRes
+	for _, j := range jawabans {
+		jawabanList = append(jawabanList, jawabanRes{UjianSoalID: j.SoalID, Jawaban: j.Jawaban})
+	}
+	return c.JSON(fiber.Map{
+		"ujianPesertaId": up.ID,
+		"sisaWaktu":      s.sisaWaktu(&up, uj),
+		"soal":           res,
+		"jawaban":        jawabanList,
+	})
+}
+
+func (s *Server) sisaWaktu(up *UjianPeserta, uj *Ujian) int {
+	if up.Mulai == nil || uj.DurasiMenit == 0 {
+		return 0
+	}
+	batas := up.Mulai.Add(time.Duration(uj.DurasiMenit) * time.Minute)
+	sisa := time.Until(batas).Seconds()
+	if sisa < 0 {
+		return 0
+	}
+	return int(sisa)
+}
+
+// jawabSoal — POST /ujian-online/:ujianId/jawab {nisn, aksesKode, ujianSoalId, jawaban}
+func (s *Server) jawabSoal(c *fiber.Ctx) error {
+	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	var up UjianPeserta
+	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
+		return fiber.NewError(400, "Anda belum memulai ujian ini")
+	}
+	if up.Status == "selesai" || up.Status == "dikunci" {
+		return fiber.NewError(403, "Ujian sudah selesai")
+	}
+	// Check time
+	if up.Mulai != nil && uj.DurasiMenit > 0 {
+		batas := up.Mulai.Add(time.Duration(uj.DurasiMenit) * time.Minute)
+		if time.Now().After(batas) {
+			up.Status = "selesai"
+			s.db.Save(&up)
+			return fiber.NewError(403, "Waktu ujian sudah habis")
+		}
+	}
+	var in struct {
+		UjianSoalID string `json:"ujianSoalId"`
+		Jawaban     string `json:"jawaban"`
+	}
+	if e := c.BodyParser(&in); e != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if in.UjianSoalID == "" {
+		return fiber.NewError(400, "ujianSoalId wajib diisi")
+	}
+	// Verify the soal belongs to this ujian
+	var us UjianSoal
+	if s.db.Where("ujian_id = ? AND id = ?", uj.ID, in.UjianSoalID).First(&us).Error != nil {
+		return fiber.NewError(400, "Soal tidak ditemukan dalam ujian ini")
+	}
+	// Upsert jawaban
+	var jawaban UjianJawaban
+	if s.db.Where("ujian_peserta_id = ? AND soal_id = ?", up.ID, us.SoalID).First(&jawaban).Error == nil {
+		jawaban.Jawaban = in.Jawaban
+		s.db.Save(&jawaban)
+	} else {
+		jawaban = UjianJawaban{
+			UjianPesertaID: up.ID,
+			SoalID:         us.SoalID,
+			Jawaban:        in.Jawaban,
+		}
+		if e := s.db.Create(&jawaban).Error; e != nil {
+			return fiber.NewError(500, "Gagal menyimpan jawaban")
+		}
+	}
+	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+// selesaiUjianOnline — POST /ujian-online/:ujianId/selesai {nisn, aksesKode}
+// Auto-grades PG answers, computes score, returns result.
+func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
+	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	var up UjianPeserta
+	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
+		return fiber.NewError(400, "Anda belum memulai ujian ini")
+	}
+	if up.Status == "selesai" || up.Status == "dikunci" {
+		return fiber.NewError(403, "Ujian sudah selesai")
+	}
+	now := time.Now()
+	up.Selesai = &now
+	up.Status = "selesai"
+	// Auto-grade PG: compare jawaban with kunci, compute score
+	var jawabans []UjianJawaban
+	s.db.Where("ujian_peserta_id = ?", up.ID).Find(&jawabans)
+	var ujianSoals []UjianSoal
+	s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&ujianSoals)
+	// Build kunci map
+	kunciMap := map[string]string{}
+	for _, us := range ujianSoals {
+		kunciMap[us.SoalID] = us.Soal.Kunci
+	}
+	totalSkor := 0.0
+	totalBobot := 0.0
+	for i := range jawabans {
+		kunci := strings.TrimSpace(kunciMap[jawabans[i].SoalID])
+		jawaban := strings.TrimSpace(jawabans[i].Jawaban)
+		if kunci != "" && jawaban != "" {
+			// For PG: kunci is index (0..n), jawaban is also index
+			// For essay: case-insensitive contains check
+			if kunci == jawaban {
+				benar := true
+				jawabans[i].Benar = &benar
+				// Find bobot
+				for _, us := range ujianSoals {
+					if us.SoalID == jawabans[i].SoalID {
+						jawabans[i].Nilai = us.Bobot
+						totalSkor += us.Bobot
+						totalBobot += us.Bobot
+						break
+					}
+				}
+			} else {
+				benar := false
+				jawabans[i].Benar = &benar
+			}
+		}
+		s.db.Save(&jawabans[i])
+	}
+	// Compute total bobot
+	for _, us := range ujianSoals {
+		totalBobot += us.Bobot
+	}
+	// Avoid double-counting: recalculate properly
+	totalSkor = 0
+	totalBobot = 0
+	for i := range jawabans {
+		for _, us := range ujianSoals {
+			if us.SoalID == jawabans[i].SoalID {
+				totalBobot += us.Bobot
+				if jawabans[i].Benar != nil && *jawabans[i].Benar {
+					totalSkor += jawabans[i].Nilai
+				}
+				break
+			}
+		}
+	}
+	var skor float64
+	if totalBobot > 0 {
+		skor = (totalSkor / totalBobot) * 100
+	}
+	up.Skor = &skor
+	s.db.Save(&up)
+	return c.JSON(fiber.Map{
+		"skor":    skor,
+		"benar":   totalSkor,
+		"total":   totalBobot,
+		"status":  "selesai",
+	})
+}
+
+// tabSwitchUjianOnline — POST /ujian-online/:ujianId/tab-switch {nisn, aksesKode}
+func (s *Server) tabSwitchUjianOnline(c *fiber.Ctx) error {
+	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	var up UjianPeserta
+	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
+		return fiber.NewError(400, "Anda belum memulai ujian ini")
+	}
+	if up.Status == "selesai" || up.Status == "dikunci" {
+		return fiber.NewError(403, "Ujian sudah selesai")
+	}
+	up.TabSwitch++
+	s.db.Save(&up)
+	return c.JSON(fiber.Map{"tabSwitch": up.TabSwitch})
+}
+
+// ============================================================================
+// Monitoring Ujian Online — protected (teacher/admin only)
+// ============================================================================
+
+// monitorUjianOnline — GET /ujian-online/monitor/:ujianId
+func (s *Server) monitorUjianOnline(c *fiber.Ctx) error {
+	ujianID := c.Params("ujianId")
+	var uj Ujian
+	if s.db.First(&uj, "id = ?", ujianID).Error != nil {
+		return fiber.NewError(404, "Ujian tidak ditemukan")
+	}
+	if e := s.scopeUjian(c, &uj); e != nil {
+		return e
+	}
+	var pesertas []UjianPeserta
+	s.db.Preload("PesertaDidik").Where("ujian_id = ?", ujianID).Find(&pesertas)
+	return c.JSON(pesertas)
+}
+
+// ============================================================================
+// Notifikasi — protected (JWT)
+// ============================================================================
+
+func (s *Server) listNotifikasi(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	var rows []Notifikasi
+	s.db.Where("user_id = ?", uid).Order("created_at desc").Limit(50).Find(&rows)
+	return c.JSON(rows)
+}
+
+func (s *Server) unreadNotifikasiCount(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	var n int64
+	s.db.Model(&Notifikasi{}).Where("user_id = ? AND is_read = ?", uid, false).Count(&n)
+	return c.JSON(fiber.Map{"count": n})
+}
+
+func (s *Server) bacaNotifikasi(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	now := time.Now()
+	result := s.db.Model(&Notifikasi{}).
+		Where("id = ? AND user_id = ?", c.Params("id"), uid).
+		Updates(map[string]interface{}{"is_read": true, "dibaca_pada": now})
+	if result.RowsAffected == 0 {
+		return fiber.NewError(404, "Notifikasi tidak ditemukan")
+	}
+	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+func (s *Server) bacaSemuaNotifikasi(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	now := time.Now()
+	s.db.Model(&Notifikasi{}).
+		Where("user_id = ? AND is_read = ?", uid, false).
+		Updates(map[string]interface{}{"is_read": true, "dibaca_pada": now})
+	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+// ============================================================================
+// Kalender Akademik — protected (JWT)
+// ============================================================================
+
+func (s *Server) listKalenderEvent(c *fiber.Ctx) error {
+	q := s.db.Preload("TahunAjaran").Order("tanggal_mulai")
+	if v := c.Query("tahunAjaranId"); v != "" {
+		q = q.Where("tahun_ajaran_id = ?", v)
+	}
+	if v := c.Query("bulan"); v != "" {
+		// Filter by month (YYYY-MM)
+		q = q.Where("tanggal_mulai >= ? AND tanggal_mulai < ?",
+			v+"-01", v+"-32")
+	}
+	var rows []KalenderEvent
+	q.Find(&rows)
+	return c.JSON(rows)
+}
+
+func (s *Server) createKalenderEvent(c *fiber.Ctx) error {
+	role := c.Locals("role").(string)
+	if role != "admin" {
+		return fiber.NewError(403, "hanya admin yang dapat membuat event kalender")
+	}
+	uid := c.Locals("userID").(string)
+	var in struct {
+		Judul        string     `json:"judul"`
+		Deskripsi    string     `json:"deskripsi"`
+		TanggalMulai time.Time  `json:"tanggalMulai"`
+		TanggalSelesai *time.Time `json:"tanggalSelesai"`
+		Tipe         string     `json:"tipe"`
+		Warna        string     `json:"warna"`
+		Semester     *string    `json:"semester"`
+		TahunAjaranID *string   `json:"tahunAjaranId"`
+	}
+	if e := c.BodyParser(&in); e != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if in.Judul == "" || in.TanggalMulai.IsZero() {
+		return fiber.NewError(400, "judul dan tanggalMulai wajib diisi")
+	}
+	ev := KalenderEvent{
+		Judul:            in.Judul,
+		Deskripsi:        in.Deskripsi,
+		TanggalMulai:     in.TanggalMulai,
+		TanggalSelesai:   in.TanggalSelesai,
+		Tipe:             in.Tipe,
+		Warna:            in.Warna,
+		Semester:         in.Semester,
+		TahunAjaranID:    in.TahunAjaranID,
+		DibuatOlehUserID: uid,
+	}
+	if e := s.db.Create(&ev).Error; e != nil {
+		return fiber.NewError(400, e.Error())
+	}
+	s.audit(&uid, "create", "kalender", ev.ID)
+	return c.Status(201).JSON(ev)
+}
+
+func (s *Server) updateKalenderEvent(c *fiber.Ctx) error {
+	role := c.Locals("role").(string)
+	if role != "admin" {
+		return fiber.NewError(403, "hanya admin yang dapat mengubah event kalender")
+	}
+	uid := c.Locals("userID").(string)
+	var ev KalenderEvent
+	if s.db.First(&ev, "id = ?", c.Params("id")).Error != nil {
+		return fiber.NewError(404, "event tidak ditemukan")
+	}
+	var in struct {
+		Judul        string     `json:"judul"`
+		Deskripsi    string     `json:"deskripsi"`
+		TanggalMulai time.Time  `json:"tanggalMulai"`
+		TanggalSelesai *time.Time `json:"tanggalSelesai"`
+		Tipe         string     `json:"tipe"`
+		Warna        string     `json:"warna"`
+		Semester     *string    `json:"semester"`
+		TahunAjaranID *string   `json:"tahunAjaranId"`
+	}
+	if e := c.BodyParser(&in); e != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if in.Judul != "" {
+		ev.Judul = in.Judul
+	}
+	if in.Deskripsi != "" {
+		ev.Deskripsi = in.Deskripsi
+	}
+	if !in.TanggalMulai.IsZero() {
+		ev.TanggalMulai = in.TanggalMulai
+	}
+	if in.TanggalSelesai != nil {
+		ev.TanggalSelesai = in.TanggalSelesai
+	}
+	if in.Tipe != "" {
+		ev.Tipe = in.Tipe
+	}
+	if in.Warna != "" {
+		ev.Warna = in.Warna
+	}
+	if e := s.db.Save(&ev).Error; e != nil {
+		return fiber.NewError(400, e.Error())
+	}
+	s.audit(&uid, "update", "kalender", ev.ID)
+	return c.JSON(ev)
+}
+
+func (s *Server) deleteKalenderEvent(c *fiber.Ctx) error {
+	role := c.Locals("role").(string)
+	if role != "admin" {
+		return fiber.NewError(403, "hanya admin yang dapat menghapus event kalender")
+	}
+	uid := c.Locals("userID").(string)
+	if e := s.db.Delete(&KalenderEvent{}, "id = ?", c.Params("id")).Error; e != nil {
+		return fiber.NewError(400, e.Error())
+	}
+	s.audit(&uid, "delete", "kalender", c.Params("id"))
+	return c.SendStatus(204)
+}
+
+// ============================================================================
+// Portal Orang Tua — login by NIK + NISN (no JWT), then JWT session
+// ============================================================================
+
+// loginOrangTua — POST /orang-tua/login {nik, nisn}
+// Authenticates parent by NIK (parent) + NISN (child), returns JWT with role=orang_tua.
+func (s *Server) loginOrangTua(c *fiber.Ctx) error {
+	var in struct {
+		NIK  string `json:"nik"`
+		NISN string `json:"nisn"`
+	}
+	if e := c.BodyParser(&in); e != nil || in.NIK == "" || in.NISN == "" {
+		return fiber.NewError(400, "NIK dan NISN wajib diisi")
+	}
+	// Find student by NISN
+	var pd PesertaDidik
+	if s.db.Preload("OrangTua").Preload("Kelas").Where("nisn = ?", in.NISN).First(&pd).Error != nil {
+		return fiber.NewError(401, "NISN tidak ditemukan")
+	}
+	// Verify NIK matches parent
+	ortu := pd.OrangTua
+	if ortu.ID == "" {
+		return fiber.NewError(401, "Peserta didik tidak memiliki data orang tua")
+	}
+	if ortu.NIKIbu != in.NIK && ortu.NIKAyah != in.NIK {
+		return fiber.NewError(401, "NIK tidak cocok dengan data orang tua")
+	}
+	// Find or create user account for this orang tua
+	var u User
+	if s.db.Where("orang_tua_id = ? AND role = ?", ortu.ID, "orang_tua").First(&u).Error != nil {
+		// Auto-create user account
+		username := "ortu-" + strings.ToLower(strings.ReplaceAll(ortu.NamaIbu, " ", "."))
+		if username == "ortu-" {
+			username = "ortu-" + ortu.ID[:8]
+		}
+		hash, _ := bcryptHash("OrangTua123")
+		u = User{
+			Username:     username,
+			Email:        username + "@pkbm.local",
+			PasswordHash: hash,
+			Role:         "orang_tua",
+			OrangTuaID:   &ortu.ID,
+			IsActive:     true,
+		}
+		s.db.Create(&u)
+	}
+	if !u.IsActive {
+		return fiber.NewError(403, "Akun orang tua nonaktif")
+	}
+	access, e := s.token(u, s.cfg.AccessSecret, s.cfg.AccessTTL)
+	if e != nil {
+		return fiber.NewError(500, "gagal membuat token")
+	}
+	raw := uuid.NewString() + uuid.NewString()
+	s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)})
+	c.Cookie(&fiber.Cookie{
+		Name: "refresh_token", Value: raw, HTTPOnly: true,
+		Secure: s.cfg.Env == "production", SameSite: "Strict", Domain: s.cfg.CookieDomain,
+		Expires: time.Now().Add(s.cfg.RefreshTTL), Path: "/api/auth",
+	})
+	s.audit(&u.ID, "login", "orang_tua", "")
+	return c.JSON(fiber.Map{
+		"accessToken": access,
+		"user":        u,
+	})
+}
+
+// listAnakOrangTua — GET /orang-tua/anak
+func (s *Server) listAnakOrangTua(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	var u User
+	if s.db.First(&u, "id = ?", uid).Error != nil {
+		return fiber.NewError(401, "unauthorized")
+	}
+	if u.Role != "orang_tua" || u.OrangTuaID == nil {
+		return fiber.NewError(403, "akun ini bukan akun orang tua")
+	}
+	var anak []PesertaDidik
+	s.db.Preload("Kelas").Preload("Kelas.Pokjar").Where("orang_tua_id = ?", *u.OrangTuaID).Find(&anak)
+	return c.JSON(anak)
+}
+
+// getNilaiAnak — GET /orang-tua/anak/:id/nilai
+func (s *Server) getNilaiAnak(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	anakID := c.Params("id")
+	var u User
+	if s.db.First(&u, "id = ?", uid).Error != nil || u.OrangTuaID == nil {
+		return fiber.NewError(403, "akun ini bukan akun orang tua")
+	}
+	// Verify this child belongs to this parent
+	var pd PesertaDidik
+	if s.db.First(&pd, "id = ? AND orang_tua_id = ?", anakID, *u.OrangTuaID).Error != nil {
+		return fiber.NewError(403, "anak tidak terdaftar di bawah akun ini")
+	}
+	var rekap []RekapNilaiAkhir
+	s.db.Preload("Mapel").Where("peserta_didik_id = ?", anakID).Find(&rekap)
+	return c.JSON(rekap)
+}
+
+// getPresensiAnak — GET /orang-tua/anak/:id/presensi
+func (s *Server) getPresensiAnak(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	anakID := c.Params("id")
+	var u User
+	if s.db.First(&u, "id = ?", uid).Error != nil || u.OrangTuaID == nil {
+		return fiber.NewError(403, "akun ini bukan akun orang tua")
+	}
+	var pd PesertaDidik
+	if s.db.First(&pd, "id = ? AND orang_tua_id = ?", anakID, *u.OrangTuaID).Error != nil {
+		return fiber.NewError(403, "anak tidak terdaftar di bawah akun ini")
+	}
+	var details []PresensiDetail
+	s.db.Preload("Presensi").Preload("Presensi.Kelas").
+		Where("peserta_didik_id = ?", anakID).
+		Order("created_at desc").
+		Limit(100).
+		Find(&details)
+	return c.JSON(details)
+}
+
+// getRaporAnak — GET /orang-tua/anak/:id/rapor
+func (s *Server) getRaporAnak(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	anakID := c.Params("id")
+	var u User
+	if s.db.First(&u, "id = ?", uid).Error != nil || u.OrangTuaID == nil {
+		return fiber.NewError(403, "akun ini bukan akun orang tua")
+	}
+	var pd PesertaDidik
+	if s.db.First(&pd, "id = ? AND orang_tua_id = ?", anakID, *u.OrangTuaID).Error != nil {
+		return fiber.NewError(403, "anak tidak terdaftar di bawah akun ini")
+	}
+	// Return rekap + catatan rapor
+	type raporRes struct {
+		RekapNilai   []RekapNilaiAkhir `json:"rekapNilai"`
+		CatatanRapor *CatatanRapor     `json:"catatanRapor"`
+	}
+	var rekap []RekapNilaiAkhir
+	s.db.Preload("Mapel").Where("peserta_didik_id = ?", anakID).Find(&rekap)
+	var catatan CatatanRapor
+	// Get latest catatan
+	s.db.Where("peserta_didik_id = ?", anakID).Order("created_at desc").First(&catatan)
+	return c.JSON(raporRes{RekapNilai: rekap, CatatanRapor: &catatan})
+}
+
+// ============================================================================
+// Ujian/AksesKode — update createUjian to support aksesKode
+// ============================================================================
+
+// Helper to notify users of new ujian (for Notifikasi system)
+func (s *Server) notifyNewUjian(uj *Ujian) {
+	// Find all users in the same class
+	var kelas Kelas
+	s.db.First(&kelas, "id = ?", uj.KelasID)
+	// Notify tutor wali kelas
+	if kelas.WaliKelasID != nil {
+		var tutor Tutor
+		s.db.First(&tutor, "id = ?", *kelas.WaliKelasID)
+		if tutor.UserID != nil {
+			s.db.Create(&Notifikasi{
+				UserID: *tutor.UserID,
+				Judul:  "Ujian Online Baru",
+				Isi:    fmt.Sprintf("Ujian \"%s\" telah dibuat untuk kelas %d%s", uj.Judul, kelas.Jenjang, kelas.NamaRombel),
+				Tipe:   "ujian",
+				RefID:  &uj.ID,
+			})
+		}
+	}
+}
+
+// Helper to send push notification (placeholder for future WebSocket/SSE)
+func (s *Server) pushNotifikasi(userID string, judul, isi, tipe string, refID *string) {
+	s.db.Create(&Notifikasi{
+		UserID: userID,
+		Judul:  judul,
+		Isi:    isi,
+		Tipe:   tipe,
+		RefID:  refID,
+	})
+}

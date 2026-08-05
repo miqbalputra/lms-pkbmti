@@ -52,6 +52,7 @@ const emptyForm = {
   waktuSelesai: '',
   durasiMenit: '60',
   acakSoal: false,
+  aksesKode: '',
 }
 
 export function UjianView({
@@ -105,6 +106,7 @@ export function UjianView({
       waktuSelesai: String(r.waktuSelesai || '').slice(0, 16),
       durasiMenit: String(r.durasiMenit ?? '60'),
       acakSoal: !!r.acakSoal,
+      aksesKode: String(r.aksesKode || ''),
     })
     setAdding(true)
   }
@@ -128,6 +130,7 @@ export function UjianView({
       waktuSelesai: form.waktuSelesai ? new Date(form.waktuSelesai).toISOString() : undefined,
       durasiMenit: Number(form.durasiMenit) || 0,
       acakSoal: form.acakSoal,
+      aksesKode: form.aksesKode || '',
     }
     setSubmitting(true)
     try {
@@ -237,6 +240,10 @@ export function UjianView({
             <div className="flex items-center gap-2">
               <Checkbox id="acak" checked={form.acakSoal} onChange={(e) => setForm({ ...form, acakSoal: e.target.checked })} />
               <Label htmlFor="acak" className="cursor-pointer">Acak soal & opsi (deterministik per ujian)</Label>
+            </div>
+            <div className="grid gap-2">
+              <Label>Kode Akses Ujian Online (opsional)</Label>
+              <Input value={form.aksesKode} onChange={(e) => setForm({ ...form, aksesKode: e.target.value })} placeholder="Contoh: MTK2024" />
             </div>
             <div className="flex gap-2 sm:col-span-2">
               <Button type="submit" disabled={submitting}>{submitting ? 'Menyimpan...' : editing ? 'Simpan perubahan' : 'Simpan ujian'}</Button>

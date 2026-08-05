@@ -47,6 +47,10 @@ type User struct {
 	PasswordHash string  `json:"-"`
 	Role         string  `gorm:"not null" json:"role"`
 	TutorID      *string `json:"tutorId"`
+	// OrangTuaID diisi untuk role="orang_tua" (Portal Orang Tua) — akun login
+	// penuh yang melihat data anak-anak terhubung. Nullable agar akun staf
+	// lama tetap valid (backward compatible).
+	OrangTuaID   *string `gorm:"index" json:"orangTuaId"`
 	IsActive     bool    `gorm:"default:true" json:"isActive"`
 	FailedLogins int
 	LockedUntil  *time.Time
@@ -484,6 +488,7 @@ type Ujian struct {
 	WaktuSelesai     time.Time     `json:"waktuSelesai"`
 	DurasiMenit      int           `json:"durasiMenit"`
 	AcakSoal         bool          `json:"acakSoal"`
+	AksesKode        string        `gorm:"index" json:"aksesKode"` // kode akses siswa (tanpa login)
 	Semester         string        `json:"semester"`
 	DibuatOlehUserID string        `gorm:"index" json:"dibuatOlehUserId"`
 	Mapel            MataPelajaran `json:"mapel"`
@@ -495,6 +500,57 @@ type UjianSoal struct {
 	SoalID  string   `gorm:"uniqueIndex:ujian_soal" json:"soalId"`
 	Bobot   float64  `json:"bobot"`
 	Soal    BankSoal `json:"soal"`
+}
+
+// Ujian Online — Sesi pengerjaan ujian online oleh peserta didik.
+type UjianPeserta struct {
+	Base
+	UjianID        string     `gorm:"uniqueIndex:ujian_peserta_uniq" json:"ujianId"`
+	PesertaDidikID string     `gorm:"uniqueIndex:ujian_peserta_uniq" json:"pesertaDidikId"`
+	Mulai          *time.Time `json:"mulai"`
+	Selesai        *time.Time `json:"selesai"`
+	Skor           *float64   `gorm:"type:decimal(6,2)" json:"skor"`
+	Status         string     `gorm:"default:mulai" json:"status"` // "mulai"|"selesai"|"dikunci"
+	TabSwitch      int        `json:"tabSwitch"`
+	Ujian          Ujian      `gorm:"foreignKey:UjianID" json:"ujian"`
+	PesertaDidik   PesertaDidik `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik"`
+}
+
+// UjianJawaban — jawaban per soal oleh peserta didik ujian online.
+type UjianJawaban struct {
+	Base
+	UjianPesertaID string  `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"ujianPesertaId"`
+	SoalID         string  `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"soalId"`
+	Jawaban        string  `gorm:"type:text" json:"jawaban"`
+	Benar          *bool   `json:"benar"`
+	Nilai          float64 `gorm:"type:decimal(6,2)" json:"nilai"`
+	Soal           BankSoal `gorm:"foreignKey:SoalID" json:"soal"`
+}
+
+// Notifikasi — push notification internal untuk user.
+type Notifikasi struct {
+	Base
+	UserID    string     `gorm:"index" json:"userId"`
+	Judul     string     `gorm:"not null" json:"judul"`
+	Isi       string     `gorm:"type:text" json:"isi"`
+	Tipe      string     `json:"tipe"` // "ujian"|"tugas"|"presensi"|"umum"|"rapor"
+	RefID     *string    `json:"refId"`
+	IsRead    bool       `gorm:"default:false" json:"isRead"`
+	DibacaPada *time.Time `json:"dibacaPada"`
+}
+
+// KalenderEvent — event kalender akademik.
+type KalenderEvent struct {
+	Base
+	Judul        string     `gorm:"not null" json:"judul"`
+	Deskripsi    string     `gorm:"type:text" json:"deskripsi"`
+	TanggalMulai time.Time  `gorm:"index" json:"tanggalMulai"`
+	TanggalSelesai *time.Time `json:"tanggalSelesai"`
+	Tipe         string     `json:"tipe"` // "libur"|"ujian"|"kegiatan"|"upacara"|"rapat"
+	Warna        string     `json:"warna"`
+	Semester     *string    `json:"semester"`
+	TahunAjaranID *string   `gorm:"index" json:"tahunAjaranId"`
+	DibuatOlehUserID string `gorm:"index" json:"dibuatOlehUserId"`
 }
 
 // Modul O — Program (master, prd_fitur_simpkbm.md). Paket program kesetaraan (A/B/C).
@@ -717,6 +773,16 @@ func main() {
 	api.Get("/backup", s.backupReadAuth, s.listBackupsHandler)
 	api.Get("/backup/download", s.backupReadAuth, s.downloadBackup)
 	api.Get("/backup/file/:name", s.backupReadAuth, s.downloadBackupFile)
+	// Public Ujian Online page & API — no auth. Siswa masuk via NISN + Kode Akses.
+	api.Get("/ujian-online/page", s.serveUjianOnlinePage)
+	api.Post("/ujian-online/cek", s.cekUjianOnline)
+	api.Post("/ujian-online/:ujianId/mulai", s.mulaiUjianOnline)
+	api.Get("/ujian-online/:ujianId/soal", s.getSoalUjianOnline)
+	api.Post("/ujian-online/:ujianId/jawab", s.jawabSoal)
+	api.Post("/ujian-online/:ujianId/selesai", s.selesaiUjianOnline)
+	api.Post("/ujian-online/:ujianId/tab-switch", s.tabSwitchUjianOnline)
+	// Public Orang Tua login endpoint — no JWT; login by NIK + NISN.
+	api.Post("/orang-tua/login", s.loginOrangTua)
 	protected := api.Group("", s.auth)
 	protected.Get("/dashboard", s.dashboard)
 	s.routes(protected)
@@ -795,7 +861,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}); e != nil {
 		return e
 	}
 	// Modul K — alur approve/reject jurnal dihapus; jurnal langsung final. Sekali

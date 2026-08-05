@@ -75,6 +75,11 @@ const LaporanView = lazy(() => import('./pages/LaporanView').then((m) => ({ defa
 const ImportView = lazy(() => import('./pages/ImportView').then((m) => ({ default: m.ImportView })))
 const RelasiOrangTua = lazy(() => import('./pages/RelasiOrangTua').then((m) => ({ default: m.RelasiOrangTua })))
 const BackupView = lazy(() => import('./pages/BackupView').then((m) => ({ default: m.BackupView })))
+const UjianOnlineView = lazy(() => import('./pages/UjianOnlineView').then((m) => ({ default: m.UjianOnlineView })))
+const UjianMonitorView = lazy(() => import('./pages/UjianMonitorView').then((m) => ({ default: m.UjianMonitorView })))
+const NotifikasiView = lazy(() => import('./pages/NotifikasiView').then((m) => ({ default: m.NotifikasiView })))
+const KalenderView = lazy(() => import('./pages/KalenderView').then((m) => ({ default: m.KalenderView })))
+const AnalyticsView = lazy(() => import('./pages/AnalyticsView').then((m) => ({ default: m.AnalyticsView })))
 const DashboardCharts = lazy(() =>
   import('./DashboardCharts').then((m) => ({ default: m.DashboardCharts }))
 )
@@ -215,6 +220,11 @@ function Workspace({
   if (page === 'laporan') return <LaporanView token={token} />
   if (page === 'import') return user.role === 'admin' || user.role === 'guru' ? <ImportView token={token} user={user} /> : <Restricted />
   if (page === 'backup') return user.role === 'admin' ? <BackupView token={token} /> : <Restricted />
+  if (page === 'ujian-online') return <UjianOnlineView token={token} user={user} />
+  if (page === 'ujian-monitor') return <UjianMonitorView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
+  if (page === 'notifikasi') return <NotifikasiView token={token} />
+  if (page === 'kalender') return <KalenderView token={token} user={user} readOnly={user.role === 'kepala_sekolah' || user.role === 'guru'} />
+  if (page === 'analytics') return <AnalyticsView token={token} />
   return <MasterData resource={page} token={token} readOnly={readOnly} />
 }
 

@@ -153,6 +153,24 @@ func (s *Server) routes(api fiber.Router) {
 	api.Delete("/ujian/:id/soal/:sid", s.deleteUjianSoal)
 	api.Get("/ujian/:id/print", s.printUjian)
 
+	// Modul Notifikasi — CRUD notifikasi user.
+	api.Get("/notifikasi", s.listNotifikasi)
+	api.Get("/notifikasi/unread-count", s.unreadNotifikasiCount)
+	api.Put("/notifikasi/:id/baca", s.bacaNotifikasi)
+	api.Put("/notifikasi/baca-all", s.bacaSemuaNotifikasi)
+
+	// Modul Kalender Akademik — event kalender.
+	api.Get("/kalender", s.listKalenderEvent)
+	api.Post("/kalender", s.createKalenderEvent)
+	api.Put("/kalender/:id", s.updateKalenderEvent)
+	api.Delete("/kalender/:id", s.deleteKalenderEvent)
+
+	// Modul Portal Orang Tua — data anak untuk orang tua.
+	api.Get("/orang-tua/anak", s.listAnakOrangTua)
+	api.Get("/orang-tua/anak/:id/nilai", s.getNilaiAnak)
+	api.Get("/orang-tua/anak/:id/presensi", s.getPresensiAnak)
+	api.Get("/orang-tua/anak/:id/rapor", s.getRaporAnak)
+
 	// Modul P — Kartu Pelajar (prd_fitur_simpkbm.md). Cetak PDF (ID card + QR) per
 	// siswa atau massal per rombel. Guard canManageKelas via kelas siswa (admin/kepala
 	// bebas). Upload foto siswa (reuse saveUpload) — admin atau wali kelas.
@@ -658,7 +676,7 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	return c.Status(201).JSON(u)
 }
 func validRole(role string) bool {
-	return role == "admin" || role == "kepala_sekolah" || role == "guru"
+	return role == "admin" || role == "kepala_sekolah" || role == "guru" || role == "orang_tua"
 }
 func bcryptHash(v string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(v), bcrypt.DefaultCost)
@@ -3778,6 +3796,7 @@ type ujianInput struct {
 	WaktuSelesai time.Time `json:"waktuSelesai"`
 	DurasiMenit  int       `json:"durasiMenit"`
 	AcakSoal     bool      `json:"acakSoal"`
+	AksesKode    string    `json:"aksesKode"` // kode akses siswa ujian online
 }
 
 func (s *Server) scopeUjian(c *fiber.Ctx, u *Ujian) error {
@@ -3837,6 +3856,7 @@ func (s *Server) createUjian(c *fiber.Ctx) error {
 		WaktuSelesai:     in.WaktuSelesai,
 		DurasiMenit:      in.DurasiMenit,
 		AcakSoal:         in.AcakSoal,
+		AksesKode:        in.AksesKode,
 		Semester:         s.semester(in.WaktuMulai),
 		DibuatOlehUserID: uid,
 	}
@@ -3881,6 +3901,7 @@ func (s *Server) updateUjian(c *fiber.Ctx) error {
 	}
 	uj.DurasiMenit = in.DurasiMenit
 	uj.AcakSoal = in.AcakSoal
+	uj.AksesKode = in.AksesKode
 	if e := s.db.Save(&uj).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}
