@@ -12,6 +12,7 @@ import { Card, CardContent } from './components/ui/card'
 import { Toaster } from './components/ui/sonner'
 import { AppShell } from './components/layout/AppShell'
 import { LoginView } from './pages/Login'
+import { InstallPrompt } from './components/InstallPrompt'
 import { request } from './lib/api'
 
 // Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
@@ -150,6 +151,7 @@ export default function App() {
   return (
     <>
       <Toaster position="top-right" />
+      <InstallPrompt />
       <AppShell
         user={user}
         token={token}
