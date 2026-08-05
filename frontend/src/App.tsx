@@ -1,4 +1,4 @@
-import { useEffect, useState, lazy, Suspense } from 'react'
+import { Component, type ReactNode, useEffect, useState, lazy, Suspense } from 'react'
 import {
   CalendarCheck,
   School,
@@ -15,6 +15,27 @@ import { request } from './lib/api'
 // Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
 // berfungsi (sumber kebenaran kini di ./lib/api, tanpa import sirkular).
 export { request }
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state = { error: null as string | null }
+  static getDerivedStateFromError(err: unknown) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-6">
+          <div className="rounded-md bg-destructive/10 border border-destructive/30 p-4">
+            <p className="text-sm font-medium text-destructive">Terjadi kesalahan saat menampilkan halaman.</p>
+            <p className="text-xs text-muted-foreground mt-1">{this.state.error}</p>
+            <button className="text-xs underline mt-2" onClick={() => this.setState({ error: null })}>Coba lagi</button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 // Code-splitting: semua halaman kerja di-lazy-load agar bundle awal ringan.
 // Tiap halaman jadi chunk terpisah yang baru diunduh saat pertama dibuka.
@@ -130,13 +151,15 @@ export default function App() {
         onLogout={handleLogout}
       >
         <Suspense fallback={<PageFallback />}>
-          <Workspace
-            page={page}
-            token={token}
-            user={user}
-            readOnly={user.role !== 'admin'}
-            attendanceReadOnly={user.role === 'kepala_sekolah'}
-          />
+          <ErrorBoundary key={page}>
+            <Workspace
+              page={page}
+              token={token}
+              user={user}
+              readOnly={user.role !== 'admin'}
+              attendanceReadOnly={user.role === 'kepala_sekolah'}
+            />
+          </ErrorBoundary>
         </Suspense>
       </AppShell>
     </>

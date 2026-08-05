@@ -86,8 +86,22 @@ export function RppView({
 
   useEffect(() => {
     load()
-    void request('/rpp/options', token).then((r) => setOptions((r as Options) || { mapel: [], jenjang: [], tahunAjaran: [], fase: [], activeTahunAjaranId: '' })).catch(() => undefined)
-    void request('/rpp/maker-status', token).then((r: Row) => setMakerStatus(Boolean((r as Row).isRppMaker))).catch(() => setMakerStatus(false))
+    void request('/rpp/options', token)
+      .then((r) => {
+        if (r && typeof r === 'object') {
+          setOptions({
+            mapel: Array.isArray((r as any).mapel) ? (r as any).mapel : [],
+            jenjang: Array.isArray((r as any).jenjang) ? (r as any).jenjang : [],
+            tahunAjaran: Array.isArray((r as any).tahunAjaran) ? (r as any).tahunAjaran : [],
+            fase: Array.isArray((r as any).fase) ? (r as any).fase : [],
+            activeTahunAjaranId: (r as any).activeTahunAjaranId || '',
+          })
+        }
+      })
+      .catch(() => undefined)
+    void request('/rpp/maker-status', token)
+      .then((r: Row) => setMakerStatus(Boolean((r as Row)?.isRppMaker)))
+      .catch(() => setMakerStatus(false))
   }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
