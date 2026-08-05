@@ -171,6 +171,12 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/orang-tua/anak/:id/nilai", s.getNilaiAnak)
 	api.Get("/orang-tua/anak/:id/presensi", s.getPresensiAnak)
 	api.Get("/orang-tua/anak/:id/rapor", s.getRaporAnak)
+	api.Get("/orang-tua/anak/:id/ujian-skor", s.getUjianSkorAnak)
+	api.Get("/orang-tua/anak/:id/tugas", s.getTugasAnak)
+	api.Get("/orang-tua/anak/:id/materi", s.getMateriAnak)
+	api.Get("/orang-tua/anak/:id/peminjaman", s.getPeminjamanAnak)
+	api.Get("/orang-tua/anak/:id/chat", s.listChatAnak)
+	api.Post("/orang-tua/anak/:id/chat", s.sendChatAnak)
 
 	// Modul P — Kartu Pelajar (prd_fitur_simpkbm.md). Cetak PDF (ID card + QR) per
 	// siswa atau massal per rombel. Guard canManageKelas via kelas siswa (admin/kepala

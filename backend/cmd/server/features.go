@@ -877,6 +877,145 @@ func (s *Server) getRaporAnak(c *fiber.Ctx) error {
 	return c.JSON(raporRes{RekapNilai: rekap, CatatanRapor: &catatan})
 }
 
+// --- Helper: verify child belongs to parent ---
+func (s *Server) verifyOrangTuaAnak(c *fiber.Ctx, anakID string) (*User, error) {
+	uid := c.Locals("userID").(string)
+	var u User
+	if s.db.First(&u, "id = ?", uid).Error != nil || u.OrangTuaID == nil {
+		return nil, fiber.NewError(403, "akun ini bukan akun orang tua")
+	}
+	var pd PesertaDidik
+	if s.db.First(&pd, "id = ? AND orang_tua_id = ?", anakID, *u.OrangTuaID).Error != nil {
+		return nil, fiber.NewError(403, "anak tidak terdaftar di bawah akun ini")
+	}
+	return &u, nil
+}
+
+// getUjianSkorAnak — GET /orang-tua/anak/:id/ujian-skor
+func (s *Server) getUjianSkorAnak(c *fiber.Ctx) error {
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var pesertas []UjianPeserta
+	s.db.Preload("Ujian").Preload("Ujian.Mapel").
+		Where("peserta_didik_id = ? AND status = ?", anakID, "selesai").
+		Order("created_at desc").
+		Find(&pesertas)
+	return c.JSON(pesertas)
+}
+
+// getTugasAnak — GET /orang-tua/anak/:id/tugas
+func (s *Server) getTugasAnak(c *fiber.Ctx) error {
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var pd PesertaDidik
+	s.db.First(&pd, "id = ?", anakID)
+	var tugasList []Tugas
+	s.db.Preload("Mapel").Where("kelas_id = ?", pd.KelasID).Order("deadline desc").Find(&tugasList)
+	// Get pengumpulan for this student
+	type tugasRes struct {
+		Tugas
+		StatusPengumpulan string   `json:"statusPengumpulan"`
+		Nilai             *float64 `json:"nilai"`
+		TanggalKumpul     *time.Time `json:"tanggalKumpul"`
+	}
+	var result []tugasRes
+	for _, t := range tugasList {
+		tr := tugasRes{Tugas: t, StatusPengumpulan: "belum"}
+		var pk PengumpulanTugas
+		if s.db.Where("tugas_id = ? AND peserta_didik_id = ?", t.ID, anakID).First(&pk).Error == nil {
+			tr.StatusPengumpulan = pk.Status
+			tr.Nilai = pk.Nilai
+			tr.TanggalKumpul = &pk.TanggalKumpul
+		}
+		result = append(result, tr)
+	}
+	return c.JSON(result)
+}
+
+// getMateriAnak — GET /orang-tua/anak/:id/materi
+func (s *Server) getMateriAnak(c *fiber.Ctx) error {
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var pd PesertaDidik
+	s.db.First(&pd, "id = ?", anakID)
+	var materiList []Materi
+	s.db.Preload("Mapel").Where("kelas_id = ?", pd.KelasID).Order("created_at desc").Find(&materiList)
+	return c.JSON(materiList)
+}
+
+// getPeminjamanAnak — GET /orang-tua/anak/:id/peminjaman
+func (s *Server) getPeminjamanAnak(c *fiber.Ctx) error {
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var peminjaman []Peminjaman
+	s.db.Preload("Buku").Where("peserta_didik_id = ?", anakID).Order("created_at desc").Find(&peminjaman)
+	return c.JSON(peminjaman)
+}
+
+// listChatAnak — GET /orang-tua/anak/:id/chat
+func (s *Server) listChatAnak(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var messages []ChatMessage
+	s.db.Where("(pengirim_user_id = ? OR penerima_user_id = ?) AND peserta_didik_id = ?", uid, uid, anakID).
+		Order("created_at asc").
+		Limit(200).
+		Find(&messages)
+	return c.JSON(messages)
+}
+
+// sendChatAnak — POST /orang-tua/anak/:id/chat {isi}
+func (s *Server) sendChatAnak(c *fiber.Ctx) error {
+	uid := c.Locals("userID").(string)
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var in struct {
+		Isi string `json:"isi"`
+	}
+	if e := c.BodyParser(&in); e != nil || strings.TrimSpace(in.Isi) == "" {
+		return fiber.NewError(400, "pesan wajib diisi")
+	}
+	// Find wali kelas as recipient
+	var pd PesertaDidik
+	s.db.Preload("Kelas").First(&pd, "id = ?", anakID)
+	if pd.KelasID == "" {
+		return fiber.NewError(400, "siswa tidak memiliki kelas")
+	}
+	var kelas Kelas
+	s.db.First(&kelas, "id = ?", pd.KelasID)
+	if kelas.WaliKelasID == nil {
+		return fiber.NewError(400, "kelas belum memiliki wali kelas")
+	}
+	var tutor Tutor
+	s.db.First(&tutor, "id = ?", *kelas.WaliKelasID)
+	if tutor.UserID == nil {
+		return fiber.NewError(400, "wali kelas belum memiliki akun")
+	}
+	msg := ChatMessage{
+		PesertaDidikID: anakID,
+		PengirimUserID: uid,
+		PenerimaUserID: *tutor.UserID,
+		Isi:            strings.TrimSpace(in.Isi),
+	}
+	s.db.Create(&msg)
+	// Push notifikasi to guru wali
+	s.pushNotifikasi(*tutor.UserID, "Pesan dari Orang Tua", in.Isi, "chat", &msg.ID)
+	return c.Status(201).JSON(msg)
+}
+
 // ============================================================================
 // Ujian/AksesKode — update createUjian to support aksesKode
 // ============================================================================
