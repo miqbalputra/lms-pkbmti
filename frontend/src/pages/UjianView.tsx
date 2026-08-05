@@ -314,15 +314,15 @@ export function UjianView({
                 <TableRow key={r.id}>
                   <TableCell>
                     <div className="font-medium">{String(r.judul || '-')}</div>
-                    {r.acakSoal ? <Badge variant="outline" className="mt-1">Acak</Badge> : null}
+                    {!!r.acakSoal && <Badge variant="outline" className="mt-1">Acak</Badge>}
                   </TableCell>
                   <TableCell>{String(m.namaMapel || '-')}</TableCell>
                   <TableCell>{kelasLabel(k)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <div>{fmtDateTime(r.waktuMulai) || '—'}</div>
                     <div className="text-xs">s/d {fmtDateTime(r.waktuSelesai) || '—'}{r.durasiMenit ? ` (${r.durasiMenit} mnt)` : ''}</div>
-                    {r.gracePeriodMenit ? <div className="text-xs text-blue-600">Grace: {r.gracePeriodMenit} mnt</div> : null}
-                    {r.batasTabSwitch ? <div className="text-xs text-orange-600">Max {r.batasTabSwitch}x pindah tab</div> : null}
+                    {Number(r.gracePeriodMenit) > 0 && <div className="text-xs text-blue-600">Grace: {String(r.gracePeriodMenit)} mnt</div>}
+                    {Number(r.batasTabSwitch) > 0 && <div className="text-xs text-orange-600">Max {String(r.batasTabSwitch)}x pindah tab</div>}
                   </TableCell>
                   <TableCell>
                     {r.aksesKode ? (
