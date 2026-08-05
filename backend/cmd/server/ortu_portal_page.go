@@ -1,12 +1,17 @@
 package main
 
 import (
+	"os"
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 )
 
 func (s *Server) serveOrangTuaPortalPage(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
-	return c.SendString(ortuPortalHTML)
+	siteKey := os.Getenv("TURNSTILE_SITE_KEY")
+	html := strings.Replace(ortuPortalHTML, "{{TURNSTILE_SITE_KEY}}", siteKey, 1)
+	return c.SendString(html)
 }
 
 var ortuPortalHTML = `<!DOCTYPE html>
@@ -19,6 +24,7 @@ var ortuPortalHTML = `<!DOCTYPE html>
 <meta name="theme-color" content="#ffffff">
 <title>Portal Orang Tua — PKBM Tunas Ilmu</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <style>
 :root{
   --background:#ffffff;--foreground:#0a0a0a;
@@ -138,6 +144,9 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
       <label for="tanggalLahir">Tanggal Lahir Anak</label>
       <input class="input" type="text" id="tanggalLahir" placeholder="DDMMYYYY (contoh: 15082010)" maxlength="8" inputmode="numeric" autocomplete="off">
     </div>
+    <div class="form-group" id="turnstileContainer">
+      <div class="cf-turnstile" data-sitekey="{{TURNSTILE_SITE_KEY}}" data-theme="light" data-callback="onTurnstileSuccess"></div>
+    </div>
   </div>
   <div class="card-footer">
     <button class="btn btn-primary btn-lg" onclick="doLogin()" id="loginBtn" style="width:100%">Masuk</button>
@@ -194,7 +203,9 @@ if(!nisn||!tanggalLahir){showError('loginError','NISN dan tanggal lahir wajib di
 document.getElementById('loginError').classList.remove('show');
 document.getElementById('loginBtn').disabled=true;document.getElementById('loginBtn').textContent='Masuk...';
 try{
-const r=await fetch(API+'/orang-tua/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nisn,tanggalLahir})});
+const tw=document.querySelector('[name="cf-turnstile-response"]');
+const token=tw?tw.value:'';
+const r=await fetch(API+'/orang-tua/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nisn,tanggalLahir,'cf-turnstile-response':token})});
 const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
 state.token=d.accessToken;
 await loadAnak();

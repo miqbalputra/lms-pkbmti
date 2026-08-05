@@ -1,12 +1,17 @@
 package main
 
 import (
+	"os"
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 )
 
 func (s *Server) serveUjianOnlinePage(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
-	return c.SendString(ujianOnlineHTML)
+	siteKey := os.Getenv("TURNSTILE_SITE_KEY")
+	html := strings.Replace(ujianOnlineHTML, "{{TURNSTILE_SITE_KEY}}", siteKey, 1)
+	return c.SendString(html)
 }
 
 var ujianOnlineHTML = `<!DOCTYPE html>
@@ -19,6 +24,7 @@ var ujianOnlineHTML = `<!DOCTYPE html>
 <meta name="theme-color" content="#ffffff">
 <title>Ujian Online — PKBM Tunas Ilmu</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <style>
 :root{
   --background:#ffffff;--foreground:#0a0a0a;
@@ -159,6 +165,9 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
       <label for="aksesKode">Kode Akses</label>
       <input class="input input-mono" type="text" id="aksesKode" placeholder="XXXXXX" maxlength="6" autocomplete="off" style="text-transform:uppercase">
     </div>
+    <div class="form-group" id="turnstileContainer">
+      <div class="cf-turnstile" data-sitekey="{{TURNSTILE_SITE_KEY}}" data-theme="light" data-callback="onTurnstileSuccess"></div>
+    </div>
   </div>
   <div class="card-footer">
     <button class="btn btn-primary btn-lg" onclick="cekUjian()" id="cekBtn" style="width:100%">Cari Ujian</button>
@@ -290,6 +299,8 @@ document.getElementById('loginError').classList.remove('show');
 document.getElementById('cekBtn').disabled=true;document.getElementById('cekBtn').textContent='Mencari...';
 try{
 const fd=new FormData();fd.append('nisn',nisn);fd.append('aksesKode',kode);
+const tw=document.querySelector('[name="cf-turnstile-response"]');
+if(tw)fd.append('cf-turnstile-response',tw.value);
 const r=await fetch(API+'/ujian-online/cek',{method:'POST',body:fd});
 const d=await r.json();
 if(!r.ok)throw new Error(d.error||'Gagal');

@@ -13,6 +13,8 @@ import (
 )
 
 // ============================================================================
+
+// ============================================================================
 // Ujian Online — public endpoints (no JWT; authenticated by NISN + AksesKode)
 // ============================================================================
 
@@ -71,8 +73,12 @@ func (s *Server) ujianOnlineKodeAuth(c *fiber.Ctx, ujianID string) (*PesertaDidi
 func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	nisn := strings.TrimSpace(c.FormValue("nisn"))
 	kode := strings.TrimSpace(c.FormValue("aksesKode"))
+	turnstileToken := c.FormValue("cf-turnstile-response")
 	if nisn == "" || kode == "" {
 		return fiber.NewError(400, "NISN dan Kode Akses wajib diisi")
+	}
+	if !verifyTurnstile(turnstileToken, c.IP()) {
+		return fiber.NewError(400, "Verifikasi keamanan gagal. Silakan coba lagi.")
 	}
 	var pd PesertaDidik
 	if s.db.Where("nisn = ? AND status = ?", nisn, "aktif").First(&pd).Error != nil {
@@ -714,11 +720,15 @@ func (s *Server) deleteKalenderEvent(c *fiber.Ctx) error {
 // Authenticates parent by NISN (child) + tanggal lahir (child), returns JWT with role=orang_tua.
 func (s *Server) loginOrangTua(c *fiber.Ctx) error {
 	var in struct {
-		NISN         string `json:"nisn"`
-		TanggalLahir string `json:"tanggalLahir"` // format: DDMMYYYY
+		NISN          string `json:"nisn"`
+		TanggalLahir  string `json:"tanggalLahir"` // format: DDMMYYYY
+		TurnstileToken string `json:"cf-turnstile-response"`
 	}
 	if e := c.BodyParser(&in); e != nil || in.NISN == "" || in.TanggalLahir == "" {
 		return fiber.NewError(400, "NISN dan tanggal lahir wajib diisi")
+	}
+	if !verifyTurnstile(in.TurnstileToken, c.IP()) {
+		return fiber.NewError(400, "Verifikasi keamanan gagal. Silakan coba lagi.")
 	}
 	// Parse tanggal lahir DDMMYYYY
 	if len(in.TanggalLahir) != 8 {
