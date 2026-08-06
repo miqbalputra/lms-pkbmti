@@ -210,8 +210,8 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
 
   return (
     <>
-      <header className="sticky top-0 flex w-full bg-white border-gray-200 z-99999 dark:border-gray-800 dark:bg-gray-900 lg:border-b">
-        <div className="flex flex-1 items-center justify-between px-4 sm:px-6 lg:px-8">
+      <header className="sticky top-0 z-99999 flex min-h-16 w-full border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 sm:px-6 lg:px-8">
           {/* Left: hamburger + search */}
           <div className="flex items-center gap-3 lg:gap-5">
             {/* Hamburger (mobile = drawer, desktop = collapse) */}
@@ -317,14 +317,14 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
           </div>
 
           {/* Right: theme toggle, notifications, profile */}
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
             <ThemeToggleButton />
 
             {/* Notifications */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
-                  className="relative flex items-center justify-center text-gray-500 bg-white border border-gray-200 rounded-full h-11 w-11 hover:bg-gray-100 hover:text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+                  className="relative flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 hover:bg-gray-100 hover:text-gray-700 sm:h-11 sm:w-11 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
                   title="Pusat Notifikasi"
                 >
                   <Bell className="h-5 w-5" />
@@ -337,7 +337,7 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className="w-80 sm:w-96 p-2 rounded-xl border-gray-200 dark:border-gray-800"
+                className="w-[calc(100vw-1rem)] max-w-96 p-2 rounded-xl border-gray-200 dark:border-gray-800"
               >
                 <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 dark:border-gray-800">
                   <div className="flex items-center gap-2">
@@ -418,7 +418,7 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
             {/* User profile */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 px-2 py-1.5 h-auto rounded-full hover:bg-gray-100 dark:hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-brand-500/10">
+                <button className="flex h-auto items-center gap-1.5 rounded-full px-1.5 py-1.5 hover:bg-gray-100 dark:hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-brand-500/10 sm:gap-3 sm:px-2">
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-500 text-white font-bold text-xs">
                     {getInitials(displayName)}
                   </div>

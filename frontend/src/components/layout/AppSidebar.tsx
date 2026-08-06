@@ -154,8 +154,8 @@ export function AppSidebar({ page, setPage, role }: AppSidebarProps) {
   return (
     <aside
       className={cn(
-        'fixed mt-16 flex flex-col lg:mt-0 top-0 left-0 bg-white dark:bg-gray-900 dark:border-gray-800 text-gray-900 h-screen transition-all duration-300 ease-in-out z-50 border-r border-gray-200',
-        isExpanded || isMobileOpen || isHovered ? 'w-[290px]' : 'w-[90px]',
+        'fixed top-0 left-0 mt-16 flex h-[calc(100dvh-4rem)] flex-col bg-white text-gray-900 transition-all duration-300 ease-in-out z-50 border-r border-gray-200 dark:bg-gray-900 dark:border-gray-800 lg:mt-0 lg:h-screen',
+        isExpanded || isMobileOpen || isHovered ? 'w-[min(78vw,300px)] lg:w-[290px]' : 'w-[90px]',
         isMobileOpen ? 'translate-x-0' : '-translate-x-full',
         'lg:translate-x-0'
       )}
@@ -165,7 +165,7 @@ export function AppSidebar({ page, setPage, role }: AppSidebarProps) {
       {/* Brand header — Tunas Ilmu */}
       <div
         className={cn(
-          'py-8 flex items-center',
+          'flex items-center px-4 py-5 lg:px-0 lg:py-8',
           !isExpanded && !isHovered ? 'lg:justify-center' : 'justify-start'
         )}
       >
@@ -195,8 +195,8 @@ export function AppSidebar({ page, setPage, role }: AppSidebarProps) {
 
       {/* Navigation */}
       <div className="flex flex-col overflow-y-auto duration-300 ease-linear no-scrollbar flex-1">
-        <nav className="mb-6 px-5">
-          <div className="flex flex-col gap-4">
+        <nav className="mb-6 px-4 lg:px-5">
+          <div className="flex flex-col gap-3 lg:gap-4">
             {NAV_GROUPS.map((group) => {
               const filtered = group.items.filter((item) =>
                 item.roles.includes(role)
@@ -206,7 +206,7 @@ export function AppSidebar({ page, setPage, role }: AppSidebarProps) {
                 <div key={group.groupLabel}>
                   <h2
                     className={cn(
-                      'mb-4 px-2 text-theme-xs uppercase flex leading-[18px] font-medium text-gray-400',
+                      'mb-3 px-2 text-theme-xs uppercase flex leading-[18px] font-medium text-gray-400 lg:mb-4',
                       !isExpanded && !isHovered ? 'lg:justify-center' : 'justify-start'
                     )}
                   >

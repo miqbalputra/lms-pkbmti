@@ -311,6 +311,37 @@
   textarea {
     font: inherit;
   }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-height: 100%;
+  }
+
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  img,
+  video,
+  canvas {
+    max-width: 100%;
+  }
+
+  button,
+  [role='button'] {
+    touch-action: manipulation;
+  }
+
+  @media (max-width: 639px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
 }
 
 /* ===== TailAdmin sidebar menu utilities ===== */

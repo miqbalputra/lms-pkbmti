@@ -75,9 +75,9 @@ export function LoginView({ onLogin, requestFn }: LoginProps) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4 md:p-8 dark:bg-gray-900">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-gray-50 p-3 sm:p-4 md:p-8 dark:bg-gray-900">
       {/* TailAdmin Centered Auth Split Card */}
-      <Card className="w-full max-w-5xl rounded-2xl border border-gray-200 bg-white shadow-theme-lg overflow-hidden grid lg:grid-cols-2 dark:border-gray-800 dark:bg-gray-900">
+      <Card className="grid w-full max-w-5xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-theme-lg sm:rounded-2xl lg:grid-cols-2 dark:border-gray-800 dark:bg-gray-900">
         {/* Left Side: TailAdmin Hero Branding Panel */}
         <div className="hidden lg:flex flex-col justify-between bg-gradient-to-br from-brand-500 via-brand-600 to-brand-700 p-12 text-white relative overflow-hidden">
           <div className="absolute -top-20 -left-20 w-80 h-80 rounded-full bg-white/10 blur-2xl pointer-events-none" />
@@ -125,12 +125,12 @@ export function LoginView({ onLogin, requestFn }: LoginProps) {
         </div>
 
         {/* Right Side: TailAdmin Form Elements */}
-        <div className="p-8 md:p-12 flex flex-col justify-center space-y-6">
+        <div className="flex flex-col justify-center space-y-5 p-5 sm:p-8 md:space-y-6 md:p-12">
           <div className="space-y-2">
             <span className="text-xs font-bold uppercase tracking-wider text-brand-500">
               Masuk Sesi
             </span>
-            <h2 className="text-2xl md:text-3xl font-bold text-gray-900 tracking-tight dark:text-white/90">
+            <h2 className="text-xl font-bold tracking-tight text-gray-900 sm:text-2xl md:text-3xl dark:text-white/90">
               Masuk ke Tunas Ilmu Learn
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">

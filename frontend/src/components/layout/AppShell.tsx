@@ -49,7 +49,7 @@ function ShellContent({
           onLogout={onLogout}
           onOpenTutorAccount={onOpenTutorAccount}
         />
-        <div className="p-4 mx-auto max-w-(--breakpoint-2xl) md:p-6 w-full">
+        <div className="w-full min-w-0 p-3 mx-auto max-w-(--breakpoint-2xl) sm:p-4 md:p-6">
           {children}
         </div>
       </div>
