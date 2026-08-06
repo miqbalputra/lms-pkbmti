@@ -264,6 +264,7 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Put("/kelas/:id", s.updateKelas)
 	admin.Delete("/kelas/:id", s.deleteKelas)
 	admin.Post("/kelas/duplicate", s.duplicateKelas)
+	admin.Post("/pokjar/migrasi-kelas", s.migratePokjarClasses)
 	admin.Put("/kelas/:id/mapel", s.setKelasMapel)
 	admin.Post("/penugasan", s.createPenugasan)
 	admin.Post("/penugasan/semua-kelas", s.assignAllClasses)
@@ -1167,6 +1168,114 @@ func (s *Server) crudPokjar(r fiber.Router) {
 	r.Put("/pokjar/:id", func(c *fiber.Ctx) error { return update[Pokjar](s, c, "pokjar") })
 	r.Delete("/pokjar/:id", func(c *fiber.Ctx) error { return deleteRow[Pokjar](s, c, "pokjar") })
 }
+
+// migratePokjarClasses moves selected classes and every student currently
+// attached to those classes from one Pokjar to another. The class ID and its
+// history remain unchanged, so attendance, grades, assignments, and parent
+// links continue to point to the same class after the migration.
+func (s *Server) migratePokjarClasses(c *fiber.Ctx) error {
+	var in struct {
+		SourcePokjarID string   `json:"sourcePokjarId"`
+		TargetPokjarID string   `json:"targetPokjarId"`
+		KelasIDs       []string `json:"kelasIds"`
+	}
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	in.SourcePokjarID = strings.TrimSpace(in.SourcePokjarID)
+	in.TargetPokjarID = strings.TrimSpace(in.TargetPokjarID)
+	if in.SourcePokjarID == "" || in.TargetPokjarID == "" {
+		return fiber.NewError(400, "pokjar asal dan pokjar tujuan wajib dipilih")
+	}
+	if in.SourcePokjarID == in.TargetPokjarID {
+		return fiber.NewError(400, "pokjar asal dan tujuan harus berbeda")
+	}
+
+	// Deduplicate IDs before using them in the transaction. This also keeps the
+	// reported class count stable when a client sends the same ID twice.
+	uniqueIDs := make([]string, 0, len(in.KelasIDs))
+	seen := make(map[string]struct{}, len(in.KelasIDs))
+	for _, classID := range in.KelasIDs {
+		classID = strings.TrimSpace(classID)
+		if classID == "" {
+			continue
+		}
+		if _, exists := seen[classID]; exists {
+			continue
+		}
+		seen[classID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, classID)
+	}
+	if len(uniqueIDs) == 0 {
+		return fiber.NewError(400, "minimal satu kelas wajib dipilih")
+	}
+
+	var source, target Pokjar
+	if err := s.db.First(&source, "id = ?", in.SourcePokjarID).Error; err != nil {
+		return fiber.NewError(404, "pokjar asal tidak ditemukan")
+	}
+	if err := s.db.First(&target, "id = ?", in.TargetPokjarID).Error; err != nil {
+		return fiber.NewError(404, "pokjar tujuan tidak ditemukan")
+	}
+
+	var movedClasses, movedStudents int64
+	uid := c.Locals("userID").(string)
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var classes []Kelas
+		if err := tx.Where("id IN ? AND pokjar_id = ?", uniqueIDs, source.ID).Find(&classes).Error; err != nil {
+			return err
+		}
+		if len(classes) != len(uniqueIDs) {
+			return fiber.NewError(400, "satu atau lebih kelas tidak berada di pokjar asal")
+		}
+
+		// The class identity is unique per jenjang, rombel, Pokjar, and year.
+		// Reject conflicts instead of silently merging two classes in the target.
+		for _, class := range classes {
+			var conflict Kelas
+			err := tx.Where(
+				"jenjang = ? AND nama_rombel = ? AND pokjar_id = ? AND tahun_ajaran_id = ? AND id <> ?",
+				class.Jenjang, class.NamaRombel, target.ID, class.TahunAjaranID, class.ID,
+			).First(&conflict).Error
+			if err == nil {
+				return fiber.NewError(409, fmt.Sprintf("kelas %d%s sudah ada di pokjar tujuan", class.Jenjang, class.NamaRombel))
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		if err := tx.Model(&Kelas{}).
+			Where("id IN ? AND pokjar_id = ?", uniqueIDs, source.ID).
+			Update("pokjar_id", target.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&PesertaDidik{}).Where("kelas_id IN ?", uniqueIDs).Count(&movedStudents).Error; err != nil {
+			return err
+		}
+		// Use kelas_id as the source of truth. This also repairs legacy rows
+		// whose PokjarID was already inconsistent with their class.
+		if err := tx.Model(&PesertaDidik{}).
+			Where("kelas_id IN ?", uniqueIDs).
+			Update("pokjar_id", target.ID).Error; err != nil {
+			return err
+		}
+		movedClasses = int64(len(classes))
+		detail := fmt.Sprintf("%d kelas dan %d peserta didik: %s -> %s", movedClasses, movedStudents, source.NamaPokjar, target.NamaPokjar)
+		s.auditTx(tx, &uid, "migrate", "pokjar", detail)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	return c.JSON(fiber.Map{
+		"migratedClasses": movedClasses,
+		"movedStudents":   movedStudents,
+		"sourcePokjarId":  source.ID,
+		"targetPokjarId":  target.ID,
+	})
+}
+
 func (s *Server) crudMapel(r fiber.Router) {
 	r.Get("/mapel", func(c *fiber.Ctx) error { return list[MataPelajaran](s.db, c) })
 	r.Post("/mapel", s.createMapel)

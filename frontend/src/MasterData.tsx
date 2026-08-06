@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
+  ArrowRightLeft,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -9,6 +10,7 @@ import {
   Plus,
   Search,
   Trash2,
+  UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -320,6 +322,210 @@ function getRowDisplayName(row: Row | null): string {
       row.namaTahunAjaran ||
       row.namaMapel ||
       (row.namaBapak ? `Bpk. ${row.namaBapak}` : row.namaIbu ? `Ibu ${row.namaIbu}` : 'Data ini')
+  )
+}
+
+function PokjarMigrationPanel({ pokjars, token }: { pokjars: Row[]; token: string }) {
+  const [classes, setClasses] = useState<Row[]>([])
+  const [loadingClasses, setLoadingClasses] = useState(true)
+  const [sourceId, setSourceId] = useState('')
+  const [targetId, setTargetId] = useState('')
+  const [selectedClassIds, setSelectedClassIds] = useState<string[]>([])
+  const [isMigrating, setIsMigrating] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingClasses(true)
+    request('/kelas', token)
+      .then((data) => {
+        if (!cancelled) setClasses(Array.isArray(data) ? data as Row[] : [])
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setClasses([])
+          toast.error(`Gagal memuat kelas untuk migrasi: ${String(e.message || e)}`)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingClasses(false)
+      })
+    return () => { cancelled = true }
+  }, [token])
+
+  const sourceClasses = useMemo(
+    () => classes.filter((row) => String(row.pokjarId || '') === sourceId),
+    [classes, sourceId],
+  )
+  const sourcePokjar = pokjars.find((row) => row.id === sourceId)
+  const targetPokjar = pokjars.find((row) => row.id === targetId)
+  const allSourceClassesSelected = sourceClasses.length > 0 && selectedClassIds.length === sourceClasses.length
+
+  useEffect(() => {
+    setSelectedClassIds([])
+  }, [sourceId])
+
+  useEffect(() => {
+    if (targetId === sourceId) setTargetId('')
+  }, [sourceId, targetId])
+
+  const toggleClass = (classId: string) => {
+    setSelectedClassIds((current) =>
+      current.includes(classId) ? current.filter((id) => id !== classId) : [...current, classId],
+    )
+  }
+
+  const toggleAllClasses = () => {
+    setSelectedClassIds(allSourceClassesSelected ? [] : sourceClasses.map((row) => row.id))
+  }
+
+  const handleMigrate = async () => {
+    setIsMigrating(true)
+    try {
+      const result = await request('/pokjar/migrasi-kelas', token, 'POST', {
+        sourcePokjarId: sourceId,
+        targetPokjarId: targetId,
+        kelasIds: selectedClassIds,
+      })
+      const migratedIds = new Set(selectedClassIds)
+      setClasses((current) => current.map((row) => migratedIds.has(row.id) ? { ...row, pokjarId: targetId } : row))
+      setSelectedClassIds([])
+      setConfirmOpen(false)
+      toast.success(`${Number(result?.migratedClasses || selectedClassIds.length)} kelas dan ${Number(result?.movedStudents || 0)} peserta didik berhasil dipindahkan.`)
+    } catch (e: any) {
+      toast.error(`Gagal memindahkan data: ${String(e.message || e)}`)
+    } finally {
+      setIsMigrating(false)
+    }
+  }
+
+  const classLabel = (row: Row) => {
+    const jenjang = String(row.jenjang || '-')
+    const rombel = String(row.namaRombel || '')
+    const tahunAjaran = row.tahunAjaran as Record<string, unknown> | undefined
+    return {
+      name: `Kelas ${jenjang}${rombel}`,
+      year: String(tahunAjaran?.namaTahunAjaran || row.tahunAjaranId || 'Tahun ajaran tidak diketahui'),
+    }
+  }
+
+  return (
+    <>
+      <Card className="rounded-2xl border border-brand-200 bg-brand-50/40 shadow-2xs overflow-hidden">
+        <div className="p-5 sm:p-6 space-y-5">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-brand-100 p-2.5 text-brand-700 shrink-0">
+              <ArrowRightLeft className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Migrasi Peserta Didik antar Pokjar</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Pindahkan kelas tertentu ke Pokjar lain. Semua peserta didik di kelas yang dipilih akan ikut berpindah otomatis.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid gap-2">
+              <Label htmlFor="migration-source-pokjar" className="text-xs font-medium">Pokjar asal</Label>
+              <Select id="migration-source-pokjar" value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+                <option value="">Pilih Pokjar asal</option>
+                {pokjars.map((row) => (
+                  <option key={row.id} value={row.id}>{String(row.namaPokjar || row.id)}</option>
+                ))}
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="migration-target-pokjar" className="text-xs font-medium">Pokjar tujuan</Label>
+              <Select id="migration-target-pokjar" value={targetId} onChange={(e) => setTargetId(e.target.value)} disabled={!sourceId}>
+                <option value="">Pilih Pokjar tujuan</option>
+                {pokjars.filter((row) => row.id !== sourceId).map((row) => (
+                  <option key={row.id} value={row.id}>{String(row.namaPokjar || row.id)}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+
+          {sourceId ? (
+            <div className="rounded-xl border border-border bg-background p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">Pilih kelas dari {String(sourcePokjar?.namaPokjar || 'Pokjar asal')}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Kelas yang dipilih akan dipindahkan utuh.</p>
+                </div>
+                <Button type="button" size="sm" variant="outline" className="h-8 text-xs self-start" onClick={toggleAllClasses} disabled={loadingClasses || sourceClasses.length === 0}>
+                  {allSourceClassesSelected ? 'Batalkan semua' : 'Pilih semua'}
+                </Button>
+              </div>
+
+              {loadingClasses ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">Memuat daftar kelas...</div>
+              ) : sourceClasses.length === 0 ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">Belum ada kelas di Pokjar asal.</div>
+              ) : (
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                  {sourceClasses.map((row) => {
+                    const label = classLabel(row)
+                    return (
+                      <label key={row.id} className="flex items-center gap-3 rounded-lg border border-border p-3 cursor-pointer hover:bg-muted/50">
+                        <input
+                          type="checkbox"
+                          checked={selectedClassIds.includes(row.id)}
+                          onChange={() => toggleClass(row.id)}
+                          className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium">{label.name}</span>
+                          <span className="block text-xs text-muted-foreground">{label.year}</span>
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <UsersRound className="h-3.5 w-3.5" />
+                {selectedClassIds.length} dari {sourceClasses.length} kelas dipilih
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-border bg-background/70 p-5 text-center text-sm text-muted-foreground">
+              Pilih Pokjar asal untuk menampilkan daftar kelas.
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              disabled={isMigrating || !sourceId || !targetId || selectedClassIds.length === 0}
+              onClick={() => setConfirmOpen(true)}
+            >
+              <ArrowRightLeft className="h-4 w-4 mr-1" />
+              Siapkan migrasi
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      <AlertDialog open={confirmOpen} onOpenChange={(open) => !isMigrating && setConfirmOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Konfirmasi migrasi kelas?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedClassIds.length} kelas beserta seluruh peserta didiknya akan dipindahkan dari{' '}
+              <strong>{String(sourcePokjar?.namaPokjar || sourceId)}</strong> ke{' '}
+              <strong>{String(targetPokjar?.namaPokjar || targetId)}</strong>. Data nilai, presensi, dan riwayat tetap mengikuti kelas yang sama.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isMigrating}>Batal</AlertDialogCancel>
+            <AlertDialogAction onClick={handleMigrate} disabled={isMigrating}>
+              {isMigrating ? 'Memindahkan...' : 'Ya, pindahkan'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
@@ -686,6 +892,10 @@ export function MasterData({
           )
         }
       />
+
+      {resource === 'pokjar' && !readOnly && (
+        <PokjarMigrationPanel pokjars={rows} token={token} />
+      )}
 
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="relative flex-1 max-w-sm">

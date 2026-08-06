@@ -507,3 +507,66 @@ func TestPromotionRejectsTargetClassFromAnotherYear(t *testing.T) {
 		t.Fatal("student was changed despite rejected promotion")
 	}
 }
+
+func TestMigratePokjarClassesMovesClassAndStudents(t *testing.T) {
+	s := testServer(t)
+	if err := s.db.AutoMigrate(&Pokjar{}, &TahunAjaran{}, &Kelas{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}); err != nil {
+		t.Fatal(err)
+	}
+	sourcePokjar := Pokjar{NamaPokjar: "Pokjar Asal", Tipe: "binaan"}
+	targetPokjar := Pokjar{NamaPokjar: "Pokjar Tujuan", Tipe: "pusat"}
+	year := TahunAjaran{NamaTahunAjaran: "2104/2105", IsAktif: true}
+	for _, row := range []any{&sourcePokjar, &targetPokjar, &year} {
+		if err := s.db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	class := Kelas{Jenjang: 3, NamaRombel: "A", PokjarID: sourcePokjar.ID, TahunAjaranID: year.ID}
+	if err := s.db.Create(&class).Error; err != nil {
+		t.Fatal(err)
+	}
+	students := []PesertaDidik{
+		{Nama: "Siswa Satu", JenisKelamin: "L", NIS: "3101", NISN: "93101", KelasID: class.ID, PokjarID: sourcePokjar.ID, Status: "aktif"},
+		{Nama: "Siswa Dua", JenisKelamin: "P", NIS: "3102", NISN: "93102", KelasID: class.ID, PokjarID: sourcePokjar.ID, Status: "aktif"},
+	}
+	if err := s.db.Create(&students).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	app.Post("/migrate", func(c *fiber.Ctx) error {
+		c.Locals("userID", "test-admin")
+		return s.migratePokjarClasses(c)
+	})
+	payload := `{"sourcePokjarId":"` + sourcePokjar.ID + `","targetPokjarId":"` + targetPokjar.ID + `","kelasIds":["` + class.ID + `"]}`
+	request := httptest.NewRequest(http.MethodPost, "/migrate", strings.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := app.Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected migration 200, got %d", response.StatusCode)
+	}
+
+	var migratedClass Kelas
+	if err := s.db.First(&migratedClass, "id = ?", class.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migratedClass.PokjarID != targetPokjar.ID {
+		t.Fatalf("expected class to move to target pokjar, got %q", migratedClass.PokjarID)
+	}
+	var migratedStudents []PesertaDidik
+	if err := s.db.Where("kelas_id = ?", class.ID).Find(&migratedStudents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(migratedStudents) != 2 {
+		t.Fatalf("expected two students in migrated class, got %d", len(migratedStudents))
+	}
+	for _, student := range migratedStudents {
+		if student.PokjarID != targetPokjar.ID {
+			t.Fatalf("expected student %q to move to target pokjar, got %q", student.Nama, student.PokjarID)
+		}
+	}
+}
