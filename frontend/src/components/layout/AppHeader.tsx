@@ -54,6 +54,7 @@ interface AppHeaderProps {
   setPage: (p: string) => void
   user: User
   onLogout: () => void
+  onOpenTutorAccount: () => void
 }
 
 function fmtNotifTime(v: string): string {
@@ -75,7 +76,7 @@ const tipeIcon: Record<string, string> = {
   umum: '📢',
 }
 
-export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
+export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }: AppHeaderProps) {
   const [logoutModalOpen, setLogoutModalOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
@@ -454,13 +455,19 @@ export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
                   </DropdownMenuItem>
                 )}
                 {user.role === 'guru' && (
-                  <DropdownMenuItem
-                    onClick={() => setPage('dokumen-tutor')}
-                    className="cursor-pointer"
-                  >
-                    <FileText className="mr-2 h-4 w-4 text-gray-500 dark:text-gray-400" />
-                    <span>Dokumen Tutor</span>
-                  </DropdownMenuItem>
+                  <>
+                    <DropdownMenuItem onClick={onOpenTutorAccount} className="cursor-pointer">
+                      <UserIcon className="mr-2 h-4 w-4 text-gray-500 dark:text-gray-400" />
+                      <span>Pengaturan Akun</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => setPage('dokumen-tutor')}
+                      className="cursor-pointer"
+                    >
+                      <FileText className="mr-2 h-4 w-4 text-gray-500 dark:text-gray-400" />
+                      <span>Dokumen Tutor</span>
+                    </DropdownMenuItem>
+                  </>
                 )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

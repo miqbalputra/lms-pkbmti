@@ -1471,8 +1471,10 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
-	if len(in.Password) < 8 || !validRole(in.Role) || strings.TrimSpace(in.Username) == "" || strings.TrimSpace(in.Email) == "" {
-		return fiber.NewError(400, "username, email, valid role, and a password of at least 8 characters are required")
+	in.Username = strings.TrimSpace(in.Username)
+	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
+	if len(in.Password) < 8 || !validRole(in.Role) || in.Username == "" || (in.Role != "guru" && in.Email == "") {
+		return fiber.NewError(400, "username, email (wajib selain tutor), peran yang valid, dan kata sandi minimal 8 karakter wajib diisi")
 	}
 	if in.Role == "guru" && in.TutorID == nil {
 		return fiber.NewError(400, "guru account requires a tutor")
@@ -1522,6 +1524,55 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 func validRole(role string) bool {
 	return role == "admin" || role == "kepala_sekolah" || role == "guru" || role == "orang_tua"
 }
+
+func isGmailAddress(value string) bool {
+	email := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasSuffix(email, "@gmail.com") || strings.HasSuffix(email, "@googlemail.com")
+}
+
+// updateOwnAccount lets a tutor complete the email field without exposing the
+// rest of the user-management form to tutor accounts. The same User row is
+// returned by /users, so the admin view sees the update immediately.
+func (s *Server) updateOwnAccount(c *fiber.Ctx) error {
+	userID, ok := c.Locals("userID").(string)
+	if !ok || strings.TrimSpace(userID) == "" {
+		return fiber.NewError(401, "sesi pengguna tidak valid")
+	}
+	var u User
+	if e := s.db.First(&u, "id = ?", userID).Error; e != nil {
+		return fiber.NewError(404, "akun tidak ditemukan")
+	}
+	if u.Role != "guru" {
+		return fiber.NewError(403, "pengaturan email ini hanya tersedia untuk tutor")
+	}
+	var in struct {
+		Email string `json:"email"`
+	}
+	if e := c.BodyParser(&in); e != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	email := strings.TrimSpace(strings.ToLower(in.Email))
+	if !isGmailAddress(email) {
+		return fiber.NewError(400, "email tutor harus menggunakan alamat Gmail yang valid")
+	}
+	var duplicate User
+	duplicateErr := s.db.Where("lower(email) = ? AND id <> ?", email, u.ID).First(&duplicate).Error
+	if duplicateErr == nil {
+		return fiber.NewError(409, "email sudah digunakan akun lain")
+	}
+	if !errors.Is(duplicateErr, gorm.ErrRecordNotFound) {
+		return duplicateErr
+	}
+	u.Email = email
+	if e := s.db.Save(&u).Error; e != nil {
+		if isUniqueErr(e) {
+			return fiber.NewError(409, "email sudah digunakan akun lain")
+		}
+		return e
+	}
+	s.audit(&u.ID, "update", "user_email", email)
+	return c.JSON(u)
+}
 func bcryptHash(v string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(v), bcrypt.DefaultCost)
 	return string(hash), err
@@ -1560,8 +1611,13 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 		OrangTuaID                      *string `json:"orangTuaId"`
 		IsActive                        bool    `json:"isActive"`
 	}
-	if e := c.BodyParser(&in); e != nil || !validRole(in.Role) || strings.TrimSpace(in.Username) == "" || strings.TrimSpace(in.Email) == "" {
+	if e := c.BodyParser(&in); e != nil || !validRole(in.Role) || strings.TrimSpace(in.Username) == "" {
 		return fiber.NewError(400, "invalid request body")
+	}
+	in.Username = strings.TrimSpace(in.Username)
+	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
+	if in.Role != "guru" && in.Email == "" {
+		return fiber.NewError(400, "email wajib diisi selain untuk tutor")
 	}
 	if in.Role == "guru" && in.TutorID == nil {
 		return fiber.NewError(400, "guru account requires a tutor")

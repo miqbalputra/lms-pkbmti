@@ -13,6 +13,7 @@ import { Toaster } from './components/ui/sonner'
 import { AppShell } from './components/layout/AppShell'
 import { LoginView } from './pages/Login'
 import { InstallPrompt } from './components/InstallPrompt'
+import { TutorEmailPrompt } from './components/TutorEmailPrompt'
 import { request, setOnUnauthorized } from './lib/api'
 
 // Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
@@ -89,7 +90,7 @@ const DashboardCharts = lazy(() =>
   import('./DashboardCharts').then((m) => ({ default: m.DashboardCharts }))
 )
 
-export type User = { id: string; username: string; role: string; tutorId?: string }
+export type User = { id: string; username: string; role: string; tutorId?: string; email?: string }
 
 function PageFallback() {
   return (
@@ -107,6 +108,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [ready, setReady] = useState(false)
   const [page, setPage] = useState('dashboard')
+  const [tutorAccountOpen, setTutorAccountOpen] = useState(false)
 
   useEffect(() => {
     void request('/auth/refresh', '', 'POST')
@@ -122,6 +124,7 @@ export default function App() {
     void request('/auth/logout', token, 'POST').catch(() => undefined)
     setToken('')
     setUser(null)
+    setTutorAccountOpen(false)
   }, [token])
 
   useEffect(() => {
@@ -196,6 +199,7 @@ export default function App() {
         page={page}
         setPage={setPage}
         onLogout={handleLogout}
+        onOpenTutorAccount={() => setTutorAccountOpen(true)}
       >
         <Suspense fallback={<PageFallback />}>
           <ErrorBoundary key={page}>
@@ -210,6 +214,17 @@ export default function App() {
           </ErrorBoundary>
         </Suspense>
       </AppShell>
+      <TutorEmailPrompt
+        token={token}
+        user={user}
+        required={user.role === 'guru' && !String(user.email || '').trim()}
+        open={tutorAccountOpen || (user.role === 'guru' && !String(user.email || '').trim())}
+        onOpenChange={setTutorAccountOpen}
+        onSaved={(email) => {
+          setUser((current) => (current ? { ...current, email } : current))
+          setTutorAccountOpen(false)
+        }}
+      />
     </>
   )
 }

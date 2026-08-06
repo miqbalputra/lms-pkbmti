@@ -49,7 +49,7 @@ func (b *Base) BeforeCreate(*gorm.DB) error {
 type User struct {
 	Base
 	Username     string  `gorm:"uniqueIndex;not null" json:"username"`
-	Email        string  `gorm:"uniqueIndex" json:"email"`
+	Email        string  `gorm:"index" json:"email"`
 	PasswordHash string  `json:"-"`
 	Role         string  `gorm:"not null" json:"role"`
 	TutorID      *string `json:"tutorId"`
@@ -835,6 +835,7 @@ func main() {
 	api.Post("/auth/refresh", limiter.New(limiter.Config{Max: 10, Expiration: time.Minute}), s.refresh)
 	api.Post("/auth/logout", s.auth, s.logout)
 	api.Get("/auth/me", s.auth, s.me)
+	api.Put("/auth/account", s.auth, s.updateOwnAccount)
 	api.Get("/auth/google/enabled", s.googleEnabled)
 	api.Get("/auth/google", s.googleLogin)
 	api.Get("/auth/google/callback", s.googleCallback)
@@ -1092,6 +1093,9 @@ func (s *Server) migrateSchema() error {
 	if e := s.ensureTemporaryNISNIndex(); e != nil {
 		return e
 	}
+	if e := s.ensureOptionalUserEmailIndex(); e != nil {
+		return e
+	}
 	if err := s.normalizeStoredRombelNames(); err != nil {
 		return err
 	}
@@ -1188,6 +1192,20 @@ func (s *Server) ensureTemporaryNISNIndex() error {
 		}
 	}
 	return s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS "uniq_peserta_didiks_nisn_real" ON "peserta_didiks" ("nisn") WHERE "nisn" <> '0000000000'`).Error
+}
+
+// ensureOptionalUserEmailIndex allows multiple tutor accounts to start with
+// an empty email while keeping every real email address unique.
+func (s *Server) ensureOptionalUserEmailIndex() error {
+	if s.db.Dialector.Name() != "sqlite" && s.db.Dialector.Name() != "postgres" {
+		return nil
+	}
+	for _, name := range []string{"uni_users_email", "idx_users_email", "users_email_key"} {
+		if e := s.db.Exec(`DROP INDEX IF EXISTS "` + name + `"`).Error; e != nil {
+			return e
+		}
+	}
+	return s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS "uniq_users_email_real" ON "users" ("email") WHERE "email" <> ''`).Error
 }
 func apiError(c *fiber.Ctx, err error) error {
 	code := fiber.StatusInternalServerError

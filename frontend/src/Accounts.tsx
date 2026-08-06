@@ -26,6 +26,7 @@ export function Accounts({ token }: { token: string }) {
   const [orangTuaList, setOrangTuaList] = useState<Row[]>([])
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Row | null>(null)
+  const [formRole, setFormRole] = useState('guru')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -90,7 +91,7 @@ export function Accounts({ token }: { token: string }) {
         title="Manajemen Akun Pengguna"
         description={`${users.length} akun pengguna terdaftar dalam sistem.`}
         actions={
-          <Button onClick={() => { setEditing(null); setShowForm(true) }}>
+          <Button onClick={() => { setEditing(null); setFormRole('guru'); setShowForm(true) }}>
             <Plus className="h-4 w-4" /> Buat akun baru
           </Button>
         }
@@ -112,13 +113,19 @@ export function Accounts({ token }: { token: string }) {
               <Input name="username" defaultValue={String(editing?.username || '')} required />
             </Field>
             <Field label="Email">
-              <Input name="email" type="email" defaultValue={String(editing?.email || '')} required />
+              <Input
+                name="email"
+                type="email"
+                defaultValue={String(editing?.email || '')}
+                placeholder={formRole === 'guru' ? 'Diisi tutor setelah login (opsional)' : 'nama@contoh.com'}
+                required={formRole !== 'guru'}
+              />
             </Field>
             <Field label={editing ? 'Kata sandi baru (opsional)' : 'Kata sandi'}>
               <Input name="password" type="password" minLength={8} required={!editing} />
             </Field>
             <Field label="Peran">
-              <Select name="role" defaultValue={String(editing?.role || 'guru')}>
+              <Select name="role" value={formRole} onChange={(e) => setFormRole(e.target.value)}>
                 <option value="guru">Tutor</option>
                 <option value="admin">Admin</option>
                 <option value="kepala_sekolah">Kepala Sekolah</option>
@@ -178,7 +185,7 @@ export function Accounts({ token }: { token: string }) {
                 users.map((u) => (
                   <TableRow key={u.id}>
                     <TableCell className="font-medium">{String(u.username)}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{String(u.email)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{String(u.email || '-')}</TableCell>
                     <TableCell>
                       <Badge variant={u.role === 'admin' ? 'default' : 'secondary'}>
                         {roleLabels[String(u.role)] || String(u.role)}
@@ -191,7 +198,11 @@ export function Accounts({ token }: { token: string }) {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => { setEditing(u); setShowForm(true) }}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => { setEditing(u); setFormRole(String(u.role || 'guru')); setShowForm(true) }}
+                        >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => toggle(u)}>

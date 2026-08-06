@@ -16,6 +16,7 @@ interface AppShellProps {
   page: string
   setPage: (p: string) => void
   onLogout: () => void
+  onOpenTutorAccount: () => void
   children: ReactNode
 }
 
@@ -25,6 +26,7 @@ function ShellContent({
   page,
   setPage,
   onLogout,
+  onOpenTutorAccount,
   children,
 }: AppShellProps) {
   const { isExpanded, isHovered } = useSidebar()
@@ -40,7 +42,13 @@ function ShellContent({
           isExpanded || isHovered ? 'lg:ml-[290px]' : 'lg:ml-[90px]'
         }`}
       >
-        <AppHeader token={token} setPage={setPage} user={user} onLogout={onLogout} />
+        <AppHeader
+          token={token}
+          setPage={setPage}
+          user={user}
+          onLogout={onLogout}
+          onOpenTutorAccount={onOpenTutorAccount}
+        />
         <div className="p-4 mx-auto max-w-(--breakpoint-2xl) md:p-6 w-full">
           {children}
         </div>
@@ -55,6 +63,7 @@ export function AppShell({
   page,
   setPage,
   onLogout,
+  onOpenTutorAccount,
   children,
 }: AppShellProps) {
   return (
@@ -65,6 +74,7 @@ export function AppShell({
         page={page}
         setPage={setPage}
         onLogout={onLogout}
+        onOpenTutorAccount={onOpenTutorAccount}
       >
         {children}
       </ShellContent>

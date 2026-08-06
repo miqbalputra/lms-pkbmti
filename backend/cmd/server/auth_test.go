@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -27,6 +28,65 @@ func testServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	return &Server{db: db, cfg: Config{AccessSecret: "access-secret-for-tests-32-characters", RefreshSecret: "refresh-secret-for-tests-32-characters", Env: "development", AccessTTL: time.Minute, RefreshTTL: time.Hour}}
+}
+
+func TestTutorEmailCanBeAddedAfterAccountCreation(t *testing.T) {
+	s := testServer(t)
+	if err := s.db.AutoMigrate(&Tutor{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ensureOptionalUserEmailIndex(); err != nil {
+		t.Fatal(err)
+	}
+	firstTutor := Tutor{Nama: "Tutor Pertama", JenisKelamin: "L"}
+	secondTutor := Tutor{Nama: "Tutor Kedua", JenisKelamin: "P"}
+	for _, tutor := range []*Tutor{&firstTutor, &secondTutor} {
+		if err := s.db.Create(tutor).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := fiber.New()
+	app.Post("/users", func(c *fiber.Ctx) error {
+		c.Locals("userID", "test-admin")
+		return s.createUser(c)
+	})
+	for i, tutor := range []*Tutor{&firstTutor, &secondTutor} {
+		body := strings.NewReader(fmt.Sprintf(`{"username":"tutor-no-email-%d","password":"Password123","role":"guru","tutorId":"%s","isActive":true}`, i+1, tutor.ID))
+		request := httptest.NewRequest(http.MethodPost, "/users", body)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := app.Test(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusCreated {
+			t.Fatalf("expected tutor account %d to be created without email, got %d", i+1, response.StatusCode)
+		}
+	}
+	var user User
+	if err := s.db.Where("username = ?", "tutor-no-email-1").First(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	app.Put("/auth/account", func(c *fiber.Ctx) error {
+		c.Locals("userID", user.ID)
+		return s.updateOwnAccount(c)
+	})
+	request := httptest.NewRequest(http.MethodPut, "/auth/account", strings.NewReader(`{"email":"tutor.pertama@gmail.com"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := app.Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected tutor to save Gmail after login, got %d", response.StatusCode)
+	}
+	if err := s.db.First(&user, "id = ?", user.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.Email != "tutor.pertama@gmail.com" {
+		t.Fatalf("expected saved Gmail to sync to user account, got %q", user.Email)
+	}
 }
 
 func TestRefreshTokenRotatesAndRejectsReuse(t *testing.T) {

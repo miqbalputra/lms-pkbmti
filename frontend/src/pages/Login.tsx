@@ -17,6 +17,7 @@ interface User {
   id: string
   username: string
   role: string
+  email?: string
 }
 
 interface LoginProps {
@@ -255,4 +256,3 @@ function GoogleIcon({ className }: { className?: string }) {
     </svg>
   )
 }
-
