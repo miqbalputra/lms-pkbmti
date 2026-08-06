@@ -277,7 +277,7 @@ func TestTutorTemplateUsesRenamedSheet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) == 0 || len(rows[0]) != 6 || rows[0][0] != "nama" || rows[0][4] != "tanggal_mulai_tugas" {
+	if len(rows) == 0 || len(rows[0]) != 8 || rows[0][0] != "nama" || rows[0][4] != "tanggal_lahir" || rows[0][6] != "tanggal_mulai_tugas" {
 		t.Fatalf("unexpected tutor template headers: %#v", rows)
 	}
 }

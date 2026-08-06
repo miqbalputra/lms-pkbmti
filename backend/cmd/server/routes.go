@@ -432,18 +432,20 @@ type tutorInput struct {
 	Nama            string  `json:"nama"`
 	JenisKelamin    string  `json:"jenisKelamin"`
 	NoHP            *string `json:"noHp"`
+	NIK             string  `json:"nik"`
 	Alamat          string  `json:"alamat"`
+	TanggalLahir    *string `json:"tanggalLahir"`
 	TanggalBertugas *string `json:"tanggalBertugas"`
 	IsRPPMaker      *bool   `json:"isRppMaker"`
 }
 
-func parseTutorAssignmentDate(value *string) (*time.Time, error) {
+func parseOptionalTutorDate(value *string, field string) (*time.Time, error) {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return nil, nil
 	}
 	parsed, err := parseFlexibleDate(*value)
 	if err != nil {
-		return nil, fiber.NewError(400, "format tanggalBertugas tidak valid (YYYY-MM-DD)")
+		return nil, fiber.NewError(400, "format "+field+" tidak valid (YYYY-MM-DD)")
 	}
 	return &parsed, nil
 }
@@ -451,6 +453,7 @@ func parseTutorAssignmentDate(value *string) (*time.Time, error) {
 func validateTutorInput(in *tutorInput) error {
 	in.Nama = strings.TrimSpace(in.Nama)
 	in.JenisKelamin = strings.ToUpper(strings.TrimSpace(in.JenisKelamin))
+	in.NIK = strings.TrimSpace(in.NIK)
 	if in.NoHP != nil {
 		trimmed := strings.TrimSpace(*in.NoHP)
 		in.NoHP = &trimmed
@@ -470,7 +473,11 @@ func (s *Server) createTutor(c *fiber.Ctx) error {
 	if err := validateTutorInput(&in); err != nil {
 		return err
 	}
-	tanggal, err := parseTutorAssignmentDate(in.TanggalBertugas)
+	tanggalLahir, err := parseOptionalTutorDate(in.TanggalLahir, "tanggalLahir")
+	if err != nil {
+		return err
+	}
+	tanggalBertugas, err := parseOptionalTutorDate(in.TanggalBertugas, "tanggalBertugas")
 	if err != nil {
 		return err
 	}
@@ -478,7 +485,7 @@ func (s *Server) createTutor(c *fiber.Ctx) error {
 	if in.NoHP != nil {
 		noHP = *in.NoHP
 	}
-	row := Tutor{Nama: in.Nama, JenisKelamin: in.JenisKelamin, NoHP: noHP, Alamat: in.Alamat, TanggalBertugas: tanggal}
+	row := Tutor{Nama: in.Nama, JenisKelamin: in.JenisKelamin, NIK: in.NIK, NoHP: noHP, Alamat: in.Alamat, TanggalLahir: tanggalLahir, TanggalBertugas: tanggalBertugas}
 	if in.IsRPPMaker != nil {
 		row.IsRPPMaker = *in.IsRPPMaker
 	}
@@ -503,13 +510,20 @@ func (s *Server) updateTutor(c *fiber.Ctx) error {
 		return err
 	}
 	if in.TanggalBertugas != nil {
-		tanggal, err := parseTutorAssignmentDate(in.TanggalBertugas)
+		tanggal, err := parseOptionalTutorDate(in.TanggalBertugas, "tanggalBertugas")
 		if err != nil {
 			return err
 		}
 		row.TanggalBertugas = tanggal
 	}
-	row.Nama, row.JenisKelamin, row.Alamat = in.Nama, in.JenisKelamin, in.Alamat
+	if in.TanggalLahir != nil {
+		tanggal, err := parseOptionalTutorDate(in.TanggalLahir, "tanggalLahir")
+		if err != nil {
+			return err
+		}
+		row.TanggalLahir = tanggal
+	}
+	row.Nama, row.JenisKelamin, row.NIK, row.Alamat = in.Nama, in.JenisKelamin, in.NIK, in.Alamat
 	if in.NoHP != nil {
 		row.NoHP = *in.NoHP
 	}
@@ -6176,19 +6190,19 @@ func (s *Server) tutorTemplate(c *fiber.Ctx) error {
 	sheet := xlsx.GetSheetName(0)
 	_ = xlsx.SetSheetName(sheet, "Tutor")
 	sheet = "Tutor"
-	headers := []string{"nama", "jenis_kelamin", "no_hp", "alamat", "tanggal_mulai_tugas", "is_rpp_maker"}
+	headers := []string{"nama", "jenis_kelamin", "no_hp", "nik", "tanggal_lahir", "alamat", "tanggal_mulai_tugas", "is_rpp_maker"}
 	if err := xlsx.SetSheetRow(sheet, "A1", &headers); err != nil {
 		return err
 	}
 	examples := []struct{ row []string }{
-		{[]string{"Ahmad Fauzi", "L", "08123456789", "Jl. Merdeka No. 10, Jakarta", "2026-07-01", "false"}},
-		{[]string{"Siti Nurhaliza", "P", "08567890123", "Jl. Pendidikan No. 5, Bandung", "2026-07-01", "true"}},
+		{[]string{"Ahmad Fauzi", "L", "08123456789", "", "", "Jl. Merdeka No. 10, Jakarta", "2026-07-01", "false"}},
+		{[]string{"Siti Nurhaliza", "P", "08567890123", "", "", "Jl. Pendidikan No. 5, Bandung", "2026-07-01", "true"}},
 	}
 	for i, ex := range examples {
 		cell, _ := excelize.CoordinatesToCellName(1, i+2)
 		_ = xlsx.SetSheetRow(sheet, cell, &ex.row)
 	}
-	widths := []float64{28, 16, 18, 40, 20, 14}
+	widths := []float64{28, 16, 18, 22, 18, 40, 20, 14}
 	for i, w := range widths {
 		col, _ := excelize.ColumnNumberToName(i + 1)
 		_ = xlsx.SetColWidth(sheet, col, col, w)
@@ -6269,12 +6283,12 @@ func validateTutorImportHeaders(header []string) error {
 			return fmt.Errorf("kolom tidak sesuai; tiga kolom pertama harus: nama, jenis_kelamin, no_hp")
 		}
 	}
-	allowed := map[string]bool{"alamat": true, "tanggal_mulai_tugas": true, "is_rpp_maker": true}
+	allowed := map[string]bool{"nik": true, "tanggal_lahir": true, "alamat": true, "tanggal_mulai_tugas": true, "is_rpp_maker": true}
 	seen := map[string]bool{}
 	for _, raw := range header[3:] {
 		name := strings.ToLower(strings.TrimSpace(raw))
 		if !allowed[name] || seen[name] {
-			return fmt.Errorf("kolom tutor tidak dikenal/duplikat; gunakan alamat, tanggal_mulai_tugas, dan is_rpp_maker sebagai kolom opsional")
+			return fmt.Errorf("kolom tutor tidak dikenal/duplikat; gunakan nik, tanggal_lahir, alamat, tanggal_mulai_tugas, dan is_rpp_maker sebagai kolom opsional")
 		}
 		seen[name] = true
 	}
@@ -6282,7 +6296,7 @@ func validateTutorImportHeaders(header []string) error {
 }
 
 func importColumnIndex(header []string) map[string]int {
-	result := map[string]int{"nama": -1, "jenis_kelamin": -1, "no_hp": -1, "alamat": -1, "tanggal_mulai_tugas": -1, "is_rpp_maker": -1}
+	result := map[string]int{"nama": -1, "jenis_kelamin": -1, "no_hp": -1, "nik": -1, "tanggal_lahir": -1, "alamat": -1, "tanggal_mulai_tugas": -1, "is_rpp_maker": -1}
 	for i, raw := range header {
 		result[strings.ToLower(strings.TrimSpace(raw))] = i
 	}
@@ -6617,6 +6631,8 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 			nama := importCell(row, columns["nama"])
 			jk := strings.ToUpper(importCell(row, columns["jenis_kelamin"]))
 			noHP := importCell(row, columns["no_hp"])
+			nik := importCell(row, columns["nik"])
+			birthDateValue := importCell(row, columns["tanggal_lahir"])
 			alamat := importCell(row, columns["alamat"])
 			dateValue := importCell(row, columns["tanggal_mulai_tugas"])
 			isRPP := strings.ToLower(importCell(row, columns["is_rpp_maker"]))
@@ -6633,6 +6649,15 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				}
 				tanggal = &parsed
 			}
+			var tanggalLahir *time.Time
+			if birthDateValue != "" {
+				parsed, dateErr := parseFlexibleDate(birthDateValue)
+				if dateErr != nil {
+					issues = append(issues, importIssue{line, "tanggal_lahir tidak valid (YYYY-MM-DD)"})
+					continue
+				}
+				tanggalLahir = &parsed
+			}
 			if namaSeen[nama] {
 				issues = append(issues, importIssue{line, "duplikat nama dalam file: " + nama})
 				continue
@@ -6645,8 +6670,10 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 			tutor := Tutor{
 				Nama:            nama,
 				JenisKelamin:    jk,
+				NIK:             nik,
 				NoHP:            noHP,
 				Alamat:          alamat,
+				TanggalLahir:    tanggalLahir,
 				TanggalBertugas: tanggal,
 				IsRPPMaker:      isRPP == "true" || isRPP == "1" || isRPP == "ya",
 			}

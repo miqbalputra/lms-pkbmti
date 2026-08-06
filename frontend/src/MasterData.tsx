@@ -98,6 +98,8 @@ const schemas: Record<string, Schema> = {
         required: true,
       },
       { key: 'noHp', label: 'No. HP / WhatsApp', required: true, placeholder: '08123456789' },
+      { key: 'nik', label: 'NIK Tutor', required: false, placeholder: 'NIK 16 digit (opsional)' },
+      { key: 'tanggalLahir', label: 'Tanggal Lahir', type: 'date', required: false },
       { key: 'alamat', label: 'Alamat', required: false, placeholder: 'Alamat lengkap tutor' },
       { key: 'tanggalBertugas', label: 'Tanggal Mulai Tugas', type: 'date', required: false },
       { key: 'isRppMaker', label: 'Penyusun RPP (berhak upload RPP per jenjang)', type: 'checkbox' },
@@ -114,6 +116,8 @@ const schemas: Record<string, Schema> = {
         ],
       },
       { key: 'noHp', label: 'No. HP / WA' },
+      { key: 'nik', label: 'NIK Tutor', mono: true },
+      { key: 'tanggalLahir', label: 'Tanggal Lahir', render: 'date' },
       { key: 'alamat', label: 'Alamat', truncate: true },
       { key: 'tanggalBertugas', label: 'Mulai Tugas', render: 'date' },
       { key: 'isRppMaker', label: 'Penyusun RPP', render: 'boolean' },
@@ -461,6 +465,14 @@ export function MasterData({
           setIsSubmitting(false)
           return
         }
+      }
+    }
+    if (resource === 'tutor') {
+      const nik = String(body.nik ?? '').trim()
+      if (nik && !/^\d{16}$/.test(nik)) {
+        toast.error('NIK Tutor harus terdiri dari 16 digit angka.')
+        setIsSubmitting(false)
+        return
       }
     }
 

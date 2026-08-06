@@ -79,6 +79,7 @@ type Tutor struct {
 	Base
 	Nama               string     `json:"nama"`
 	JenisKelamin       string     `json:"jenisKelamin"`
+	NIK                string     `json:"nik"`
 	TempatLahir        string     `json:"tempatLahir"`
 	TanggalLahir       *time.Time `json:"tanggalLahir"`
 	TanggalBertugas    *time.Time `json:"tanggalBertugas"`
