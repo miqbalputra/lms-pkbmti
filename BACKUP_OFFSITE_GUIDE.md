@@ -94,7 +94,80 @@ Endpoint dapat berupa:
 
 URL presigned S3 yang kadaluarsa biasanya tidak cocok dipakai langsung untuk cron harian karena URL tersebut hanya berlaku sementara. Gunakan gateway yang dapat membuat signature baru, atau gunakan endpoint upload yang masa berlakunya panjang dan dibatasi dengan token.
 
-## 4. Menyiapkan database restore drill
+## 4. Pilihan praktis: n8n ke Google Drive
+
+Gunakan satu workflow n8n sebagai gateway upload:
+
+```text
+Webhook (PUT) -> Google Drive: Upload -> Respond to Webhook
+```
+
+### Konfigurasi Webhook
+
+1. Buat node **Webhook**.
+2. Pilih **HTTP Method: PUT**.
+3. Buat path khusus, misalnya `pkbm-backup`.
+4. Aktifkan autentikasi webhook **Header Auth**. Buat credential dengan:
+   - nama header: `Authorization`;
+   - nilai: `Bearer TOKEN_RANDOM_YANG_SAMA_DENGAN_APLIKASI`.
+5. Pada options, isi **Binary Property: `data`**.
+6. Pilih response menggunakan node **Respond to Webhook** setelah proses selesai.
+
+Salin **Production URL** dari node Webhook, lalu isi di aplikasi:
+
+```env
+BACKUP_OFFSITE_URL=https://n8n.example.com/webhook/pkbm-backup
+BACKUP_OFFSITE_METHOD=PUT
+BACKUP_OFFSITE_TOKEN=TOKEN_RANDOM_YANG_SAMA_DENGAN_CREDENTIAL_N8N
+```
+
+Jangan memakai Test URL untuk production. Webhook n8n memang mendukung method `PUT` dan menerima file melalui binary property; node Google Drive kemudian menggunakan nama binary property tersebut untuk upload.
+
+### Konfigurasi Google Drive
+
+1. Tambahkan node **Google Drive** setelah Webhook.
+2. Pilih credential Google Drive yang hanya memiliki akses ke folder backup.
+3. Pilih **Resource: File** dan **Operation: Upload**.
+4. Isi **Input Data Field Name: `data`**.
+5. Pilih **Parent Drive** dan **Parent Folder** tujuan.
+6. Pada **File Name**, gunakan expression:
+
+```text
+{{ $json.headers['x-backup-name'] || $json.headers['X-Backup-Name'] || 'pkbm-backup.sql.enc' }}
+```
+
+Buat folder khusus, misalnya `PKBM Tunas Ilmu / Database Backups`, dan jangan aktifkan public sharing. File di Google Drive tetap berupa `.sql.enc`/`.db.enc`, bukan database plaintext.
+
+### Konfigurasi response dan keamanan n8n
+
+Tambahkan node **Respond to Webhook** setelah Google Drive. Kembalikan JSON sederhana:
+
+```json
+{
+  "ok": true,
+  "fileId": "={{ $json.id }}",
+  "fileName": "={{ $json.name }}"
+}
+```
+
+Atur n8n agar execution sukses tidak disimpan terlalu lama dan data binary execution dipangkas berkala. Jangan menulis body backup, encryption key, atau token ke log. Jika upload gagal, biarkan workflow menghasilkan HTTP `4xx`/`5xx`; aplikasi akan menandai offsite gagal tetapi tetap mempertahankan backup lokal.
+
+### Uji workflow sebelum diaktifkan
+
+Untuk uji dari server aplikasi, kirim salah satu file backup terenkripsi secara manual:
+
+```bash
+curl -X PUT \
+  -H "Authorization: Bearer TOKEN_RANDOM_YANG_SAMA_DENGAN_APLIKASI" \
+  -H "Content-Type: application/octet-stream" \
+  -H "X-Backup-Name: pkbm-test.sql.enc" \
+  --data-binary @backups/pkbm-test.sql.enc \
+  https://n8n.example.com/webhook/pkbm-backup
+```
+
+Pastikan response `2xx`, file muncul di folder Drive, ukurannya tidak nol, dan ekstensi tetap `.enc`. Setelah itu gunakan `BACKUP_CRON=*/5 * * * *` hanya di non-production untuk menguji satu siklus otomatis, lalu kembalikan ke `0 2 * * *`.
+
+## 5. Menyiapkan database restore drill
 
 Database drill harus terpisah dari production. Restore drill akan mengganti isi database drill dengan dump terbaru, sehingga database tersebut harus disposable.
 
@@ -114,7 +187,7 @@ Untuk production yang lebih aman, gunakan instance PostgreSQL terpisah. Jangan p
 
 Saat backup terjadwal berjalan, aplikasi menggunakan `psql` dengan transaksi dan `ON_ERROR_STOP=1`. Jika restore drill gagal, backup lokal tetap ada tetapi job ditandai gagal.
 
-## 5. Cara memverifikasi konfigurasi
+## 6. Cara memverifikasi konfigurasi
 
 ### Cek environment di container
 
@@ -169,7 +242,7 @@ scheduled backup: offsite upload failed: ...
 scheduled backup: pg_dump failed: ...
 ```
 
-## 6. Uji pertama tanpa menunggu pukul 02:00
+## 7. Uji pertama tanpa menunggu pukul 02:00
 
 Untuk uji sementara, gunakan cron setiap 5 menit di environment non-production:
 
@@ -192,7 +265,7 @@ Pastikan:
 5. `lastRestoreDrillAt` terisi jika database drill dikonfigurasi;
 6. `totalFailure` tidak bertambah.
 
-## 7. Prosedur restore
+## 8. Prosedur restore
 
 ### Restore PostgreSQL biasa
 
@@ -214,7 +287,7 @@ Untuk PostgreSQL, file `.sql.enc` diterapkan langsung. Untuk SQLite, file `.db.e
 
 Jika encryption key sudah diganti, gunakan key lama untuk restore backup lama. Sistem tidak dapat mendekripsi backup lama dengan key baru.
 
-## 8. Retensi dan keamanan
+## 9. Retensi dan keamanan
 
 - `BACKUP_RETENTION` hanya memangkas backup otomatis lokal.
 - Retensi file offsite diatur oleh storage/gateway offsite, bukan aplikasi ini.
