@@ -388,7 +388,7 @@ export function UjianView({
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => window.open('/api/ujian-online/page', '_blank')}
+                          onClick={() => window.open('/ujian', '_blank')}
                           title="Buka halaman ujian siswa"
                         >
                           🎓 Siswa

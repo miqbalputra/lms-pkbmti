@@ -25,7 +25,7 @@ export function UjianOnlineView({ token }: { token: string }) {
         title="Ujian Online"
         description="Daftar ujian online yang memiliki kode akses. Siswa mengerjakan via halaman publik."
         actions={
-          <Button variant="outline" onClick={() => window.open('/api/ujian-online/page', '_blank')}>
+          <Button variant="outline" onClick={() => window.open('/ujian', '_blank')}>
             <ExternalLink className="h-4 w-4" /> Buka Halaman Siswa
           </Button>
         }
@@ -67,7 +67,7 @@ export function UjianOnlineView({ token }: { token: string }) {
                         <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">{String(u.aksesKode)}</code>
                       </TableCell>
                       <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => window.open('/api/ujian-online/page', '_blank')}>
+                        <Button size="sm" variant="outline" onClick={() => window.open('/ujian', '_blank')}>
                           🎓 Halaman Siswa
                         </Button>
                       </TableCell>

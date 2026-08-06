@@ -269,7 +269,7 @@ function Workspace({
   if (page === 'kalender') return <KalenderView token={token} readOnly={user.role === 'kepala_sekolah' || user.role === 'guru'} />
   if (page === 'analytics') return <AnalyticsView token={token} />
   if (page === 'portal-ortu') {
-    window.open('/api/orang-tua/portal', '_blank')
+    window.open('/orangtua', '_blank')
     setPage('dashboard')
     return null
   }

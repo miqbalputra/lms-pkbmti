@@ -4304,7 +4304,7 @@ func (s *Server) printUjian(c *fiber.Ctx) error {
 	}
 	// QR code: tautan ke halaman ujian online siswa
 	if uj.AksesKode != "" && !kunciMode {
-		studentURL := publicBase() + "/api/ujian-online/page"
+		studentURL := publicBase() + "/ujian"
 		if qrBytes, err := qrPNG(studentURL); err == nil {
 			opts := gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}
 			pdf.RegisterImageOptionsReader("qrujian", opts, bytes.NewReader(qrBytes))
