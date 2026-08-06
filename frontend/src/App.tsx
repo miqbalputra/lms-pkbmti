@@ -77,6 +77,7 @@ const NilaiKompetensiView = lazy(() => import('./pages/NilaiKompetensiView').the
 const LaporanView = lazy(() => import('./pages/LaporanView').then((m) => ({ default: m.LaporanView })))
 const ImportView = lazy(() => import('./pages/ImportView').then((m) => ({ default: m.ImportView })))
 const TutorDocumentsView = lazy(() => import('./pages/TutorDocumentsView').then((m) => ({ default: m.TutorDocumentsView })))
+const SuratSiswaView = lazy(() => import('./pages/SuratSiswaView').then((m) => ({ default: m.SuratSiswaView })))
 const RelasiOrangTua = lazy(() => import('./pages/RelasiOrangTua').then((m) => ({ default: m.RelasiOrangTua })))
 const BackupView = lazy(() => import('./pages/BackupView').then((m) => ({ default: m.BackupView })))
 const UjianOnlineView = lazy(() => import('./pages/UjianOnlineView').then((m) => ({ default: m.UjianOnlineView })))
@@ -264,6 +265,7 @@ function Workspace({
   if (page === 'laporan') return <LaporanView token={token} />
   if (page === 'import') return user.role === 'admin' || user.role === 'guru' ? <ImportView token={token} user={user} /> : <Restricted />
   if (page === 'dokumen-tutor') return user.role === 'admin' || user.role === 'guru' ? <TutorDocumentsView token={token} role={user.role} /> : <Restricted />
+  if (page === 'surat-siswa') return user.role === 'admin' ? <SuratSiswaView token={token} /> : <Restricted />
   if (page === 'backup') return user.role === 'admin' ? <BackupView token={token} /> : <Restricted />
   if (page === 'ujian-online') return <UjianOnlineView token={token} />
   if (page === 'ujian-monitor') return <UjianMonitorView token={token} />

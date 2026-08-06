@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/base64"
 	"encoding/csv"
@@ -178,6 +179,8 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/orang-tua/anak/:id/chat", s.listChatAnak)
 	api.Post("/orang-tua/anak/:id/chat", s.sendChatAnak)
 	api.Get("/orang-tua/anak/:id/perilaku", s.getPerilakuAnak)
+	api.Get("/orang-tua/anak/:id/surat", s.listSuratAnak)
+	api.Get("/orang-tua/anak/:id/surat/:suratId/download", s.downloadSuratAnak)
 
 	// Modul P — Kartu Pelajar (prd_fitur_simpkbm.md). Cetak PDF (ID card + QR) per
 	// siswa atau massal per rombel. Guard canManageKelas via kelas siswa (admin/kepala
@@ -245,6 +248,7 @@ func (s *Server) routes(api fiber.Router) {
 	readAll.Get("/bobot-sumber-nilai", s.listBobotSumberNilai)
 	// Modul R — riwayat import terpusat (admin+kepala).
 	readAll.Get("/import/log", s.listImportLog)
+	readAll.Get("/surat-siswa", s.listSuratSiswa)
 
 	// Admin-only writes (writable rejects kepala_sekolah; admin rejects non-admin).
 	admin := api.Group("", s.writable, s.admin)
@@ -313,6 +317,8 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Post("/backup", s.createBackupNow)
 	admin.Post("/backup/restore", s.stageRestore)
 	admin.Delete("/backup/:name", s.deleteBackupFile)
+	admin.Post("/surat-siswa", s.uploadSuratSiswa)
+	admin.Delete("/surat-siswa/:id", s.deleteSuratSiswa)
 }
 
 func id(c *fiber.Ctx) string { return c.Params("id") }
@@ -752,6 +758,344 @@ func (s *Server) downloadMyTutorSKPenugasan(c *fiber.Ctx) error {
 		return err
 	}
 	return s.downloadTutorSKPenugasan(c)
+}
+
+const (
+	suratSiswaZipMaxBytes = 256 * 1024 * 1024
+	suratSiswaPDFMaxBytes = 20 * 1024 * 1024
+)
+
+type suratSiswaAdminRow struct {
+	ID         string    `json:"id"`
+	Judul      string    `json:"judul"`
+	Cakupan    string    `json:"cakupan"`
+	KelasID    *string   `json:"kelasId,omitempty"`
+	KelasLabel string    `json:"kelasLabel,omitempty"`
+	FileCount  int64     `json:"fileCount"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type suratSiswaParentRow struct {
+	ID        string    `json:"id"`
+	Judul     string    `json:"judul"`
+	FileName  string    `json:"fileName"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type suratSiswaExtractedFile struct {
+	NISN     string
+	Path     string
+	FileName string
+}
+
+func suratKelasLabel(k Kelas) string {
+	label := fmt.Sprintf("Kelas %d%s", k.Jenjang, k.NamaRombel)
+	if k.TahunAjaran.NamaTahunAjaran != "" {
+		label += " - " + k.TahunAjaran.NamaTahunAjaran
+	}
+	return label
+}
+
+func (s *Server) listSuratSiswa(c *fiber.Ctx) error {
+	var rows []SuratSiswa
+	if err := s.db.Order("created_at desc").Find(&rows).Error; err != nil {
+		return err
+	}
+	result := make([]suratSiswaAdminRow, 0, len(rows))
+	for _, row := range rows {
+		var count int64
+		s.db.Model(&SuratSiswaFile{}).Where("surat_siswa_id = ?", row.ID).Count(&count)
+		adminRow := suratSiswaAdminRow{
+			ID: row.ID, Judul: row.Judul, Cakupan: row.Cakupan, KelasID: row.KelasID,
+			FileCount: count, CreatedAt: row.CreatedAt,
+		}
+		if row.KelasID != nil {
+			var kelas Kelas
+			if s.db.Preload("TahunAjaran").First(&kelas, "id = ?", *row.KelasID).Error == nil {
+				adminRow.KelasLabel = suratKelasLabel(kelas)
+			}
+		}
+		result = append(result, adminRow)
+	}
+	return c.JSON(result)
+}
+
+func (s *Server) targetSuratStudents(c *fiber.Ctx, cakupan, kelasID string, targetIDs []string) ([]PesertaDidik, error) {
+	var students []PesertaDidik
+	query := s.db.Order("nama asc")
+	switch cakupan {
+	case "semua_kelas":
+		if err := query.Where("status = ?", "aktif").Find(&students).Error; err != nil {
+			return nil, err
+		}
+	case "kelas":
+		if strings.TrimSpace(kelasID) == "" {
+			return nil, fiber.NewError(400, "kelas wajib dipilih")
+		}
+		var kelas Kelas
+		if err := s.db.First(&kelas, "id = ?", kelasID).Error; err != nil {
+			return nil, fiber.NewError(404, "kelas tidak ditemukan")
+		}
+		if err := query.Where("kelas_id = ? AND status = ?", kelasID, "aktif").Find(&students).Error; err != nil {
+			return nil, err
+		}
+	case "anak":
+		if len(targetIDs) == 0 {
+			return nil, fiber.NewError(400, "minimal satu anak wajib dipilih")
+		}
+		if err := query.Where("id IN ?", targetIDs).Find(&students).Error; err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fiber.NewError(400, "cakupan surat tidak valid")
+	}
+	if len(students) == 0 {
+		return nil, fiber.NewError(400, "tidak ada peserta didik yang menjadi target")
+	}
+	return students, nil
+}
+
+func (s *Server) extractSuratSiswaZip(zipPath string, targets map[string]PesertaDidik) ([]suratSiswaExtractedFile, error) {
+	reader, err := zip.OpenReader("./" + zipPath)
+	if err != nil {
+		return nil, fiber.NewError(400, "file ZIP tidak dapat dibaca")
+	}
+	defer reader.Close()
+	if len(reader.File) == 0 {
+		return nil, fiber.NewError(400, "file ZIP kosong")
+	}
+
+	if err := os.MkdirAll("./uploads/surat-siswa", 0o755); err != nil {
+		return nil, fiber.NewError(500, "direktori surat tidak dapat dibuat")
+	}
+	seen := make(map[string]bool)
+	created := make([]suratSiswaExtractedFile, 0, len(reader.File))
+	totalBytes := uint64(0)
+	cleanup := func() {
+		for _, file := range created {
+			removeUpload(file.Path)
+		}
+	}
+	for _, entry := range reader.File {
+		if entry.FileInfo().IsDir() {
+			continue
+		}
+		if strings.ContainsAny(entry.Name, "/\\") {
+			cleanup()
+			return nil, fiber.NewError(400, "nama file ZIP harus langsung berupa NISN.pdf tanpa subfolder")
+		}
+		name := filepath.Base(entry.Name)
+		if strings.ToLower(filepath.Ext(name)) != ".pdf" {
+			cleanup()
+			return nil, fiber.NewError(400, fmt.Sprintf("file %s bukan PDF", name))
+		}
+		nisn := strings.TrimSuffix(name, filepath.Ext(name))
+		if strings.TrimSpace(nisn) == "" {
+			cleanup()
+			return nil, fiber.NewError(400, "nama file PDF harus berupa NISN")
+		}
+		if seen[nisn] {
+			cleanup()
+			return nil, fiber.NewError(400, fmt.Sprintf("NISN %s muncul lebih dari sekali", nisn))
+		}
+		seen[nisn] = true
+		target, ok := targets[nisn]
+		if !ok {
+			cleanup()
+			return nil, fiber.NewError(400, fmt.Sprintf("NISN %s tidak termasuk target yang dipilih", nisn))
+		}
+		if entry.UncompressedSize64 == 0 || entry.UncompressedSize64 > suratSiswaPDFMaxBytes {
+			cleanup()
+			return nil, fiber.NewError(400, fmt.Sprintf("PDF %s melebihi batas 20 MB atau kosong", name))
+		}
+		totalBytes += entry.UncompressedSize64
+		if totalBytes > suratSiswaZipMaxBytes {
+			cleanup()
+			return nil, fiber.NewError(400, "total isi ZIP melebihi batas 256 MB")
+		}
+		fileReader, openErr := entry.Open()
+		if openErr != nil {
+			cleanup()
+			return nil, fiber.NewError(400, fmt.Sprintf("PDF %s tidak dapat dibuka", name))
+		}
+		data, readErr := io.ReadAll(io.LimitReader(fileReader, suratSiswaPDFMaxBytes+1))
+		fileReader.Close()
+		if readErr != nil || len(data) > suratSiswaPDFMaxBytes || !bytes.HasPrefix(data, []byte("%PDF-")) {
+			cleanup()
+			return nil, fiber.NewError(400, fmt.Sprintf("file %s bukan PDF yang valid", name))
+		}
+		path := "uploads/surat-siswa/" + uuid.NewString() + ".pdf"
+		if err := os.WriteFile("./"+path, data, 0o640); err != nil {
+			cleanup()
+			return nil, fiber.NewError(500, "PDF hasil ekstraksi tidak dapat disimpan")
+		}
+		created = append(created, suratSiswaExtractedFile{NISN: nisn, Path: path, FileName: name})
+		_ = target // target is intentionally looked up here to validate the NISN mapping.
+	}
+	if len(created) != len(targets) {
+		missing := make([]string, 0)
+		for nisn := range targets {
+			if !seen[nisn] {
+				missing = append(missing, nisn)
+			}
+		}
+		cleanup()
+		return nil, fiber.NewError(400, fmt.Sprintf("PDF belum lengkap. NISN yang belum ada: %s", strings.Join(missing, ", ")))
+	}
+	return created, nil
+}
+
+func (s *Server) uploadSuratSiswa(c *fiber.Ctx) error {
+	judul := strings.TrimSpace(c.FormValue("judul"))
+	if judul == "" || len([]rune(judul)) > 200 {
+		return fiber.NewError(400, "judul surat wajib diisi dan maksimal 200 karakter")
+	}
+	cakupan := strings.TrimSpace(c.FormValue("cakupan"))
+	kelasID := strings.TrimSpace(c.FormValue("kelasId"))
+	var targetIDs []string
+	if raw := strings.TrimSpace(c.FormValue("pesertaDidikIds")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &targetIDs); err != nil {
+			return fiber.NewError(400, "daftar anak tidak valid")
+		}
+	}
+	students, err := s.targetSuratStudents(c, cakupan, kelasID, targetIDs)
+	if err != nil {
+		return err
+	}
+	targets := make(map[string]PesertaDidik, len(students))
+	for _, student := range students {
+		if strings.TrimSpace(student.NISN) == "" {
+			return fiber.NewError(400, fmt.Sprintf("peserta didik %s belum memiliki NISN", student.Nama))
+		}
+		if _, exists := targets[student.NISN]; exists {
+			return fiber.NewError(400, "terdapat NISN target yang duplikat")
+		}
+		targets[student.NISN] = student
+	}
+	zipPath, err := s.saveUpload(c, "file", "surat-siswa-tmp", suratSiswaZipMaxBytes, []string{"zip"})
+	if err != nil {
+		return err
+	}
+	if zipPath == "" {
+		return fiber.NewError(400, "file ZIP wajib diunggah")
+	}
+	defer removeUpload(zipPath)
+	extracted, err := s.extractSuratSiswaZip(zipPath, targets)
+	if err != nil {
+		return err
+	}
+	keepFiles := false
+	defer func() {
+		if !keepFiles {
+			for _, file := range extracted {
+				removeUpload(file.Path)
+			}
+		}
+	}()
+	uid := c.Locals("userID").(string)
+	var surat SuratSiswa
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		surat = SuratSiswa{Judul: judul, Cakupan: cakupan, UploadedByUserID: uid}
+		if cakupan == "kelas" {
+			surat.KelasID = &kelasID
+		}
+		if err := tx.Create(&surat).Error; err != nil {
+			return err
+		}
+		for _, file := range extracted {
+			student := targets[file.NISN]
+			if err := tx.Create(&SuratSiswaFile{
+				SuratSiswaID: surat.ID, PesertaDidikID: student.ID, NISN: file.NISN,
+				FilePath: file.Path, FileName: file.FileName,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		s.auditTx(tx, &uid, "upload", "surat_siswa", surat.ID)
+		return nil
+	}); err != nil {
+		return fiber.NewError(500, "surat tidak dapat disimpan")
+	}
+	keepFiles = true
+	return c.Status(201).JSON(fiber.Map{
+		"id": surat.ID, "judul": surat.Judul, "cakupan": surat.Cakupan,
+		"targetCount": len(targets), "uploadedCount": len(extracted),
+	})
+}
+
+func (s *Server) deleteSuratSiswa(c *fiber.Ctx) error {
+	var surat SuratSiswa
+	if err := s.db.First(&surat, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "surat tidak ditemukan")
+	}
+	var files []SuratSiswaFile
+	if err := s.db.Where("surat_siswa_id = ?", surat.ID).Find(&files).Error; err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&SuratSiswaFile{}, "surat_siswa_id = ?", surat.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&SuratSiswa{}, "id = ?", surat.ID).Error; err != nil {
+			return err
+		}
+		s.auditTx(tx, &uid, "delete", "surat_siswa", surat.ID)
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, file := range files {
+		removeUpload(file.FilePath)
+	}
+	return c.SendStatus(204)
+}
+
+func (s *Server) parentChild(c *fiber.Ctx) (*User, error) {
+	uid, ok := c.Locals("userID").(string)
+	if !ok || uid == "" {
+		return nil, fiber.NewError(401, "unauthorized")
+	}
+	var user User
+	if err := s.db.First(&user, "id = ?", uid).Error; err != nil || user.Role != "orang_tua" || user.OrangTuaID == nil {
+		return nil, fiber.NewError(403, "akun ini bukan akun orang tua")
+	}
+	var child PesertaDidik
+	if err := s.db.First(&child, "id = ? AND orang_tua_id = ?", c.Params("id"), *user.OrangTuaID).Error; err != nil {
+		return nil, fiber.NewError(403, "anak tidak terdaftar di bawah akun ini")
+	}
+	return &user, nil
+}
+
+func (s *Server) listSuratAnak(c *fiber.Ctx) error {
+	if _, err := s.parentChild(c); err != nil {
+		return err
+	}
+	var files []SuratSiswaFile
+	if err := s.db.Where("peserta_didik_id = ?", c.Params("id")).Order("created_at desc").Find(&files).Error; err != nil {
+		return err
+	}
+	result := make([]suratSiswaParentRow, 0, len(files))
+	for _, file := range files {
+		var surat SuratSiswa
+		if s.db.First(&surat, "id = ?", file.SuratSiswaID).Error != nil {
+			continue
+		}
+		result = append(result, suratSiswaParentRow{ID: surat.ID, Judul: surat.Judul, FileName: file.FileName, CreatedAt: surat.CreatedAt})
+	}
+	return c.JSON(result)
+}
+
+func (s *Server) downloadSuratAnak(c *fiber.Ctx) error {
+	if _, err := s.parentChild(c); err != nil {
+		return err
+	}
+	var file SuratSiswaFile
+	if err := s.db.Where("surat_siswa_id = ? AND peserta_didik_id = ?", c.Params("suratId"), c.Params("id")).First(&file).Error; err != nil {
+		return fiber.NewError(404, "surat belum tersedia")
+	}
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(file.FileName)))
+	return s.sendUpload(c, file.FilePath)
 }
 
 func (s *Server) crudOrangTua(r fiber.Router) {

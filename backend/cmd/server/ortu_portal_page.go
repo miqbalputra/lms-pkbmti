@@ -176,6 +176,7 @@ let state={token:'',anakId:'',anakList:[],anakData:null};
 let turnstileToken='';
 const TABS=[
   {id:'identitas',label:'Identitas',icon:'👤'},
+  {id:'surat',label:'Surat',icon:'📄'},
   {id:'performa',label:'Performa',icon:'📊'},
   {id:'perilaku',label:'Perilaku',icon:'📝'},
   {id:'ujian',label:'Ujian',icon:'📝'},
@@ -242,10 +243,32 @@ function showTab(tab,el){
   const c=document.getElementById('tabContent');
   c.innerHTML='<div class="empty-state">Memuat...</div>';
   const m={
-    identitas:loadIdentitas,performa:loadPerforma,perilaku:loadPerilaku,ujian:loadUjian,tugas:loadTugas,
+    identitas:loadIdentitas,surat:loadSurat,performa:loadPerforma,perilaku:loadPerilaku,ujian:loadUjian,tugas:loadTugas,
     materi:loadMateri,kalender:loadKalender,notif:loadNotif,chat:loadChat,buku:loadBuku
   };
   if(m[tab])m[tab](c);
+}
+
+async function loadSurat(c){
+  try{
+    const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/surat',{headers:hdr()});
+    const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal memuat surat');
+    if(!Array.isArray(d)||!d.length){c.innerHTML='<div class="card"><div class="empty-state">Belum ada surat untuk anak ini.</div></div>';return}
+    c.innerHTML='<div class="card"><div class="card-header"><h1>Surat untuk '+esc(state.anakData?.nama||'anak')+'</h1><p class="desc">Dokumen resmi yang dapat diunduh dari sekolah.</p></div><div class="card-content">'+
+      d.map(s=>'<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)"><div style="min-width:0"><div style="font-size:13px;font-weight:600;word-break:break-word">'+esc(s.judul)+'</div><div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">'+String(s.createdAt||'').slice(0,10)+'</div></div><button class="btn btn-primary btn-sm" onclick="downloadSurat(\''+esc(s.id)+'\')">Unduh PDF</button></div>').join('')+
+      '</div></div>';
+  }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
+}
+
+async function downloadSurat(suratId){
+  try{
+    const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/surat/'+encodeURIComponent(suratId)+'/download',{headers:hdr()});
+    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Surat gagal diunduh')}
+    const blob=await r.blob();
+    const cd=r.headers.get('Content-Disposition')||'';
+    const match=/filename="?([^";]+)"?/.exec(cd);
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=match?.[1]||'surat.pdf';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+  }catch(e){alert(e.message||'Surat gagal diunduh')}
 }
 
 async function loadIdentitas(c){

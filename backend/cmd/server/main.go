@@ -100,6 +100,26 @@ type DokumenSistem struct {
 	Nama     string `json:"nama"`
 	FilePath string `json:"-"`
 }
+
+// SuratSiswa adalah satu publikasi surat untuk satu atau banyak peserta didik.
+// File individual disimpan di SuratSiswaFile agar satu judul dapat tampil
+// berbeda untuk setiap anak di Portal Orang Tua.
+type SuratSiswa struct {
+	Base
+	Judul            string  `gorm:"not null" json:"judul"`
+	Cakupan          string  `gorm:"index;not null" json:"cakupan"` // semua_kelas, kelas, anak
+	KelasID          *string `gorm:"index" json:"kelasId,omitempty"`
+	UploadedByUserID string  `gorm:"index;not null" json:"uploadedByUserId"`
+}
+
+type SuratSiswaFile struct {
+	Base
+	SuratSiswaID    string `gorm:"uniqueIndex:surat_siswa_file_target;not null" json:"suratSiswaId"`
+	PesertaDidikID  string `gorm:"uniqueIndex:surat_siswa_file_target;index;not null" json:"pesertaDidikId"`
+	NISN            string `gorm:"index;not null" json:"nisn"`
+	FilePath        string `gorm:"not null" json:"-"`
+	FileName        string `gorm:"not null" json:"fileName"`
+}
 type OrangTua struct {
 	Base
 	NamaBapak string `json:"namaBapak"`
@@ -1060,7 +1080,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &DokumenSistem{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	// Modul K — alur approve/reject jurnal dihapus; jurnal langsung final. Sekali
