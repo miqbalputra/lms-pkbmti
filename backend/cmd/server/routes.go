@@ -2360,12 +2360,12 @@ func (s *Server) listSiswa(c *fiber.Ctx) error {
 	return list[PesertaDidik](q, c)
 }
 
-// scopedSiswaQuery builds a PesertaDidik query preloaded with Kelas.Pokjar +
-// OrangTua, ordered by nama, scoped to the caller's role (guru → wali kelas;
-// admin/kepala → all; optional kelasId filter). Returns a human label for the
-// scope (used in export headers). Mirrors listSiswa scoping.
+// scopedSiswaQuery builds a PesertaDidik query preloaded with class-related
+// data needed by the export, ordered by nama, scoped to the caller's role
+// (guru → wali kelas; admin/kepala → all; optional kelasId filter). Parent data
+// is intentionally not preloaded or exported. Mirrors listSiswa scoping.
 func (s *Server) scopedSiswaQuery(c *fiber.Ctx) (*gorm.DB, string, error) {
-	q := s.db.Preload("Kelas.Pokjar").Preload("OrangTua").Order("nama")
+	q := s.db.Preload("Kelas.Pokjar").Preload("Kelas.TahunAjaran").Preload("Kelas.WaliKelas").Order("nama")
 	label := "Semua Peserta Didik"
 	if kelas := c.Query("kelasId"); kelas != "" {
 		if err := s.canManageKelas(c, kelas); err != nil && c.Locals("role") != "admin" && c.Locals("role") != "kepala_sekolah" {
@@ -2404,63 +2404,183 @@ func (s *Server) exportSiswa(c *fiber.Ctx) error {
 }
 
 func (s *Server) exportSiswaXLSX(c *fiber.Ctx, rows []PesertaDidik, label string) error {
+	programLabels, err := s.siswaProgramLabels(rows)
+	if err != nil {
+		return err
+	}
 	xlsx := excelize.NewFile()
 	sheet := xlsx.GetSheetName(0)
-	_ = xlsx.SetSheetName(sheet, "Peserta Didik")
-	_ = xlsx.SetSheetRow(sheet, "A1", &[]interface{}{"Daftar " + label + " - PKBM Tunas Ilmu"})
-	headers := []interface{}{"No", "Nama", "Jenis Kelamin", "NIS", "NISN", "NIK", "Pokjar", "Kelas", "Status", "Nama Bapak", "Nama Ibu"}
-	_ = xlsx.SetSheetRow(sheet, "A3", &headers)
-	for i, r := range rows {
-		_ = xlsx.SetSheetRow(sheet, "A"+strconv.Itoa(i+4), &[]interface{}{
-			i + 1, r.Nama, r.JenisKelamin, r.NIS, r.NISN, r.NIK,
-			r.Kelas.Pokjar.NamaPokjar, kelasLabel(r.Kelas), r.Status,
-			r.OrangTua.NamaBapak, r.OrangTua.NamaIbu,
-		})
+	if err := xlsx.SetSheetName(sheet, "Peserta Didik"); err != nil {
+		return err
 	}
-	for i, w := range []float64{6, 28, 14, 16, 16, 22, 22, 18, 10, 22, 22} {
+	sheet = "Peserta Didik"
+	if err := xlsx.SetSheetRow(sheet, "A1", &[]interface{}{"Daftar " + label + " - PKBM Tunas Ilmu"}); err != nil {
+		return err
+	}
+	headers := []interface{}{
+		"No", "Nama Lengkap", "Jenis Kelamin", "NIS", "NISN", "NIK", "Program",
+		"Tanggal Lahir", "Pokjar", "Kelas", "Tahun Ajaran", "Wali Kelas", "Status", "Foto",
+	}
+	if err := xlsx.SetSheetRow(sheet, "A3", &headers); err != nil {
+		return err
+	}
+	for i, r := range rows {
+		if err := xlsx.SetSheetRow(sheet, "A"+strconv.Itoa(i+4), &[]interface{}{
+			i + 1, r.Nama, r.JenisKelamin, r.NIS, r.NISN, r.NIK,
+			programLabel(r, programLabels), formatTanggalLahir(r.TanggalLahir), siswaPokjarLabel(r),
+			kelasLabel(r.Kelas), tahunAjaranLabel(r.Kelas), waliKelasLabel(r.Kelas), r.Status, fotoLabel(r),
+		}); err != nil {
+			return err
+		}
+	}
+	for i, w := range []float64{6, 28, 14, 16, 16, 22, 18, 16, 24, 18, 20, 24, 12, 12} {
 		col, _ := excelize.ColumnNumberToName(i + 1)
-		_ = xlsx.SetColWidth(sheet, col, col, w)
+		if err := xlsx.SetColWidth(sheet, col, col, w); err != nil {
+			return err
+		}
 	}
 	c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	c.Attachment("daftar-peserta-didik.xlsx")
-	return xlsx.Write(c.Response().BodyWriter())
+	var output bytes.Buffer
+	if err := xlsx.Write(&output); err != nil {
+		return err
+	}
+	return c.Send(output.Bytes())
 }
 
 func (s *Server) exportSiswaPDF(c *fiber.Ctx, rows []PesertaDidik, label string) error {
-	pdf := gofpdf.New("P", "mm", "A4", "")
-	pdf.SetMargins(12, 12, 12)
+	programLabels, err := s.siswaProgramLabels(rows)
+	if err != nil {
+		return err
+	}
+	pdf := gofpdf.New("L", "mm", "A4", "")
+	pdf.SetCompression(false)
+	pdf.SetMargins(7, 10, 7)
+	pdf.SetAutoPageBreak(false, 10)
 	pdf.AddPage()
 	pdf.SetFont("Helvetica", "B", 15)
-	pdf.CellFormat(186, 8, "Daftar Peserta Didik PKBM Tunas Ilmu", "", 1, "C", false, 0, "")
+	pdf.CellFormat(283, 8, "Daftar Peserta Didik PKBM Tunas Ilmu", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 10)
-	pdf.CellFormat(186, 6, label, "", 1, "C", false, 0, "")
-	pdf.CellFormat(186, 6, "Total: "+strconv.Itoa(len(rows))+" siswa (urut abjad nama)", "", 1, "C", false, 0, "")
-	pdf.Ln(5)
-	ws := []float64{10, 70, 12, 26, 36, 32}
-	hs := []string{"No", "Nama", "JK", "NISN", "Kelas", "Status"}
-	pdf.SetFillColor(28, 87, 64)
-	pdf.SetTextColor(255, 255, 255)
-	pdf.SetFont("Helvetica", "B", 9)
-	for i, h := range hs {
-		pdf.CellFormat(ws[i], 7, h, "1", 0, "C", true, 0, "")
+	pdf.CellFormat(283, 6, label, "", 1, "C", false, 0, "")
+	pdf.CellFormat(283, 6, "Total: "+strconv.Itoa(len(rows))+" siswa (urut abjad nama)", "", 1, "C", false, 0, "")
+	pdf.Ln(4)
+	ws := []float64{7, 36, 9, 19, 21, 24, 20, 20, 25, 16, 22, 22, 15, 12}
+	hs := []string{"No", "Nama Lengkap", "JK", "NIS", "NISN", "NIK", "Program", "Tgl Lahir", "Pokjar", "Kelas", "Tahun Ajaran", "Wali Kelas", "Status", "Foto"}
+	drawTableHeader := func() {
+		pdf.SetFillColor(28, 87, 64)
+		pdf.SetTextColor(255, 255, 255)
+		pdf.SetFont("Helvetica", "B", 7)
+		for i, h := range hs {
+			pdf.CellFormat(ws[i], 7, h, "1", 0, "C", true, 0, "")
+		}
+		pdf.Ln(-1)
+		pdf.SetTextColor(0, 0, 0)
+		pdf.SetFont("Helvetica", "", 7)
 	}
-	pdf.Ln(-1)
-	pdf.SetTextColor(0, 0, 0)
-	pdf.SetFont("Helvetica", "", 9)
+	drawTableHeader()
+	rowHeight := 6.5
 	for i, r := range rows {
-		vals := []string{strconv.Itoa(i + 1), r.Nama, r.JenisKelamin, r.NISN, kelasLabel(r.Kelas), r.Status}
+		if pdf.GetY()+rowHeight > 198 {
+			pdf.AddPage()
+			drawTableHeader()
+		}
+		vals := []string{
+			strconv.Itoa(i + 1), r.Nama, r.JenisKelamin, r.NIS, r.NISN, r.NIK,
+			programLabel(r, programLabels), formatTanggalLahir(r.TanggalLahir), siswaPokjarLabel(r),
+			kelasLabel(r.Kelas), tahunAjaranLabel(r.Kelas), waliKelasLabel(r.Kelas), r.Status, fotoLabel(r),
+		}
 		for j, v := range vals {
 			a := "C"
 			if j == 1 {
 				a = "L"
 			}
-			pdf.CellFormat(ws[j], 7, v, "1", 0, a, false, 0, "")
+			pdf.CellFormat(ws[j], rowHeight, v, "1", 0, a, false, 0, "")
 		}
 		pdf.Ln(-1)
 	}
 	c.Set(fiber.HeaderContentType, "application/pdf")
 	c.Attachment("daftar-peserta-didik.pdf")
-	return pdf.Output(c.Response().BodyWriter())
+	var output bytes.Buffer
+	if err := pdf.Output(&output); err != nil {
+		return err
+	}
+	return c.Send(output.Bytes())
+}
+
+func formatTanggalLahir(value *time.Time) string {
+	if value == nil || value.IsZero() {
+		return "-"
+	}
+	return value.Format("02-01-2006")
+}
+
+func (s *Server) siswaProgramLabels(rows []PesertaDidik) (map[string]string, error) {
+	ids := make([]string, 0, len(rows))
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if row.ProgramID != nil && strings.TrimSpace(*row.ProgramID) != "" && !seen[*row.ProgramID] {
+			ids = append(ids, *row.ProgramID)
+			seen[*row.ProgramID] = true
+		}
+	}
+	labels := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return labels, nil
+	}
+	var programs []Program
+	if err := s.db.Where("id IN ?", ids).Find(&programs).Error; err != nil {
+		return nil, err
+	}
+	for _, program := range programs {
+		label := strings.TrimSpace(program.Kode)
+		if strings.TrimSpace(program.Nama) != "" {
+			if label != "" {
+				label += " - "
+			}
+			label += strings.TrimSpace(program.Nama)
+		}
+		if label != "" {
+			labels[program.ID] = label
+		}
+	}
+	return labels, nil
+}
+
+func programLabel(row PesertaDidik, labels map[string]string) string {
+	if row.ProgramID != nil {
+		if label := strings.TrimSpace(labels[*row.ProgramID]); label != "" {
+			return label
+		}
+	}
+	return "-"
+}
+
+func siswaPokjarLabel(row PesertaDidik) string {
+	if strings.TrimSpace(row.Kelas.Pokjar.NamaPokjar) != "" {
+		return row.Kelas.Pokjar.NamaPokjar
+	}
+	return "-"
+}
+
+func tahunAjaranLabel(k Kelas) string {
+	if strings.TrimSpace(k.TahunAjaran.NamaTahunAjaran) != "" {
+		return k.TahunAjaran.NamaTahunAjaran
+	}
+	return "-"
+}
+
+func waliKelasLabel(k Kelas) string {
+	if k.WaliKelas != nil && strings.TrimSpace(k.WaliKelas.Nama) != "" {
+		return k.WaliKelas.Nama
+	}
+	return "-"
+}
+
+func fotoLabel(row PesertaDidik) string {
+	if row.FotoPath != nil && strings.TrimSpace(*row.FotoPath) != "" {
+		return "Ada"
+	}
+	return "Tidak ada"
 }
 
 // relasiChild is a flattened PesertaDidik for the relationship view.
