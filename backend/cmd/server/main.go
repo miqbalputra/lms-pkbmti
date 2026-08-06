@@ -1339,7 +1339,10 @@ func (s *Server) issue(c *fiber.Ctx, u User) error {
 	if err := s.db.Create(&RefreshToken{UserID: u.ID, TokenHash: hash(raw), ExpiresAt: time.Now().Add(s.cfg.RefreshTTL)}).Error; err != nil {
 		return fiber.NewError(500, "gagal menyimpan sesi")
 	}
-	c.Cookie(&fiber.Cookie{Name: "refresh_token", Value: raw, HTTPOnly: true, Secure: s.cfg.Env == "production", SameSite: "Strict", Domain: s.cfg.CookieDomain, Expires: time.Now().Add(s.cfg.RefreshTTL), Path: "/api/auth"})
+	// Keep password login aligned with Google OAuth. Lax allows the refresh
+	// cookie to survive the application's cross-origin/proxy navigation while
+	// still preventing it from being sent on ordinary cross-site subrequests.
+	c.Cookie(&fiber.Cookie{Name: "refresh_token", Value: raw, HTTPOnly: true, Secure: s.cfg.Env == "production", SameSite: "Lax", Domain: s.cfg.CookieDomain, Expires: time.Now().Add(s.cfg.RefreshTTL), Path: "/api/auth"})
 	s.audit(&u.ID, "login", "auth", "")
 	return c.JSON(fiber.Map{"accessToken": access, "user": u})
 }

@@ -131,6 +131,9 @@ func TestRefreshTokenRotatesAndRejectsReuse(t *testing.T) {
 		t.Fatalf("expected login 200, got %d", loginResponse.StatusCode)
 	}
 	cookie := loginResponse.Header.Get("Set-Cookie")
+	if !strings.Contains(cookie, "SameSite=Lax") {
+		t.Fatalf("password login refresh cookie should use SameSite=Lax, got %q", cookie)
+	}
 	refresh := httptest.NewRequest(http.MethodPost, "/refresh", nil)
 	refresh.Header.Set("Cookie", cookie)
 	refreshResponse, err := app.Test(refresh)
