@@ -523,11 +523,31 @@ func TestE2E_Tier1_CRUD_Assignments(t *testing.T) {
 		t.Errorf("expected 200 for assignAllClasses, got %d", resBulk.StatusCode)
 	}
 
+	// 4b. Save the complete class+subject checklist in one request.
+	resSchema, _ := makeRequest(app, "POST", "/api/penugasan/skema", token, map[string]interface{}{
+		"tutorId":  tutor.ID,
+		"kelasIds": []string{class.ID},
+		"assignments": []map[string]string{
+			{"kelasId": class.ID, "mapelId": mapel.ID},
+		},
+	}, "")
+	if resSchema.StatusCode != 200 {
+		t.Errorf("expected 200 for penugasan skema, got %d", resSchema.StatusCode)
+	}
+
 	// 5. Delete Assignment
 	resDel, _ := makeRequest(app, "DELETE", "/api/penugasan/"+created.ID, token, nil, "")
 	if resDel.StatusCode != 204 {
 		t.Errorf("expected 204 for penugasan delete, got %d", resDel.StatusCode)
 	}
+}
+
+func testSaturday() time.Time {
+	day := time.Now()
+	for day.Weekday() != time.Saturday {
+		day = day.AddDate(0, 0, 1)
+	}
+	return time.Date(day.Year(), day.Month(), day.Day(), 8, 0, 0, 0, time.UTC)
 }
 
 // Tier 1 - F10: Attendance Canvas
@@ -549,7 +569,7 @@ func TestE2E_Tier1_AttendanceCanvas(t *testing.T) {
 	// 1. Create Attendance Session
 	resCreate, _ := makeRequest(app, "POST", "/api/presensi", token, map[string]interface{}{
 		"kelasId":         class.ID,
-		"tanggal":         time.Now().Format("2006-01-02T15:04:05Z"),
+		"tanggal":         testSaturday().Format(time.RFC3339),
 		"statusPertemuan": "berlangsung",
 		"tandaTangan":     validSignaturePNG,
 	}, "")

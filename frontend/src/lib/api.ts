@@ -9,16 +9,54 @@
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
 let onUnauthorized: (() => void) | null = null
-export function setOnUnauthorized(fn: (() => void) | null) { onUnauthorized = fn }
+let onTokenRefreshed: ((session: AuthSession) => void) | null = null
+let refreshInFlight: Promise<AuthSession> | null = null
 
-export async function request(
+export type AuthSession = {
+  accessToken: string
+  user: Record<string, unknown>
+}
+
+export function setOnUnauthorized(fn: (() => void) | null) { onUnauthorized = fn }
+export function setOnTokenRefreshed(fn: ((session: AuthSession) => void) | null) { onTokenRefreshed = fn }
+
+// Refresh-token rotation is deliberately single-flight. Without this guard,
+// two requests/tabs can rotate the same cookie at once; the second request
+// receives 401 and the old client treated that as an intentional logout.
+export function refreshSession(): Promise<AuthSession> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(apiBase + '/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(
+            result?.error || result?.message || `Sesi tidak dapat diperbarui (${response.status}).`,
+          )
+        }
+        return result as AuthSession
+      })
+      .finally(() => {
+        refreshInFlight = null
+      })
+  }
+  return refreshInFlight
+}
+
+function isAuthEndpoint(path: string) {
+  return path.startsWith('/auth/')
+}
+
+async function fetchWithToken(
   path: string,
   token: string,
-  method = 'GET',
-  body?: unknown,
+  method: string,
+  body: unknown,
   signal?: AbortSignal,
 ) {
-  const r = await fetch(apiBase + path, {
+  return fetch(apiBase + path, {
     method,
     credentials: 'include',
     headers: {
@@ -28,8 +66,36 @@ export async function request(
     body: body ? JSON.stringify(body) : undefined,
     signal,
   })
+}
+
+export async function request(
+  path: string,
+  token: string,
+  method = 'GET',
+  body?: unknown,
+  signal?: AbortSignal,
+) {
+  let r = await fetchWithToken(path, token, method, body, signal)
+  // A request may have started with an access token that was replaced by the
+  // keep-alive refresh. Renew once and replay it before asking the app to log
+  // out. Auth endpoints themselves are excluded to avoid refresh recursion.
+  if (r.status === 401 && token && !isAuthEndpoint(path)) {
+    let refreshFailed = false
+    try {
+      const session = await refreshSession()
+      onTokenRefreshed?.(session)
+      r = await fetchWithToken(path, session.accessToken, method, body, signal)
+    } catch {
+      refreshFailed = true
+      if (onUnauthorized) onUnauthorized()
+    }
+    if (refreshFailed) {
+      const x = await r.json().catch(() => ({}))
+      throw new Error(x.error || x.message || `Permintaan gagal (${r.status}).`)
+    }
+  }
   if (!r.ok) {
-    if (r.status === 401 && onUnauthorized) onUnauthorized()
+    if (r.status === 401 && onUnauthorized && !isAuthEndpoint(path)) onUnauthorized()
     const x = await r.json().catch(() => ({}))
     throw new Error(
       x.error ||
@@ -44,12 +110,24 @@ export async function request(
 // terproteksi, lalu memicu unduhan browser. Nama file diambil dari header
 // Content-Disposition bila ada, fallback ke argumen `fallback`.
 export async function downloadFile(path: string, token: string, fallback: string) {
-  const r = await fetch(apiBase + path, {
+  let r = await fetch(apiBase + path, {
     credentials: 'include',
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   })
+  if (r.status === 401 && token && !isAuthEndpoint(path)) {
+    try {
+      const session = await refreshSession()
+      onTokenRefreshed?.(session)
+      r = await fetch(apiBase + path, {
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${session.accessToken}` },
+      })
+    } catch {
+      // The final 401 branch below handles the user-facing logout path.
+    }
+  }
   if (!r.ok) {
-    if (r.status === 401 && onUnauthorized) onUnauthorized()
+    if (r.status === 401 && onUnauthorized && !isAuthEndpoint(path)) onUnauthorized()
     const x = await r.json().catch(() => ({}))
     throw new Error((x as { error?: string; message?: string })?.error || (x as { message?: string })?.message || `Gagal mengunduh (${r.status})`)
   }

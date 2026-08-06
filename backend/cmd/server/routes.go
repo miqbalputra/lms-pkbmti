@@ -267,6 +267,7 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Post("/pokjar/migrasi-kelas", s.migratePokjarClasses)
 	admin.Post("/pokjar/sinkronkan-peserta-didik", s.syncStudentPokjarFromClass)
 	admin.Put("/kelas/:id/mapel", s.setKelasMapel)
+	admin.Post("/penugasan/skema", s.savePenugasanSkema)
 	admin.Post("/penugasan", s.createPenugasan)
 	admin.Post("/penugasan/semua-kelas", s.assignAllClasses)
 	admin.Delete("/penugasan/:id", s.deletePenugasan)
@@ -2204,6 +2205,92 @@ func (s *Server) createPenugasan(c *fiber.Ctx) error {
 	s.audit(&uid, "create", "penugasan", fmt.Sprintf("%s/%s/%s", in.TutorID, in.KelasID, in.MapelID))
 	return c.Status(201).JSON(p)
 }
+
+// savePenugasanSkema replaces the selected tutor's subject assignments for
+// the supplied classes in one transaction. This is the API behind the matrix
+// in "Penugasan Tutor": a wali kelas can check nearly every subject and clear
+// PJOK for a putra class, while a PJOK specialist can check only PJOK across
+// every class.
+func (s *Server) savePenugasanSkema(c *fiber.Ctx) error {
+	var in struct {
+		TutorID     string   `json:"tutorId"`
+		KelasIDs    []string `json:"kelasIds"`
+		Assignments []struct {
+			KelasID string `json:"kelasId"`
+			MapelID string `json:"mapelId"`
+		} `json:"assignments"`
+	}
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if strings.TrimSpace(in.TutorID) == "" || len(in.KelasIDs) == 0 {
+		return fiber.NewError(400, "tutorId dan kelasIds wajib diisi")
+	}
+
+	// De-duplicate class scope and assignment pairs before writing. This also
+	// keeps the endpoint safe for a client that submits the same checkbox twice.
+	classSet := make(map[string]bool, len(in.KelasIDs))
+	classIDs := make([]string, 0, len(in.KelasIDs))
+	for _, classID := range in.KelasIDs {
+		classID = strings.TrimSpace(classID)
+		if classID != "" && !classSet[classID] {
+			classSet[classID] = true
+			classIDs = append(classIDs, classID)
+		}
+	}
+	if len(classIDs) == 0 {
+		return fiber.NewError(400, "kelasIds wajib memiliki isi")
+	}
+	pairs := make([]PenugasanGuruMapel, 0, len(in.Assignments))
+	pairSet := make(map[string]bool, len(in.Assignments))
+	for _, assignment := range in.Assignments {
+		assignment.KelasID = strings.TrimSpace(assignment.KelasID)
+		assignment.MapelID = strings.TrimSpace(assignment.MapelID)
+		if assignment.KelasID == "" || assignment.MapelID == "" {
+			return fiber.NewError(400, "kelasId dan mapelId pada assignment wajib diisi")
+		}
+		if !classSet[assignment.KelasID] {
+			return fiber.NewError(400, "assignment berada di luar daftar kelas")
+		}
+		key := assignment.KelasID + "\x00" + assignment.MapelID
+		if !pairSet[key] {
+			pairSet[key] = true
+			pairs = append(pairs, PenugasanGuruMapel{TutorID: in.TutorID, KelasID: assignment.KelasID, MapelID: assignment.MapelID})
+		}
+	}
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&Tutor{}, "id = ?", in.TutorID).Error; err != nil {
+			return fiber.NewError(400, "tutor tidak ditemukan")
+		}
+		for _, classID := range classIDs {
+			if err := tx.First(&Kelas{}, "id = ?", classID).Error; err != nil {
+				return fiber.NewError(400, "kelas tidak ditemukan")
+			}
+		}
+		for _, pair := range pairs {
+			if err := tx.First(&MataPelajaran{}, "id = ?", pair.MapelID).Error; err != nil {
+				return fiber.NewError(400, "mata pelajaran tidak ditemukan")
+			}
+		}
+		if err := tx.Where("tutor_id = ? AND kelas_id IN ?", in.TutorID, classIDs).Delete(&PenugasanGuruMapel{}).Error; err != nil {
+			return err
+		}
+		if len(pairs) > 0 {
+			if err := tx.Create(&pairs).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "update", "penugasan_skema", fmt.Sprintf("tutor=%s classes=%d assignments=%d", in.TutorID, len(classIDs), len(pairs)))
+	return c.JSON(fiber.Map{"classes": len(classIDs), "assignments": len(pairs)})
+}
+
 func (s *Server) assignAllClasses(c *fiber.Ctx) error {
 	var in struct {
 		TutorID       string `json:"tutorId"`
@@ -7502,6 +7589,29 @@ func (s *Server) requireActiveYear(c *fiber.Ctx, kelasID string) error {
 	}
 	return nil
 }
+
+var wibLocation, _ = time.LoadLocation("Asia/Jakarta")
+
+func parsePresensiDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, errors.New("tanggal wajib diisi")
+	}
+	if t, err := time.ParseInLocation("2006-01-02", value, wibLocation); err == nil {
+		return t, nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05"} {
+		if t, err := time.ParseInLocation(layout, value, wibLocation); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, errors.New("tanggal tidak valid")
+}
+
+func validPresensiSaturday(t time.Time) bool {
+	return t.In(wibLocation).Weekday() == time.Saturday
+}
+
 func (s *Server) createPresensi(c *fiber.Ctx) error {
 	// Hanya field yang boleh diatur klien yang diparse. Sebelumnya
 	// BodyParser(&p) ke seluruh struct Presensi membiarkan klien menyetel
@@ -7509,13 +7619,13 @@ func (s *Server) createPresensi(c *fiber.Ctx) error {
 	// (menyamarkan presensi otomatis sebagai manual), TanggalRencana, dan
 	// Semester sembarangan — field-field itu kini ditentukan server.
 	var in struct {
-		KelasID         string    `json:"kelasId"`
-		Tanggal         time.Time `json:"tanggal"`
-		Semester        string    `json:"semester"`
-		StatusPertemuan string    `json:"statusPertemuan"`
-		Keterangan      string    `json:"keterangan"`
-		TandaTangan     string    `json:"tandaTangan"`
-		BuktiFoto       string    `json:"buktiFoto"`
+		KelasID         string `json:"kelasId"`
+		Tanggal         string `json:"tanggal"`
+		Semester        string `json:"semester"`
+		StatusPertemuan string `json:"statusPertemuan"`
+		Keterangan      string `json:"keterangan"`
+		TandaTangan     string `json:"tandaTangan"`
+		BuktiFoto       string `json:"buktiFoto"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
@@ -7523,17 +7633,24 @@ func (s *Server) createPresensi(c *fiber.Ctx) error {
 	if in.KelasID == "" {
 		return fiber.NewError(400, "kelasId wajib")
 	}
-	if in.Semester != "" && in.Semester != "Ganjil" && in.Semester != "Genap" {
-		return fiber.NewError(400, "semester tidak valid (Ganjil/Genap)")
-	}
 	if e := s.canManageKelas(c, in.KelasID); e != nil {
 		return e
+	}
+	tanggal, err := parsePresensiDate(in.Tanggal)
+	if err != nil {
+		return fiber.NewError(400, "tanggal tidak valid (YYYY-MM-DD)")
+	}
+	if !validPresensiSaturday(tanggal) {
+		return fiber.NewError(400, "Tanggal presensi hanya boleh hari Sabtu (WIB).")
+	}
+	if in.Semester != "" && in.Semester != "Ganjil" && in.Semester != "Genap" {
+		return fiber.NewError(400, "semester tidak valid (Ganjil/Genap)")
 	}
 	var k Kelas
 	s.db.First(&k, "id = ?", in.KelasID)
 	p := Presensi{
 		KelasID:         in.KelasID,
-		Tanggal:         in.Tanggal,
+		Tanggal:         tanggal,
 		TutorID:         k.WaliKelasID,
 		DibuatOtomatis:  false,
 		TanggalRencana:  nil,
@@ -7545,7 +7662,7 @@ func (s *Server) createPresensi(c *fiber.Ctx) error {
 	if in.Semester != "" {
 		p.Semester = in.Semester
 	} else {
-		p.Semester = s.semester(in.Tanggal)
+		p.Semester = s.semester(tanggal)
 	}
 	if p.StatusPertemuan == "" {
 		p.StatusPertemuan = "berlangsung"
@@ -7574,18 +7691,25 @@ func (s *Server) updatePresensi(c *fiber.Ctx) error {
 	// (an IDOR that moves the attendance record, with its signature & details,
 	// into a class they don't own) and re-attach it to another tutor.
 	var in struct {
-		Tanggal         time.Time `json:"tanggal"`
-		StatusPertemuan string    `json:"statusPertemuan"`
-		TandaTangan     string    `json:"tandaTangan"`
-		BuktiFoto       string    `json:"buktiFoto"`
+		Tanggal         string `json:"tanggal"`
+		StatusPertemuan string `json:"statusPertemuan"`
+		TandaTangan     string `json:"tandaTangan"`
+		BuktiFoto       string `json:"buktiFoto"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	tanggal, err := parsePresensiDate(in.Tanggal)
+	if err != nil {
+		return fiber.NewError(400, "tanggal tidak valid (YYYY-MM-DD)")
+	}
+	if !validPresensiSaturday(tanggal) {
+		return fiber.NewError(400, "Tanggal presensi hanya boleh hari Sabtu (WIB).")
+	}
 	if !validSignature(in.TandaTangan) {
 		return fiber.NewError(400, "a valid PNG signature is required")
 	}
-	p.Tanggal = in.Tanggal
+	p.Tanggal = tanggal
 	if in.StatusPertemuan != "" {
 		p.StatusPertemuan = in.StatusPertemuan
 	}

@@ -14,7 +14,7 @@ import { AppShell } from './components/layout/AppShell'
 import { LoginView } from './pages/Login'
 import { InstallPrompt } from './components/InstallPrompt'
 import { TutorEmailPrompt } from './components/TutorEmailPrompt'
-import { request, setOnUnauthorized } from './lib/api'
+import { refreshSession, request, setOnTokenRefreshed, setOnUnauthorized } from './lib/api'
 
 // Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
 // berfungsi (sumber kebenaran kini di ./lib/api, tanpa import sirkular).
@@ -111,10 +111,10 @@ export default function App() {
   const [tutorAccountOpen, setTutorAccountOpen] = useState(false)
 
   useEffect(() => {
-    void request('/auth/refresh', '', 'POST')
+    void refreshSession()
       .then((r) => {
         setToken(r.accessToken)
-        setUser(r.user)
+        setUser(r.user as User)
       })
       .catch(() => undefined)
       .finally(() => setReady(true))
@@ -128,38 +128,41 @@ export default function App() {
   }, [token])
 
   useEffect(() => {
+    setOnTokenRefreshed((session) => {
+      setToken(session.accessToken)
+      setUser(session.user as User)
+    })
     if (token) {
       setOnUnauthorized(handleLogout)
     } else {
       setOnUnauthorized(null)
     }
-    return () => setOnUnauthorized(null)
+    return () => {
+      setOnUnauthorized(null)
+      setOnTokenRefreshed(null)
+    }
   }, [handleLogout, token])
 
-  // Keep-alive: refresh access token periodically while user is active.
-  // Access token TTL is 15 min; we refresh every 5 min on user activity
-  // so the token never expires as long as the user is interacting.
+  // Keep-alive: refresh before the normal 15-minute access-token expiry.
+  // refreshSession() is single-flight, so a transient race cannot log the
+  // admin out while they are typing or working in multiple requests.
   useEffect(() => {
     if (!token) return
-    let timer: ReturnType<typeof setTimeout>
-    const REFRESH_MS = 5 * 60 * 1000 // 5 minutes
-
-    function schedule() {
-      clearTimeout(timer)
-      timer = setTimeout(() => {
-        void request('/auth/refresh', '', 'POST')
-          .then((r) => { setToken(r.accessToken); setUser(r.user) })
-          .catch(() => {})
-      }, REFRESH_MS)
-    }
-
-    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart']
-    events.forEach((e) => document.addEventListener(e, schedule, { passive: true }))
-    schedule() // start initial timer
+    const REFRESH_MS = 10 * 60 * 1000
+    const timer = setInterval(() => {
+      void refreshSession()
+        .then((r) => {
+          setToken(r.accessToken)
+          setUser(r.user as User)
+        })
+        // Keep the current session on a transient network error. A later API
+        // call will retry refresh; only an actual unauthorized API response
+        // ends the session.
+        .catch(() => undefined)
+    }, REFRESH_MS)
 
     return () => {
-      clearTimeout(timer)
-      events.forEach((e) => document.removeEventListener(e, schedule))
+      clearInterval(timer)
     }
   }, [token])
 

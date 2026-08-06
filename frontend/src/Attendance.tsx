@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type ReactNode } from 'react'
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Image as ImageIcon, Info, Save, Trash2, UploadCloud } from 'lucide-react'
 import { AttendanceRecap } from './AttendanceRecap'
+import { isSaturdayWibDate, isTodaySaturdayWib, nextSaturdayWib, wibToday } from './lib/wib'
 import { Alert, AlertDescription } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
@@ -29,7 +30,8 @@ export function AttendanceWorkspace({
   const [meetings, setMeetings] = useState<Row[]>([])
   const [classID, setClassID] = useState('')
   const [selectedID, setSelectedID] = useState('new')
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [wibDateToday, setWibDateToday] = useState(() => wibToday())
+  const [date, setDate] = useState(() => nextSaturdayWib())
   const [students, setStudents] = useState<Row[]>([])
   const [marks, setMarks] = useState<Record<string, string>>({})
   const [signature, setSignature] = useState('')
@@ -40,6 +42,20 @@ export function AttendanceWorkspace({
   const [submitting, setSubmitting] = useState(false)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const todayIsSaturday = isTodaySaturdayWib(new Date())
+  const dateIsSaturday = isSaturdayWibDate(date)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setWibDateToday(wibToday()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (selectedID === 'new' && wibDateToday !== wibToday()) {
+      setWibDateToday(wibToday())
+      setDate(nextSaturdayWib())
+    }
+  }, [selectedID, wibDateToday])
 
   const loadMeetings = useCallback(() => request('/presensi', token).then(setMeetings), [token])
 
@@ -64,6 +80,7 @@ export function AttendanceWorkspace({
     setMessage('')
     if (id === 'new') {
       setClassID('')
+      setDate(nextSaturdayWib())
       setSignature('')
       setPhotos([])
       setStatus('berlangsung')
@@ -139,6 +156,12 @@ export function AttendanceWorkspace({
     if (!classID) {
       setMessage('Pilih rombongan belajar terlebih dahulu.')
       toast.error('Pilih rombongan belajar terlebih dahulu.')
+      return
+    }
+    if (!isSaturdayWibDate(date)) {
+      const warning = 'Hari ini bukan hari sabtu, pilih tanggal di hari Sabtu.'
+      setMessage(warning)
+      toast.error('Tanggal pertemuan hanya boleh dipilih pada hari Sabtu (WIB).')
       return
     }
     // Strict Validation 1: Teacher Signature Required
@@ -229,6 +252,14 @@ export function AttendanceWorkspace({
           <CardDescription>Pilih pertemuan atau buat entri presensi KBM baru.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 pt-6">
+          {!todayIsSaturday && (
+            <Alert variant="destructive" className="border-warning/50 bg-warning/10 text-warning-foreground">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                Hari ini bukan hari sabtu, pilih tanggal di hari Sabtu. Sistem menggunakan tanggal hari ini berdasarkan WIB (Asia/Jakarta).
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Pertemuan">
               <Select value={selectedID} onChange={(e) => choose(e.target.value)}>
@@ -258,7 +289,22 @@ export function AttendanceWorkspace({
               </Select>
             </Field>
             <Field label="Tanggal Pertemuan">
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <Input
+                type="date"
+                value={date}
+                onChange={(e) => {
+                  const value = e.target.value
+                  if (!isSaturdayWibDate(value)) {
+                    setMessage('Hari ini bukan hari sabtu, pilih tanggal di hari Sabtu.')
+                    toast.error('Tanggal pertemuan hanya boleh hari Sabtu (WIB).')
+                    return
+                  }
+                  setMessage('')
+                  setDate(value)
+                }}
+                aria-invalid={!dateIsSaturday}
+              />
+              <span className="text-xs text-muted-foreground">Hanya Sabtu; tanggal dihitung menurut WIB.</span>
             </Field>
             <Field label="Status Pertemuan">
               <Select value={status} onChange={(e) => setStatus(e.target.value)}>

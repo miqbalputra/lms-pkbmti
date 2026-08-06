@@ -179,7 +179,7 @@ func TestE2E_Tier4_Scenario3_WeeklyAttendanceLifecycle(t *testing.T) {
 	// Step 1: Create Saturday Meeting
 	resMeeting, _ := makeRequest(app, "POST", "/api/presensi", token, map[string]interface{}{
 		"kelasId":         class.ID,
-		"tanggal":         time.Now().Format("2006-01-02T15:04:05Z"),
+		"tanggal":         testSaturday().Format(time.RFC3339),
 		"statusPertemuan": "berlangsung",
 		"tandaTangan":     validSig,
 	}, "")
@@ -199,7 +199,7 @@ func TestE2E_Tier4_Scenario3_WeeklyAttendanceLifecycle(t *testing.T) {
 	}
 
 	// Step 3: Reschedule Meeting Date (status -> "dipindah")
-	shiftedDate := time.Now().AddDate(0, 0, 1)
+	shiftedDate := meeting.Tanggal.AddDate(0, 0, 7)
 	meeting.Tanggal = shiftedDate
 	meeting.TanggalRencana = &meeting.Tanggal
 	resReschedule, _ := makeRequest(app, "PUT", "/api/presensi/"+meeting.ID, token, meeting, "")

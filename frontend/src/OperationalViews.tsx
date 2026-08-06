@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Download, FileSpreadsheet, FileText, History, Pencil, Plus, Trash2, Users } from 'lucide-react'
+import { Download, FileSpreadsheet, FileText, History, ListChecks, Pencil, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { downloadFile } from './lib/api'
 import { ClassEditor } from './ClassEditor'
@@ -19,6 +19,7 @@ import {
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
+import { Checkbox } from './components/ui/checkbox'
 import { Input } from './components/ui/input'
 import { Label } from './components/ui/label'
 import { EmptyState, FormCard, PageToolbar } from './components/ui/page'
@@ -27,7 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 type Row = Record<string, unknown> & { id: string }
-type Options = { kelas: Row[]; tutor: Row[]; pokjar: Row[]; years: Row[]; parents: Row[]; mapel: Row[] }
+type Options = { kelas: Row[]; tutor: Row[]; pokjar: Row[]; years: Row[]; parents: Row[]; mapel: Row[]; kelasMapel: Row[] }
 
 function rombelLabel(row: Row) {
   let value = String(row.namaRombel || '').trim().toUpperCase().replace(/^KELAS\s*/, '')
@@ -377,8 +378,9 @@ export function StudentsView({ token, readOnly }: { token: string; readOnly: boo
 export function AssignmentsView({ token, readOnly }: { token: string; readOnly: boolean }) {
   const [rows, setRows] = useState<Row[]>([])
   const [o, setO] = useState<Options>()
-  const [adding, setAdding] = useState(false)
-  const [bulk, setBulk] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [tutorID, setTutorID] = useState('')
+  const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [deletingRow, setDeletingRow] = useState<Row | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -390,22 +392,88 @@ export function AssignmentsView({ token, readOnly }: { token: string; readOnly: 
     void loadOptions(token).then(setO)
   }, [load, token])
 
-  async function submit(e: FormEvent<HTMLFormElement>, all = false) {
-    e.preventDefault()
+  function assignmentKey(kelasID: string, mapelID: string) {
+    return `${kelasID}:${mapelID}`
+  }
+
+  function availableMapelIDs(kelasID: string) {
+    const configured = o?.kelasMapel.filter((row) => String(row.kelasId) === kelasID).map((row) => String(row.mapelId)) || []
+    const selected = Object.keys(checked)
+      .filter((key) => key.startsWith(`${kelasID}:`))
+      .map((key) => key.slice(kelasID.length + 1))
+    return Array.from(new Set(configured.length ? [...configured, ...selected] : (o?.mapel || []).map((row) => row.id)))
+  }
+
+  function openEditor() {
+    const firstTutor = o?.tutor[0]?.id || ''
+    const selectedTutor = tutorID || firstTutor
+    setTutorID(selectedTutor)
+    setChecked(Object.fromEntries(
+      rows
+        .filter((row) => String(row.tutorId) === selectedTutor)
+        .map((row) => [assignmentKey(String(row.kelasId), String(row.mapelId)), true])
+    ))
+    setEditorOpen(true)
+  }
+
+  function selectTutor(value: string) {
+    setTutorID(value)
+    setChecked(Object.fromEntries(
+      rows
+        .filter((row) => String(row.tutorId) === value)
+        .map((row) => [assignmentKey(String(row.kelasId), String(row.mapelId)), true])
+    ))
+  }
+
+  function setAll(value: boolean) {
+    if (!o) return
+    const next: Record<string, boolean> = {}
+    o.kelas.forEach((kelas) => availableMapelIDs(kelas.id).forEach((mapelID) => {
+      next[assignmentKey(kelas.id, mapelID)] = value
+    }))
+    setChecked(next)
+  }
+
+  function setClassAll(kelasID: string, value: boolean) {
+    const next = { ...checked }
+    availableMapelIDs(kelasID).forEach((mapelID) => {
+      next[assignmentKey(kelasID, mapelID)] = value
+    })
+    setChecked(next)
+  }
+
+  function setSubjectForAllClasses(mapelID: string) {
+    if (!o) return
+    const next: Record<string, boolean> = {}
+    o.kelas.forEach((kelas) => {
+      next[assignmentKey(kelas.id, mapelID)] = true
+    })
+    setChecked(next)
+  }
+
+  async function submitSchema() {
+    if (!o || !tutorID) {
+      toast.error('Pilih tutor terlebih dahulu.')
+      return
+    }
     setSubmitting(true)
     try {
-      await request(
-        all ? '/penugasan/semua-kelas' : '/penugasan',
-        token,
-        'POST',
-        Object.fromEntries(new FormData(e.currentTarget))
-      )
-      toast.success(all ? 'Guru berhasil ditugaskan ke semua kelas.' : 'Penugasan guru berhasil disimpan.')
-      setAdding(false)
-      setBulk(false)
-      void load()
+      const assignments = Object.entries(checked)
+        .filter(([, value]) => value)
+        .map(([key]) => {
+          const [kelasId, mapelId] = key.split(':')
+          return { kelasId, mapelId }
+        })
+      await request('/penugasan/skema', token, 'POST', {
+        tutorId: tutorID,
+        kelasIds: o.kelas.map((kelas) => kelas.id),
+        assignments,
+      })
+      toast.success('Skema mengajar tutor berhasil disimpan.')
+      setEditorOpen(false)
+      await load()
     } catch (err: any) {
-      toast.error(err.message || 'Gagal menyimpan penugasan guru.')
+      toast.error(err.message || 'Gagal menyimpan skema mengajar tutor.')
     } finally {
       setSubmitting(false)
     }
@@ -430,40 +498,93 @@ export function AssignmentsView({ token, readOnly }: { token: string; readOnly: 
     <div className="space-y-4">
       <PageToolbar
         title="Penugasan Tutor"
-        description="Atur akses penugasan tutor untuk pengajaran kombinasi rombel dan mata pelajaran."
+        description="Ceklis mapel yang diajarkan setiap tutor. Wali kelas dapat memilih hampir semua mapel; guru PJOK dapat dipilih ke semua kelas untuk PJOK saja."
         actions={
           !readOnly && (
-            <>
-              <Button variant="outline" onClick={() => setBulk(true)}>
-                <Users className="h-4 w-4" />
-                Semua kelas mapel
-              </Button>
-              <Button onClick={() => setAdding(true)}>
-                <Plus className="h-4 w-4" />
-                Tugaskan tutor
-              </Button>
-            </>
+            <Button onClick={openEditor}>
+              <ListChecks className="h-4 w-4" />
+              Atur ceklis mengajar
+            </Button>
           )
         }
       />
-      {bulk && o && (
-        <AssignmentForm
-          title="Tugaskan tutor ke semua kelas mapel"
-          options={o}
-          close={() => setBulk(false)}
-          submit={(e) => void submit(e, true)}
-          submitting={submitting}
-          bulk
-        />
-      )}
-      {adding && o && (
-        <AssignmentForm
-          title="Tugaskan tutor"
-          options={o}
-          close={() => setAdding(false)}
-          submit={(e) => void submit(e)}
-          submitting={submitting}
-        />
+      {editorOpen && o && (
+        <FormCard
+          title="Skema mengajar tutor"
+          description="Pilih tutor lalu ceklis mapel per kelas. Untuk guru PJOK lintas kelas, gunakan Ceklis semua lalu sisakan PJOK saja."
+        >
+          <div className="space-y-5">
+            <Field label="Tutor">
+              <Select value={tutorID} onChange={(e) => selectTutor(e.target.value)}>
+                <option value="">Pilih tutor</option>
+                {o.tutor.map((tutor) => <option key={tutor.id} value={tutor.id}>{String(tutor.nama)}</option>)}
+              </Select>
+            </Field>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-brand-200 bg-brand-50 p-3 text-xs dark:border-brand-900 dark:bg-brand-950/30">
+              <div>
+                <div className="font-bold text-foreground">Daftar kelas & mata pelajaran</div>
+                <div className="text-muted-foreground">Kelas tanpa pengaturan mapel menampilkan semua mapel aktif.</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setAll(!Object.values(checked).length || Object.values(checked).some((value) => !value))}>
+                  <Users className="h-3.5 w-3.5" /> Ceklis semua
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const pjok = o.mapel.find((mapel) => /pjok|jasmani/i.test(String(mapel.namaMapel)))
+                    if (pjok) setSubjectForAllClasses(pjok.id)
+                    else toast.error('Mapel PJOK belum tersedia di master mata pelajaran.')
+                  }}
+                >
+                  PJOK semua kelas
+                </Button>
+              </div>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {o.kelas.map((kelas) => {
+                const mapelIDs = availableMapelIDs(kelas.id)
+                const allClassChecked = mapelIDs.length > 0 && mapelIDs.every((mapelID) => checked[assignmentKey(kelas.id, mapelID)])
+                return (
+                  <div key={kelas.id} className="rounded-xl border border-border bg-card p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-semibold text-foreground">Kelas {String(kelas.jenjang)}{String(kelas.namaRombel)}</div>
+                        <div className="text-xs text-muted-foreground">Pilih mapel yang diajarkan di rombel ini.</div>
+                      </div>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setClassAll(kelas.id, !allClassChecked)}>
+                        {allClassChecked ? 'Hapus semua' : 'Semua mapel'}
+                      </Button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {mapelIDs.map((mapelID) => {
+                        const mapel = o.mapel.find((row) => row.id === mapelID)
+                        const key = assignmentKey(kelas.id, mapelID)
+                        return (
+                          <label key={key} className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/70 px-3 py-2 text-sm hover:bg-secondary/40">
+                            <Checkbox
+                              checked={!!checked[key]}
+                              onChange={(e) => setChecked((current) => ({ ...current, [key]: e.target.checked }))}
+                            />
+                            <span>{String(mapel?.namaMapel || mapelID)}</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" disabled={submitting || !tutorID} onClick={() => void submitSchema()}>
+                {submitting ? 'Menyimpan...' : 'Simpan skema mengajar'}
+              </Button>
+              <Button type="button" variant="outline" disabled={submitting} onClick={() => setEditorOpen(false)}>Batal</Button>
+            </div>
+          </div>
+        </FormCard>
       )}
       <Card className="rounded-2xl border border-border bg-card shadow-2xs overflow-hidden">
         <Table>
@@ -624,47 +745,6 @@ export function ArchiveView({ token }: { token: string }) {
   )
 }
 
-function AssignmentForm({
-  title,
-  options,
-  close,
-  submit,
-  bulk = false,
-  submitting = false,
-}: {
-  title: string
-  options: Options
-  close: () => void
-  submit: (e: FormEvent<HTMLFormElement>) => void
-  bulk?: boolean
-  submitting?: boolean
-}) {
-  return (
-    <FormCard title={title}>
-      <form className="grid gap-4 sm:grid-cols-3" onSubmit={submit}>
-        <Picker label="Tutor" name="tutorId" rows={options.tutor} field="nama" />
-        {!bulk && <Picker label="Kelas" name="kelasId" rows={options.kelas} field="namaRombel" />}
-        <Picker label="Mata pelajaran" name="mapelId" rows={options.mapel} field="namaMapel" />
-        {bulk && (
-          <Picker
-            label="Tahun ajaran (opsional)"
-            name="tahunAjaranId"
-            rows={options.years}
-            field="namaTahunAjaran"
-            optional
-          />
-        )}
-        <div className="flex gap-2 sm:col-span-3">
-          <Button disabled={submitting}>{submitting ? 'Menyimpan...' : 'Simpan'}</Button>
-          <Button type="button" variant="outline" disabled={submitting} onClick={close}>
-            Batal
-          </Button>
-        </div>
-      </form>
-    </FormCard>
-  )
-}
-
 function Picker({
   label,
   name,
@@ -715,12 +795,12 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 }
 
 async function loadOptions(token: string): Promise<Options> {
-  const [kelas, tutor, pokjar, years, parents, mapel] = await Promise.all(
-    ['/kelas', '/tutor', '/pokjar', '/tahun-ajaran', '/orang-tua', '/mapel'].map((p) =>
+  const [kelas, tutor, pokjar, years, parents, mapel, kelasMapel] = await Promise.all(
+    ['/kelas', '/tutor', '/pokjar', '/tahun-ajaran', '/orang-tua', '/mapel', '/kelas-mapel'].map((p) =>
       request(p, token)
     )
   )
-  return { kelas, tutor, pokjar, years, parents, mapel }
+  return { kelas, tutor, pokjar, years, parents, mapel, kelasMapel }
 }
 
 async function request(path: string, token: string, method = 'GET', body?: unknown) {
