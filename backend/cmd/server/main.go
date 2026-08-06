@@ -197,12 +197,18 @@ type PenugasanGuruMapel struct {
 	Kelas   *Kelas         `gorm:"foreignKey:KelasID" json:"kelas,omitempty"`
 	Mapel   *MataPelajaran `gorm:"foreignKey:MapelID" json:"mapel,omitempty"`
 }
+
+// temporaryNISN is used while a student's official NISN has not been issued.
+// It is intentionally shared by those students; parent login remains disabled
+// for this placeholder until the real NISN is available.
+const temporaryNISN = "0000000000"
+
 type PesertaDidik struct {
 	Base
 	Nama         string     `json:"nama"`
 	JenisKelamin string     `json:"jenisKelamin"`
 	NIS          string     `gorm:"uniqueIndex" json:"nis"`
-	NISN         string     `gorm:"uniqueIndex" json:"nisn"`
+	NISN         string     `gorm:"index" json:"nisn"`
 	NIK          string     `json:"nik"` // NIK anak, wajib; keunikan dicek di handler
 	TanggalLahir *time.Time `json:"tanggalLahir"`
 	KelasID      string     `gorm:"index" json:"kelasId"`
@@ -1083,6 +1089,9 @@ func (s *Server) migrateSchema() error {
 	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
+	if e := s.ensureTemporaryNISNIndex(); e != nil {
+		return e
+	}
 	if err := s.normalizeStoredRombelNames(); err != nil {
 		return err
 	}
@@ -1165,6 +1174,20 @@ func (s *Server) migrateSchema() error {
 		}
 	}
 	return nil
+}
+
+// ensureTemporaryNISNIndex keeps official NISNs unique while allowing the
+// shared temporary placeholder used by students awaiting NISN issuance.
+func (s *Server) ensureTemporaryNISNIndex() error {
+	if s.db.Dialector.Name() != "sqlite" && s.db.Dialector.Name() != "postgres" {
+		return nil
+	}
+	for _, name := range []string{"uni_peserta_didiks_nisn", "idx_peserta_didiks_nisn"} {
+		if e := s.db.Exec(`DROP INDEX IF EXISTS "` + name + `"`).Error; e != nil {
+			return e
+		}
+	}
+	return s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS "uniq_peserta_didiks_nisn_real" ON "peserta_didiks" ("nisn") WHERE "nisn" <> '0000000000'`).Error
 }
 func apiError(c *fiber.Ctx, err error) error {
 	code := fiber.StatusInternalServerError

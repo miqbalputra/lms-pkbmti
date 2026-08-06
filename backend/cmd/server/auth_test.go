@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -279,6 +280,80 @@ func TestSiswaLengkapTemplateIncludesBirthDate(t *testing.T) {
 	}
 	if len(rows) == 0 || len(rows[0]) != 17 || rows[0][5] != "tanggal_lahir" {
 		t.Fatalf("unexpected siswa lengkap template headers: %#v", rows)
+	}
+}
+
+func TestSiswaLengkapImportStoresBirthDate(t *testing.T) {
+	s := testServer(t)
+	if err := s.db.AutoMigrate(&Pokjar{}, &TahunAjaran{}, &Kelas{}, &OrangTua{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &ImportLog{}); err != nil {
+		t.Fatal(err)
+	}
+	pokjar := Pokjar{NamaPokjar: "Pokjar Tanggal Lahir", Tipe: "pusat"}
+	year := TahunAjaran{NamaTahunAjaran: "2102/2103", IsAktif: true}
+	if err := s.db.Create(&pokjar).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&year).Error; err != nil {
+		t.Fatal(err)
+	}
+	kelas := Kelas{Jenjang: 1, NamaRombel: "A", PokjarID: pokjar.ID, TahunAjaranID: year.ID}
+	if err := s.db.Create(&kelas).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	xlsx := excelize.NewFile()
+	sheet := xlsx.GetSheetName(0)
+	headers := []string{"nama", "jenis_kelamin", "nis", "nisn", "nik", "tanggal_lahir", "kelas", "nama_ayah", "nik_ayah", "pekerjaan_ayah", "pendidikan_ayah", "penghasilan_ayah", "nama_ibu", "nik_ibu", "pekerjaan_ibu", "pendidikan_ibu", "penghasilan_ibu"}
+	if err := xlsx.SetSheetRow(sheet, "A1", &headers); err != nil {
+		t.Fatal(err)
+	}
+	row := []string{"Siswa Tanggal Lahir", "L", "390", "1234567890", "3201000101010001", "2018-01-02", "1A", "Ayah Siswa", "", "", "", "", "Ibu Siswa", "", "", "", ""}
+	if err := xlsx.SetSheetRow(sheet, "A2", &row); err != nil {
+		t.Fatal(err)
+	}
+	var content bytes.Buffer
+	if err := xlsx.Write(&content); err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("tipe", "siswa-lengkap"); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile("file", "siswa-lengkap.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(content.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	app := fiber.New()
+	app.Post("/import", func(c *fiber.Ctx) error {
+		c.Locals("userID", "test-admin")
+		c.Locals("role", "admin")
+		return s.importTerpusat(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/import", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := app.Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(response.Body)
+		t.Fatalf("expected import 200, got %d: %s", response.StatusCode, payload)
+	}
+	payload, _ := io.ReadAll(response.Body)
+	var student PesertaDidik
+	if err := s.db.Where("nis = ?", "390").First(&student).Error; err != nil {
+		t.Fatalf("student was not imported: %v; response: %s", err, payload)
+	}
+	if student.TanggalLahir == nil || student.TanggalLahir.Format("2006-01-02") != "2018-01-02" {
+		t.Fatalf("birth date was not stored, got %v", student.TanggalLahir)
 	}
 }
 

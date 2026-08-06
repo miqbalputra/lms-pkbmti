@@ -6525,6 +6525,10 @@ type importIssue struct {
 	Error string `json:"error"`
 }
 
+func isTemporaryNISN(value string) bool {
+	return strings.TrimSpace(value) == temporaryNISN
+}
+
 func (s *Server) importTemplate(c *fiber.Ctx) error {
 	switch c.Params("tipe") {
 	case "siswa":
@@ -6779,7 +6783,8 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				issues = append(issues, importIssue{line, "semua kolom wajib; jenis_kelamin L/P"})
 				continue
 			}
-			if nisSeen[pd.NIS] || nisnSeen[pd.NISN] || nikSeen[pd.NIK] {
+			nisnDuplicate := !isTemporaryNISN(pd.NISN) && nisnSeen[pd.NISN]
+			if nisSeen[pd.NIS] || nisnDuplicate || nikSeen[pd.NIK] {
 				issues = append(issues, importIssue{line, "duplikat NIS/NISN/NIK dalam file"})
 				continue
 			}
@@ -6810,7 +6815,9 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				continue
 			}
 			nisSeen[pd.NIS] = true
-			nisnSeen[pd.NISN] = true
+			if !isTemporaryNISN(pd.NISN) {
+				nisnSeen[pd.NISN] = true
+			}
 			nikSeen[pd.NIK] = true
 			berhasil++
 		}
@@ -6839,8 +6846,10 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 		for index, row := range rows[1:] {
 			line := index + 2
 			if len(row) < len(expected) {
-				issues = append(issues, importIssue{line, "kolom tidak lengkap"})
-				continue
+				// Excelize omits trailing empty cells. The parent columns are
+				// optional, so pad the row before reading them and validate the
+				// required student columns below.
+				row = append(row, make([]string, len(expected)-len(row))...)
 			}
 			nama := strings.TrimSpace(row[0])
 			jk := strings.ToUpper(strings.TrimSpace(row[1]))
@@ -6868,7 +6877,8 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				issues = append(issues, importIssue{line, "tanggal_lahir tidak valid (YYYY-MM-DD)"})
 				continue
 			}
-			if nisSeen[nis] || nisnSeen[nisn] || nikSeen[nik] {
+			nisnDuplicate := !isTemporaryNISN(nisn) && nisnSeen[nisn]
+			if nisSeen[nis] || nisnDuplicate || nikSeen[nik] {
 				issues = append(issues, importIssue{line, "duplikat NIS/NISN/NIK dalam file"})
 				continue
 			}
@@ -6935,7 +6945,9 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				continue
 			}
 			nisSeen[nis] = true
-			nisnSeen[nisn] = true
+			if !isTemporaryNISN(nisn) {
+				nisnSeen[nisn] = true
+			}
 			nikSeen[nik] = true
 			berhasil++
 		}
