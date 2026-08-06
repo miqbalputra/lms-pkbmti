@@ -6547,19 +6547,19 @@ func (s *Server) siswaLengkapTemplate(c *fiber.Ctx) error {
 	sheet := xlsx.GetSheetName(0)
 	_ = xlsx.SetSheetName(sheet, "Peserta Didik Lengkap")
 	sheet = "Peserta Didik Lengkap"
-	headers := []string{"nama", "jenis_kelamin", "nis", "nisn", "nik", "kelas", "nama_ayah", "nik_ayah", "pekerjaan_ayah", "pendidikan_ayah", "penghasilan_ayah", "nama_ibu", "nik_ibu", "pekerjaan_ibu", "pendidikan_ibu", "penghasilan_ibu"}
+	headers := []string{"nama", "jenis_kelamin", "nis", "nisn", "nik", "tanggal_lahir", "kelas", "nama_ayah", "nik_ayah", "pekerjaan_ayah", "pendidikan_ayah", "penghasilan_ayah", "nama_ibu", "nik_ibu", "pekerjaan_ibu", "pendidikan_ibu", "penghasilan_ibu"}
 	if err := xlsx.SetSheetRow(sheet, "A1", &headers); err != nil {
 		return err
 	}
 	examples := []struct{ row []string }{
-		{[]string{"Ahmad Fauzi", "L", "2026001", "3185070110", "3303060110100001", "1A", "Budi Santoso", "3303060110700001", "Wiraswasta", "SMA", "Rp. 3.000.000", "Siti Aminah", "3303060110720002", "Mengurus Rumah Tangga", "SMP", "Rp. 0"}},
-		{[]string{"Siti Nurhaliza", "P", "2026002", "3185070111", "3303065111100002", "1A", "Ahmad Hidayat", "3303060111650001", "Karyawan", "S1", "Rp. 5.000.000", "Fatimah Azzahra", "3303065111680002", "Guru", "S1", "Rp. 4.000.000"}},
+		{[]string{"Ahmad Fauzi", "L", "2026001", "3185070110", "3303060110100001", "2010-01-15", "1A", "Budi Santoso", "3303060110700001", "Wiraswasta", "SMA", "Rp. 3.000.000", "Siti Aminah", "3303060110720002", "Mengurus Rumah Tangga", "SMP", "Rp. 0"}},
+		{[]string{"Siti Nurhaliza", "P", "2026002", "3185070111", "3303065111100002", "2011-02-20", "1A", "Ahmad Hidayat", "3303060111650001", "Karyawan", "S1", "Rp. 5.000.000", "Fatimah Azzahra", "3303065111680002", "Guru", "S1", "Rp. 4.000.000"}},
 	}
 	for i, ex := range examples {
 		cell, _ := excelize.CoordinatesToCellName(1, i+2)
 		_ = xlsx.SetSheetRow(sheet, cell, &ex.row)
 	}
-	widths := []float64{28, 16, 14, 16, 22, 8, 24, 22, 20, 16, 18, 24, 22, 24, 16, 18}
+	widths := []float64{28, 16, 14, 16, 22, 18, 8, 24, 22, 20, 16, 18, 24, 22, 24, 16, 18}
 	for i, w := range widths {
 		col, _ := excelize.ColumnNumberToName(i + 1)
 		_ = xlsx.SetColWidth(sheet, col, col, w)
@@ -6818,7 +6818,7 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 		if role != "admin" {
 			return fiber.NewError(403, "import peserta didik hanya admin")
 		}
-		expected := []string{"nama", "jenis_kelamin", "nis", "nisn", "nik", "kelas", "nama_ayah", "nik_ayah", "pekerjaan_ayah", "pendidikan_ayah", "penghasilan_ayah", "nama_ibu", "nik_ibu", "pekerjaan_ibu", "pendidikan_ibu", "penghasilan_ibu"}
+		expected := []string{"nama", "jenis_kelamin", "nis", "nisn", "nik", "tanggal_lahir", "kelas", "nama_ayah", "nik_ayah", "pekerjaan_ayah", "pendidikan_ayah", "penghasilan_ayah", "nama_ibu", "nik_ibu", "pekerjaan_ibu", "pendidikan_ibu", "penghasilan_ibu"}
 		if e := validateImportHeaders(rows[0], expected); e != nil {
 			return fiber.NewError(400, e.Error())
 		}
@@ -6847,19 +6847,25 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 			nis := strings.TrimSpace(row[2])
 			nisn := strings.TrimSpace(row[3])
 			nik := strings.TrimSpace(row[4])
-			kelasStr := strings.TrimSpace(row[5])
-			namaAyah := strings.TrimSpace(row[6])
-			nikAyah := strings.TrimSpace(row[7])
-			_ = strings.TrimSpace(row[8])  // pekerjaan_ayah
-			_ = strings.TrimSpace(row[9])  // pendidikan_ayah
-			_ = strings.TrimSpace(row[10]) // penghasilan_ayah
-			namaIbu := strings.TrimSpace(row[11])
-			nikIbu := strings.TrimSpace(row[12])
-			_ = strings.TrimSpace(row[13]) // pekerjaan_ibu
-			_ = strings.TrimSpace(row[14]) // pendidikan_ibu
-			_ = strings.TrimSpace(row[15]) // penghasilan_ibu
-			if nama == "" || (jk != "L" && jk != "P") || nis == "" || nisn == "" || nik == "" || kelasStr == "" {
-				issues = append(issues, importIssue{line, "nama, jenis_kelamin (L/P), nis, nisn, nik, kelas wajib"})
+			tanggalLahirValue := strings.TrimSpace(row[5])
+			kelasStr := strings.TrimSpace(row[6])
+			namaAyah := strings.TrimSpace(row[7])
+			nikAyah := strings.TrimSpace(row[8])
+			_ = strings.TrimSpace(row[9])  // pekerjaan_ayah
+			_ = strings.TrimSpace(row[10]) // pendidikan_ayah
+			_ = strings.TrimSpace(row[11]) // penghasilan_ayah
+			namaIbu := strings.TrimSpace(row[12])
+			nikIbu := strings.TrimSpace(row[13])
+			_ = strings.TrimSpace(row[14]) // pekerjaan_ibu
+			_ = strings.TrimSpace(row[15]) // pendidikan_ibu
+			_ = strings.TrimSpace(row[16]) // penghasilan_ibu
+			if nama == "" || (jk != "L" && jk != "P") || nis == "" || nisn == "" || nik == "" || tanggalLahirValue == "" || kelasStr == "" {
+				issues = append(issues, importIssue{line, "nama, jenis_kelamin (L/P), nis, nisn, nik, tanggal_lahir, kelas wajib"})
+				continue
+			}
+			tanggalLahir, dateErr := parseFlexibleDate(tanggalLahirValue)
+			if dateErr != nil {
+				issues = append(issues, importIssue{line, "tanggal_lahir tidak valid (YYYY-MM-DD)"})
 				continue
 			}
 			if nisSeen[nis] || nisnSeen[nisn] || nikSeen[nik] {
@@ -6914,6 +6920,7 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				NIS:          nis,
 				NISN:         nisn,
 				NIK:          nik,
+				TanggalLahir: &tanggalLahir,
 				KelasID:      kelas.ID,
 				PokjarID:     defaultPokjar.ID,
 				OrangTuaID:   ortu.ID,

@@ -256,6 +256,32 @@ func TestTutorImportRequiresCoreFieldsAndKeepsOptionalFieldsOptional(t *testing.
 	}
 }
 
+func TestSiswaLengkapTemplateIncludesBirthDate(t *testing.T) {
+	s := testServer(t)
+	app := fiber.New()
+	app.Get("/template", s.siswaLengkapTemplate)
+	response, err := app.Test(httptest.NewRequest(http.MethodGet, "/template", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected template 200, got %d", response.StatusCode)
+	}
+	workbook, err := excelize.OpenReader(response.Body)
+	if err != nil {
+		t.Fatalf("template response is not a valid workbook: %v", err)
+	}
+	defer workbook.Close()
+	rows, err := workbook.GetRows("Peserta Didik Lengkap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 || len(rows[0]) != 17 || rows[0][5] != "tanggal_lahir" {
+		t.Fatalf("unexpected siswa lengkap template headers: %#v", rows)
+	}
+}
+
 func TestTutorTemplateUsesRenamedSheet(t *testing.T) {
 	s := testServer(t)
 	app := fiber.New()
