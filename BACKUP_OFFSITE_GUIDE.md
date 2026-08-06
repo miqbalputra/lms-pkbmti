@@ -102,6 +102,9 @@ Gunakan satu workflow n8n sebagai gateway upload:
 Webhook (PUT) -> Google Drive: Upload -> Respond to Webhook
 ```
 
+File workflow siap import tersedia di [n8n-backup-google-drive-workflow.json](n8n-backup-google-drive-workflow.json).
+Setelah import, pilih credential Google Drive pada node **Upload ke Google Drive**, pilih credential **Header Auth** pada node Webhook, lalu pilih folder tujuan backup. Workflow sengaja tidak menyimpan credential, token, atau folder ID.
+
 ### Konfigurasi Webhook
 
 1. Buat node **Webhook**.

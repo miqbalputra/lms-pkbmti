@@ -1,0 +1,95 @@
+{
+  "name": "PKBM - Backup Database ke Google Drive",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "PUT",
+        "path": "pkbm-backup",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "id": "f1d0c1ef-7f00-4fbb-90e8-0a7a306cd201",
+      "name": "Terima Backup Terenkripsi",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [260, 300],
+      "webhookId": "d5f5bb55-85f3-4b62-96cf-7f5c58a4c4c1"
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "binaryPropertyName": "data",
+        "name": "={{ $json.headers['x-backup-name'] || $json.headers['X-Backup-Name'] || 'pkbm-backup.sql.enc' }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {}
+      },
+      "id": "5aa6a9f9-f7ae-43ed-969a-5bdf90e5a8b2",
+      "name": "Upload ke Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [560, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, fileId: $json.id, fileName: $json.name } }}",
+        "options": {}
+      },
+      "id": "f47e6d2d-f5b4-4371-b2d0-4b1f19bc19ce",
+      "name": "Balas Berhasil",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [860, 300]
+    }
+  ],
+  "connections": {
+    "Terima Backup Terenkripsi": {
+      "main": [
+        [
+          {
+            "node": "Upload ke Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload ke Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Balas Berhasil",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  },
+  "versionId": "a1b34de8-6b2c-4f4e-85f6-ccf6e4c25f5b",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "pkbm-backup-google-drive",
+  "tags": []
+}
