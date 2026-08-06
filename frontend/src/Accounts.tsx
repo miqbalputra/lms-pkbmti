@@ -167,6 +167,7 @@ export function Accounts({ token }: { token: string }) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>Nama</TableHead>
                 <TableHead>Username</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Peran</TableHead>
@@ -177,13 +178,14 @@ export function Accounts({ token }: { token: string }) {
             <TableBody>
               {users.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5}>
+                  <TableCell colSpan={6}>
                     <EmptyState title="Belum ada akun" description="Buat akun pengguna baru untuk memulai." />
                   </TableCell>
                 </TableRow>
               ) : (
                 users.map((u) => (
                   <TableRow key={u.id}>
+                    <TableCell className="font-medium">{String(u.nama || u.username)}</TableCell>
                     <TableCell className="font-medium">{String(u.username)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{String(u.email || '-')}</TableCell>
                     <TableCell>

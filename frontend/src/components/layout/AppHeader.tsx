@@ -38,6 +38,7 @@ interface User {
   id: string
   username: string
   role: string
+  nama?: string
 }
 
 interface Notif {
@@ -204,6 +205,8 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
     toast.success('Sesi berhasil diakhiri.')
     onLogout()
   }
+
+  const displayName = String(user.nama || user.username).trim() || user.username
 
   return (
     <>
@@ -417,11 +420,11 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 px-2 py-1.5 h-auto rounded-full hover:bg-gray-100 dark:hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-brand-500/10">
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-500 text-white font-bold text-xs">
-                    {getInitials(user.username)}
+                    {getInitials(displayName)}
                   </div>
                   <div className="hidden md:flex flex-col text-left">
                     <span className="text-sm font-semibold text-gray-800 dark:text-white/90 leading-tight">
-                      {user.username}
+                      {displayName}
                     </span>
                     <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">
                       {formatRoleLabel(user.role)}
@@ -437,7 +440,7 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
                 <DropdownMenuLabel className="font-normal">
                   <div className="flex flex-col space-y-1">
                     <p className="text-sm font-semibold leading-none text-gray-800 dark:text-white/90">
-                      {user.username}
+                      {displayName}
                     </p>
                     <p className="text-xs leading-none text-gray-500 dark:text-gray-400">
                       Hak Akses: {formatRoleLabel(user.role)}

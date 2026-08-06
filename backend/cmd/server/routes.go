@@ -229,7 +229,7 @@ func (s *Server) routes(api fiber.Router) {
 	readAll.Get("/pokjar", func(c *fiber.Ctx) error { return list[Pokjar](s.db, c) })
 	readAll.Get("/tahun-ajaran", func(c *fiber.Ctx) error { return list[TahunAjaran](s.db.Order("tanggal_mulai desc"), c) })
 	readAll.Get("/mapel", func(c *fiber.Ctx) error { return list[MataPelajaran](s.db, c) })
-	readAll.Get("/users", func(c *fiber.Ctx) error { return list[User](s.db, c) })
+	readAll.Get("/users", s.listUsers)
 	readAll.Get("/kelas-mapel", s.listKelasMapel)
 	readAll.Get("/audit-logs", s.listAuditLogs)
 	readAll.Get("/arsip", s.arsip)
@@ -332,6 +332,63 @@ func list[T any](db *gorm.DB, c *fiber.Ctx, preload ...string) error {
 		return e
 	}
 	return c.JSON(rows)
+}
+
+// fillUserNames adds the human-readable name without storing a duplicate name
+// on User. Tutor accounts use the linked Tutor.Nama; other account types fall
+// back to their username because they do not have a separate name field.
+func (s *Server) fillUserNames(users ...*User) error {
+	ids := make([]string, 0, len(users))
+	seen := make(map[string]struct{})
+	for _, user := range users {
+		if user == nil {
+			continue
+		}
+		user.Nama = user.Username
+		if user.Role != "guru" || user.TutorID == nil || strings.TrimSpace(*user.TutorID) == "" {
+			continue
+		}
+		tutorID := strings.TrimSpace(*user.TutorID)
+		if _, ok := seen[tutorID]; !ok {
+			seen[tutorID] = struct{}{}
+			ids = append(ids, tutorID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var tutors []Tutor
+	if err := s.db.Select("id, nama").Where("id IN ?", ids).Find(&tutors).Error; err != nil {
+		return err
+	}
+	names := make(map[string]string, len(tutors))
+	for _, tutor := range tutors {
+		names[tutor.ID] = strings.TrimSpace(tutor.Nama)
+	}
+	for _, user := range users {
+		if user == nil || user.TutorID == nil {
+			continue
+		}
+		if name := names[strings.TrimSpace(*user.TutorID)]; name != "" {
+			user.Nama = name
+		}
+	}
+	return nil
+}
+
+func (s *Server) listUsers(c *fiber.Ctx) error {
+	var users []User
+	if err := s.db.Find(&users).Error; err != nil {
+		return err
+	}
+	userRefs := make([]*User, len(users))
+	for i := range users {
+		userRefs[i] = &users[i]
+	}
+	if err := s.fillUserNames(userRefs...); err != nil {
+		return err
+	}
+	return c.JSON(users)
 }
 func get[T any](db *gorm.DB, c *fiber.Ctx) error {
 	var row T
@@ -1201,7 +1258,7 @@ func (s *Server) crudTahunAjaran(r fiber.Router) {
 	r.Delete("/tahun-ajaran/:id", func(c *fiber.Ctx) error { return deleteRow[TahunAjaran](s, c, "tahun_ajaran") })
 }
 func (s *Server) crudUsers(r fiber.Router) {
-	r.Get("/users", func(c *fiber.Ctx) error { return list[User](s.db, c) })
+	r.Get("/users", s.listUsers)
 	r.Post("/users", s.createUser)
 	r.Put("/users/:id", s.updateUser)
 	r.Delete("/users/:id", s.deleteUser)

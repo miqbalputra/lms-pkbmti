@@ -50,6 +50,7 @@ type User struct {
 	Base
 	Username     string  `gorm:"uniqueIndex;not null" json:"username"`
 	Email        string  `gorm:"index" json:"email"`
+	Nama         string  `gorm:"-" json:"nama,omitempty"`
 	PasswordHash string  `json:"-"`
 	Role         string  `gorm:"not null" json:"role"`
 	TutorID      *string `json:"tutorId"`
@@ -1327,6 +1328,9 @@ func (s *Server) requireTurnstile(c *fiber.Ctx, token string) error {
 	return nil
 }
 func (s *Server) issue(c *fiber.Ctx, u User) error {
+	if e := s.fillUserNames(&u); e != nil {
+		return e
+	}
 	access, e := s.token(u, s.cfg.AccessSecret, s.cfg.AccessTTL)
 	if e != nil {
 		return e
@@ -1386,6 +1390,9 @@ func (s *Server) auth(c *fiber.Ctx) error {
 func (s *Server) me(c *fiber.Ctx) error {
 	var u User
 	if e := s.db.First(&u, "id = ?", c.Locals("userID")).Error; e != nil {
+		return e
+	}
+	if e := s.fillUserNames(&u); e != nil {
 		return e
 	}
 	return c.JSON(u)

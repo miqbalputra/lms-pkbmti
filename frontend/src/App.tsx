@@ -90,7 +90,7 @@ const DashboardCharts = lazy(() =>
   import('./DashboardCharts').then((m) => ({ default: m.DashboardCharts }))
 )
 
-export type User = { id: string; username: string; role: string; tutorId?: string; email?: string }
+export type User = { id: string; username: string; role: string; tutorId?: string; email?: string; nama?: string }
 
 function PageFallback() {
   return (

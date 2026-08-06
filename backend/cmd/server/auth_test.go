@@ -89,6 +89,24 @@ func TestTutorEmailCanBeAddedAfterAccountCreation(t *testing.T) {
 	}
 }
 
+func TestUserNameUsesLinkedTutorName(t *testing.T) {
+	s := testServer(t)
+	if err := s.db.AutoMigrate(&Tutor{}); err != nil {
+		t.Fatal(err)
+	}
+	tutor := Tutor{Nama: "Nama Tutor Lengkap", JenisKelamin: "L"}
+	if err := s.db.Create(&tutor).Error; err != nil {
+		t.Fatal(err)
+	}
+	user := User{Username: "username-tutor", Role: "guru", TutorID: &tutor.ID}
+	if err := s.fillUserNames(&user); err != nil {
+		t.Fatal(err)
+	}
+	if user.Nama != tutor.Nama {
+		t.Fatalf("expected linked tutor name %q, got %q", tutor.Nama, user.Nama)
+	}
+}
+
 func TestRefreshTokenRotatesAndRejectsReuse(t *testing.T) {
 	s := testServer(t)
 	hash, err := bcrypt.GenerateFromPassword([]byte("Password123"), bcrypt.DefaultCost)
