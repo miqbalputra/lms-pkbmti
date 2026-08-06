@@ -195,6 +195,93 @@ func TestImportSiswaIsAtomicWhenRowIsInvalid(t *testing.T) {
 	}
 }
 
+func TestTutorImportRequiresCoreFieldsAndKeepsOptionalFieldsOptional(t *testing.T) {
+	s := testServer(t)
+	if err := s.db.AutoMigrate(&Tutor{}, &ImportLog{}); err != nil {
+		t.Fatal(err)
+	}
+	xlsx := excelize.NewFile()
+	sheet := xlsx.GetSheetName(0)
+	if err := xlsx.SetSheetRow(sheet, "A1", &[]string{"nama", "jenis_kelamin", "no_hp", "alamat", "tanggal_mulai_tugas", "is_rpp_maker"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := xlsx.SetSheetRow(sheet, "A2", &[]string{"Tutor Valid", "L", "08123456789"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := xlsx.SetSheetRow(sheet, "A3", &[]string{"Tutor Tanpa HP", "P", ""}); err != nil {
+		t.Fatal(err)
+	}
+	var content bytes.Buffer
+	if err := xlsx.Write(&content); err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	writer.WriteField("tipe", "tutor")
+	part, err := writer.CreateFormFile("file", "tutor.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(content.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	app := fiber.New()
+	app.Post("/import", func(c *fiber.Ctx) error {
+		c.Locals("userID", "test-admin")
+		c.Locals("role", "admin")
+		return s.importTerpusat(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/import", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := app.Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected import 200, got %d", response.StatusCode)
+	}
+	var tutors []Tutor
+	if err := s.db.Find(&tutors).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tutors) != 1 || tutors[0].Nama != "Tutor Valid" || tutors[0].NoHP != "08123456789" {
+		t.Fatalf("expected only valid tutor row to be imported, got %+v", tutors)
+	}
+	if tutors[0].Alamat != "" || tutors[0].TanggalBertugas != nil {
+		t.Fatalf("optional tutor fields should remain empty, got %+v", tutors[0])
+	}
+}
+
+func TestTutorTemplateUsesRenamedSheet(t *testing.T) {
+	s := testServer(t)
+	app := fiber.New()
+	app.Get("/template", s.tutorTemplate)
+	response, err := app.Test(httptest.NewRequest(http.MethodGet, "/template", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected template 200, got %d", response.StatusCode)
+	}
+	workbook, err := excelize.OpenReader(response.Body)
+	if err != nil {
+		t.Fatalf("template response is not a valid workbook: %v", err)
+	}
+	defer workbook.Close()
+	rows, err := workbook.GetRows("Tutor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 || len(rows[0]) != 6 || rows[0][0] != "nama" || rows[0][4] != "tanggal_mulai_tugas" {
+		t.Fatalf("unexpected tutor template headers: %#v", rows)
+	}
+}
+
 func TestPromotionRejectsTargetClassFromAnotherYear(t *testing.T) {
 	s := testServer(t)
 	if err := s.db.AutoMigrate(&Pokjar{}, &TahunAjaran{}, &Kelas{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}); err != nil {

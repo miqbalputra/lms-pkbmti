@@ -69,7 +69,10 @@ export function ImportView({ token, user }: { token: string; user: User }) {
         credentials: 'include',
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!res.ok) throw new Error('Gagal mengunduh template.')
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(detail.error || `Gagal mengunduh template (${res.status}).`)
+      }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')

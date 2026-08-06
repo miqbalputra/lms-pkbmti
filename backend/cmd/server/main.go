@@ -77,15 +77,27 @@ type AuditLog struct {
 }
 type Tutor struct {
 	Base
-	Nama            string     `json:"nama"`
-	JenisKelamin    string     `json:"jenisKelamin"`
-	TempatLahir     string     `json:"tempatLahir"`
-	TanggalLahir    *time.Time `json:"tanggalLahir"`
-	TanggalBertugas *time.Time `json:"tanggalBertugas"`
-	NoHP            string     `json:"noHp"`
-	Alamat          string     `json:"alamat"`
-	UserID          *string    `json:"userId"`
-	IsRPPMaker      bool       `gorm:"default:false" json:"isRppMaker"` // Modul R — ditugaskan admin utk menyusun RPP per jenjang
+	Nama               string     `json:"nama"`
+	JenisKelamin       string     `json:"jenisKelamin"`
+	TempatLahir        string     `json:"tempatLahir"`
+	TanggalLahir       *time.Time `json:"tanggalLahir"`
+	TanggalBertugas    *time.Time `json:"tanggalBertugas"`
+	NoHP               string     `json:"noHp"`
+	Alamat             string     `json:"alamat"`
+	UserID             *string    `json:"userId"`
+	SKPengangkatanPath *string    `json:"-"`
+	SKPengangkatanNama string     `json:"-"`
+	IsRPPMaker         bool       `gorm:"default:false" json:"isRppMaker"` // Modul R — ditugaskan admin utk menyusun RPP per jenjang
+}
+
+// DokumenSistem menyimpan dokumen yang dipakai bersama oleh banyak akun,
+// misalnya SK Penugasan seluruh tutor. File tetap disajikan melalui endpoint
+// terautentikasi, bukan static public /uploads.
+type DokumenSistem struct {
+	Base
+	Kode     string `gorm:"uniqueIndex;not null" json:"kode"`
+	Nama     string `json:"nama"`
+	FilePath string `json:"-"`
 }
 type OrangTua struct {
 	Base
@@ -1047,7 +1059,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &DokumenSistem{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	// Modul K — alur approve/reject jurnal dihapus; jurnal langsung final. Sekali

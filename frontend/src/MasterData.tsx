@@ -97,8 +97,9 @@ const schemas: Record<string, Schema> = {
         ],
         required: true,
       },
-      { key: 'noHp', label: 'No. HP / WhatsApp', required: false, placeholder: '08123456789' },
+      { key: 'noHp', label: 'No. HP / WhatsApp', required: true, placeholder: '08123456789' },
       { key: 'alamat', label: 'Alamat', required: false, placeholder: 'Alamat lengkap tutor' },
+      { key: 'tanggalBertugas', label: 'Tanggal Mulai Tugas', type: 'date', required: false },
       { key: 'isRppMaker', label: 'Penyusun RPP (berhak upload RPP per jenjang)', type: 'checkbox' },
     ],
     columns: [
@@ -114,6 +115,7 @@ const schemas: Record<string, Schema> = {
       },
       { key: 'noHp', label: 'No. HP / WA' },
       { key: 'alamat', label: 'Alamat', truncate: true },
+      { key: 'tanggalBertugas', label: 'Mulai Tugas', render: 'date' },
       { key: 'isRppMaker', label: 'Penyusun RPP', render: 'boolean' },
     ],
   },

@@ -209,6 +209,13 @@ func (s *Server) routes(api fiber.Router) {
 	// per-tipe di importTerpusat (siswa admin, nilai-kompetensi admin/tutor wali).
 	api.Get("/import/template/:tipe", s.importTemplate)
 	api.Post("/import", s.importTerpusat)
+	// Dokumen tutor: endpoint metadata melakukan pengecekan admin di handler
+	// karena path /tutor/dokumen berpotensi tertangkap oleh /tutor/:id pada
+	// managementRead yang didaftarkan sesudah blok bare-api ini.
+	api.Get("/tutor/me/dokumen", s.getMyTutorDocuments)
+	api.Get("/tutor/me/dokumen/sk-pengangkatan", s.downloadMyTutorSKPengangkatan)
+	api.Get("/tutor/me/dokumen/sk-penugasan", s.downloadMyTutorSKPenugasan)
+	api.Get("/tutor/dokumen", s.listTutorDocuments)
 
 	// Admin+kepala_sekolah reads (managementRead rejects guru).
 	readAll := api.Group("", s.managementRead)
@@ -408,12 +415,331 @@ func (s *Server) sendUpload(c *fiber.Ctx, relPath string) error {
 }
 
 func (s *Server) crudTutor(r fiber.Router) {
+	r.Get("/tutor/dokumen/sk-penugasan/download", s.downloadTutorSKPenugasan)
+	r.Post("/tutor/dokumen/sk-penugasan", s.uploadTutorSKPenugasan)
+	r.Get("/tutor/:id/dokumen/sk-pengangkatan", s.downloadTutorSKPengangkatan)
+	r.Post("/tutor/:id/dokumen/sk-pengangkatan", s.uploadTutorSKPengangkatan)
 	r.Get("/tutor", func(c *fiber.Ctx) error { return list[Tutor](s.db, c) })
 	r.Get("/tutor/:id", func(c *fiber.Ctx) error { return get[Tutor](s.db, c) })
-	r.Post("/tutor", func(c *fiber.Ctx) error { return create[Tutor](s, c, "tutor") })
-	r.Put("/tutor/:id", func(c *fiber.Ctx) error { return update[Tutor](s, c, "tutor") })
+	r.Post("/tutor", s.createTutor)
+	r.Put("/tutor/:id", s.updateTutor)
 	r.Delete("/tutor/:id", func(c *fiber.Ctx) error { return deleteRow[Tutor](s, c, "tutor") })
 }
+
+const sharedTutorAssignmentDocumentCode = "sk_penugasan_tutor"
+
+type tutorInput struct {
+	Nama            string  `json:"nama"`
+	JenisKelamin    string  `json:"jenisKelamin"`
+	NoHP            *string `json:"noHp"`
+	Alamat          string  `json:"alamat"`
+	TanggalBertugas *string `json:"tanggalBertugas"`
+	IsRPPMaker      *bool   `json:"isRppMaker"`
+}
+
+func parseTutorAssignmentDate(value *string) (*time.Time, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	parsed, err := parseFlexibleDate(*value)
+	if err != nil {
+		return nil, fiber.NewError(400, "format tanggalBertugas tidak valid (YYYY-MM-DD)")
+	}
+	return &parsed, nil
+}
+
+func validateTutorInput(in *tutorInput) error {
+	in.Nama = strings.TrimSpace(in.Nama)
+	in.JenisKelamin = strings.ToUpper(strings.TrimSpace(in.JenisKelamin))
+	if in.NoHP != nil {
+		trimmed := strings.TrimSpace(*in.NoHP)
+		in.NoHP = &trimmed
+	}
+	in.Alamat = strings.TrimSpace(in.Alamat)
+	if in.Nama == "" || (in.JenisKelamin != "L" && in.JenisKelamin != "P") || (in.NoHP != nil && *in.NoHP == "") {
+		return fiber.NewError(400, "nama dan jenisKelamin (L/P) wajib diisi; noHp tidak boleh kosong")
+	}
+	return nil
+}
+
+func (s *Server) createTutor(c *fiber.Ctx) error {
+	var in tutorInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if err := validateTutorInput(&in); err != nil {
+		return err
+	}
+	tanggal, err := parseTutorAssignmentDate(in.TanggalBertugas)
+	if err != nil {
+		return err
+	}
+	noHP := ""
+	if in.NoHP != nil {
+		noHP = *in.NoHP
+	}
+	row := Tutor{Nama: in.Nama, JenisKelamin: in.JenisKelamin, NoHP: noHP, Alamat: in.Alamat, TanggalBertugas: tanggal}
+	if in.IsRPPMaker != nil {
+		row.IsRPPMaker = *in.IsRPPMaker
+	}
+	if err := s.db.Create(&row).Error; err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "create", "tutor", row.ID)
+	return c.Status(201).JSON(row)
+}
+
+func (s *Server) updateTutor(c *fiber.Ctx) error {
+	var row Tutor
+	if err := s.db.First(&row, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "record not found")
+	}
+	var in tutorInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if err := validateTutorInput(&in); err != nil {
+		return err
+	}
+	if in.TanggalBertugas != nil {
+		tanggal, err := parseTutorAssignmentDate(in.TanggalBertugas)
+		if err != nil {
+			return err
+		}
+		row.TanggalBertugas = tanggal
+	}
+	row.Nama, row.JenisKelamin, row.Alamat = in.Nama, in.JenisKelamin, in.Alamat
+	if in.NoHP != nil {
+		row.NoHP = *in.NoHP
+	}
+	if in.IsRPPMaker != nil {
+		row.IsRPPMaker = *in.IsRPPMaker
+	}
+	if err := s.db.Save(&row).Error; err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "update", "tutor", row.ID)
+	return c.JSON(row)
+}
+
+type tutorDocumentSummary struct {
+	Nama                   string `json:"nama"`
+	SKPengangkatanTersedia bool   `json:"skPengangkatanTersedia"`
+	SKPenugasanTersedia    bool   `json:"skPenugasanTersedia"`
+	SKPengangkatanNama     string `json:"skPengangkatanNama,omitempty"`
+	SKPenugasanNama        string `json:"skPenugasanNama,omitempty"`
+}
+
+type tutorDocumentAdminRow struct {
+	ID                     string `json:"id"`
+	Nama                   string `json:"nama"`
+	SKPengangkatanTersedia bool   `json:"skPengangkatanTersedia"`
+	SKPengangkatanNama     string `json:"skPengangkatanNama,omitempty"`
+}
+
+type tutorDocumentAdminResponse struct {
+	SKPenugasanTersedia bool                    `json:"skPenugasanTersedia"`
+	SKPenugasanNama     string                  `json:"skPenugasanNama,omitempty"`
+	Tutors              []tutorDocumentAdminRow `json:"tutors"`
+}
+
+func (s *Server) currentTutor(c *fiber.Ctx) (*Tutor, error) {
+	uid, ok := c.Locals("userID").(string)
+	if !ok || uid == "" {
+		return nil, fiber.NewError(401, "sesi pengguna tidak valid")
+	}
+	var user User
+	if err := s.db.First(&user, "id = ?", uid).Error; err != nil || user.TutorID == nil || strings.TrimSpace(*user.TutorID) == "" {
+		return nil, fiber.NewError(404, "akun tutor belum terhubung ke data tutor")
+	}
+	var tutor Tutor
+	if err := s.db.First(&tutor, "id = ?", strings.TrimSpace(*user.TutorID)).Error; err != nil {
+		return nil, fiber.NewError(404, "data tutor tidak ditemukan")
+	}
+	return &tutor, nil
+}
+
+func (s *Server) sharedTutorAssignment() (*DokumenSistem, error) {
+	var doc DokumenSistem
+	err := s.db.Where("kode = ?", sharedTutorAssignmentDocumentCode).First(&doc).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &doc, nil
+}
+
+func (s *Server) getMyTutorDocuments(c *fiber.Ctx) error {
+	if c.Locals("role") != "guru" {
+		return fiber.NewError(403, "dokumen ini hanya untuk akun tutor")
+	}
+	tutor, err := s.currentTutor(c)
+	if err != nil {
+		return err
+	}
+	shared, err := s.sharedTutorAssignment()
+	if err != nil {
+		return err
+	}
+	result := tutorDocumentSummary{Nama: tutor.Nama, SKPengangkatanTersedia: tutor.SKPengangkatanPath != nil && *tutor.SKPengangkatanPath != ""}
+	if tutor.SKPengangkatanNama != "" {
+		result.SKPengangkatanNama = tutor.SKPengangkatanNama
+	}
+	if shared != nil && shared.FilePath != "" {
+		result.SKPenugasanTersedia = true
+		result.SKPenugasanNama = shared.Nama
+	}
+	return c.JSON(result)
+}
+
+func (s *Server) listTutorDocuments(c *fiber.Ctx) error {
+	if c.Locals("role") != "admin" {
+		return fiber.NewError(403, "daftar dokumen tutor hanya admin")
+	}
+	shared, err := s.sharedTutorAssignment()
+	if err != nil {
+		return err
+	}
+	var tutors []Tutor
+	if err := s.db.Order("nama asc").Find(&tutors).Error; err != nil {
+		return err
+	}
+	result := tutorDocumentAdminResponse{Tutors: make([]tutorDocumentAdminRow, 0, len(tutors))}
+	if shared != nil && shared.FilePath != "" {
+		result.SKPenugasanTersedia = true
+		result.SKPenugasanNama = shared.Nama
+	}
+	for _, tutor := range tutors {
+		row := tutorDocumentAdminRow{ID: tutor.ID, Nama: tutor.Nama, SKPengangkatanTersedia: tutor.SKPengangkatanPath != nil && *tutor.SKPengangkatanPath != ""}
+		if tutor.SKPengangkatanNama != "" {
+			row.SKPengangkatanNama = tutor.SKPengangkatanNama
+		}
+		result.Tutors = append(result.Tutors, row)
+	}
+	return c.JSON(result)
+}
+
+func removeUpload(relPath string) {
+	if relPath != "" && strings.HasPrefix(relPath, "uploads/") && !strings.Contains(relPath, "..") {
+		_ = os.Remove("./" + relPath)
+	}
+}
+
+func (s *Server) saveTutorPDF(c *fiber.Ctx, dir string) (string, string, error) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		return "", "", fiber.NewError(400, "file PDF wajib diunggah")
+	}
+	path, err := s.saveUpload(c, "file", dir, 10*1024*1024, []string{"pdf"})
+	if err != nil {
+		return "", "", err
+	}
+	return path, filepath.Base(file.Filename), nil
+}
+
+func (s *Server) uploadTutorSKPengangkatan(c *fiber.Ctx) error {
+	var tutor Tutor
+	if err := s.db.First(&tutor, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "data tutor tidak ditemukan")
+	}
+	path, name, err := s.saveTutorPDF(c, "tutor/sk-pengangkatan")
+	if err != nil {
+		return err
+	}
+	oldPath := ""
+	if tutor.SKPengangkatanPath != nil {
+		oldPath = *tutor.SKPengangkatanPath
+	}
+	tutor.SKPengangkatanPath = &path
+	tutor.SKPengangkatanNama = name
+	if err := s.db.Save(&tutor).Error; err != nil {
+		removeUpload(path)
+		return fiber.NewError(500, "gagal menyimpan dokumen tutor")
+	}
+	removeUpload(oldPath)
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "upload", "tutor_sk_pengangkatan", tutor.ID)
+	return c.JSON(map[string]any{"ok": true, "nama": name})
+}
+
+func (s *Server) uploadTutorSKPenugasan(c *fiber.Ctx) error {
+	path, name, err := s.saveTutorPDF(c, "tutor/sk-penugasan")
+	if err != nil {
+		return err
+	}
+	oldPath := ""
+	if old, err := s.sharedTutorAssignment(); err != nil {
+		removeUpload(path)
+		return err
+	} else if old != nil {
+		oldPath = old.FilePath
+	}
+	var doc DokumenSistem
+	err = s.db.Where("kode = ?", sharedTutorAssignmentDocumentCode).First(&doc).Error
+	if err == gorm.ErrRecordNotFound {
+		doc = DokumenSistem{Kode: sharedTutorAssignmentDocumentCode}
+	} else if err != nil {
+		removeUpload(path)
+		return err
+	}
+	doc.Nama, doc.FilePath = name, path
+	if err := s.db.Save(&doc).Error; err != nil {
+		removeUpload(path)
+		return fiber.NewError(500, "gagal menyimpan SK Penugasan")
+	}
+	removeUpload(oldPath)
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "upload", "tutor_sk_penugasan", doc.ID)
+	return c.JSON(map[string]any{"ok": true, "nama": name})
+}
+
+func (s *Server) downloadTutorSKPengangkatan(c *fiber.Ctx) error {
+	var tutor Tutor
+	if err := s.db.First(&tutor, "id = ?", id(c)).Error; err != nil || tutor.SKPengangkatanPath == nil {
+		return fiber.NewError(404, "SK Pengangkatan belum tersedia")
+	}
+	return s.sendUpload(c, *tutor.SKPengangkatanPath)
+}
+
+func (s *Server) downloadTutorSKPenugasan(c *fiber.Ctx) error {
+	doc, err := s.sharedTutorAssignment()
+	if err != nil {
+		return err
+	}
+	if doc == nil {
+		return fiber.NewError(404, "SK Penugasan belum tersedia")
+	}
+	return s.sendUpload(c, doc.FilePath)
+}
+
+func (s *Server) downloadMyTutorSKPengangkatan(c *fiber.Ctx) error {
+	if c.Locals("role") != "guru" {
+		return fiber.NewError(403, "dokumen ini hanya untuk akun tutor")
+	}
+	tutor, err := s.currentTutor(c)
+	if err != nil {
+		return err
+	}
+	if tutor.SKPengangkatanPath == nil {
+		return fiber.NewError(404, "SK Pengangkatan belum tersedia")
+	}
+	return s.sendUpload(c, *tutor.SKPengangkatanPath)
+}
+
+func (s *Server) downloadMyTutorSKPenugasan(c *fiber.Ctx) error {
+	if c.Locals("role") != "guru" {
+		return fiber.NewError(403, "dokumen ini hanya untuk akun tutor")
+	}
+	if _, err := s.currentTutor(c); err != nil {
+		return err
+	}
+	return s.downloadTutorSKPenugasan(c)
+}
+
 func (s *Server) crudOrangTua(r fiber.Router) {
 	r.Get("/orang-tua", func(c *fiber.Ctx) error { return list[OrangTua](s.db, c) })
 	r.Post("/orang-tua", func(c *fiber.Ctx) error { return create[OrangTua](s, c, "orang_tua") })
@@ -5849,19 +6175,20 @@ func (s *Server) tutorTemplate(c *fiber.Ctx) error {
 	xlsx := excelize.NewFile()
 	sheet := xlsx.GetSheetName(0)
 	_ = xlsx.SetSheetName(sheet, "Tutor")
-	headers := []string{"nama", "jenis_kelamin", "no_hp", "alamat", "is_rpp_maker"}
+	sheet = "Tutor"
+	headers := []string{"nama", "jenis_kelamin", "no_hp", "alamat", "tanggal_mulai_tugas", "is_rpp_maker"}
 	if err := xlsx.SetSheetRow(sheet, "A1", &headers); err != nil {
 		return err
 	}
 	examples := []struct{ row []string }{
-		{[]string{"Ahmad Fauzi", "L", "08123456789", "Jl. Merdeka No. 10, Jakarta", "false"}},
-		{[]string{"Siti Nurhaliza", "P", "08567890123", "Jl. Pendidikan No. 5, Bandung", "true"}},
+		{[]string{"Ahmad Fauzi", "L", "08123456789", "Jl. Merdeka No. 10, Jakarta", "2026-07-01", "false"}},
+		{[]string{"Siti Nurhaliza", "P", "08567890123", "Jl. Pendidikan No. 5, Bandung", "2026-07-01", "true"}},
 	}
 	for i, ex := range examples {
 		cell, _ := excelize.CoordinatesToCellName(1, i+2)
 		_ = xlsx.SetSheetRow(sheet, cell, &ex.row)
 	}
-	widths := []float64{28, 16, 18, 40, 14}
+	widths := []float64{28, 16, 18, 40, 20, 14}
 	for i, w := range widths {
 		col, _ := excelize.ColumnNumberToName(i + 1)
 		_ = xlsx.SetColWidth(sheet, col, col, w)
@@ -5931,6 +6258,42 @@ func validateImportHeaders(header []string, expected []string) error {
 		}
 	}
 	return nil
+}
+
+func validateTutorImportHeaders(header []string) error {
+	if len(header) < 3 {
+		return fmt.Errorf("kolom tidak cukup; minimal: nama, jenis_kelamin, no_hp")
+	}
+	for i, expected := range []string{"nama", "jenis_kelamin", "no_hp"} {
+		if strings.ToLower(strings.TrimSpace(header[i])) != expected {
+			return fmt.Errorf("kolom tidak sesuai; tiga kolom pertama harus: nama, jenis_kelamin, no_hp")
+		}
+	}
+	allowed := map[string]bool{"alamat": true, "tanggal_mulai_tugas": true, "is_rpp_maker": true}
+	seen := map[string]bool{}
+	for _, raw := range header[3:] {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if !allowed[name] || seen[name] {
+			return fmt.Errorf("kolom tutor tidak dikenal/duplikat; gunakan alamat, tanggal_mulai_tugas, dan is_rpp_maker sebagai kolom opsional")
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+func importColumnIndex(header []string) map[string]int {
+	result := map[string]int{"nama": -1, "jenis_kelamin": -1, "no_hp": -1, "alamat": -1, "tanggal_mulai_tugas": -1, "is_rpp_maker": -1}
+	for i, raw := range header {
+		result[strings.ToLower(strings.TrimSpace(raw))] = i
+	}
+	return result
+}
+
+func importCell(row []string, index int) string {
+	if index < 0 || index >= len(row) {
+		return ""
+	}
+	return strings.TrimSpace(row[index])
 }
 
 func (s *Server) importTerpusat(c *fiber.Ctx) error {
@@ -6237,28 +6600,38 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 		if role != "admin" {
 			return fiber.NewError(403, "import tutor hanya admin")
 		}
-		expected := []string{"nama", "jenis_kelamin", "no_hp", "alamat", "is_rpp_maker"}
-		if e := validateImportHeaders(rows[0], expected); e != nil {
+		if e := validateTutorImportHeaders(rows[0]); e != nil {
 			return fiber.NewError(400, e.Error())
 		}
 		if total > 500 {
 			return fiber.NewError(400, "import tutor dibatasi 500 baris")
 		}
 		namaSeen := map[string]bool{}
+		columns := importColumnIndex(rows[0])
 		for index, row := range rows[1:] {
 			line := index + 2
-			if len(row) < len(expected) {
+			if len(row) < 3 {
 				issues = append(issues, importIssue{line, "kolom tidak lengkap"})
 				continue
 			}
-			nama := strings.TrimSpace(row[0])
-			jk := strings.ToUpper(strings.TrimSpace(row[1]))
-			noHP := strings.TrimSpace(row[2])
-			alamat := strings.TrimSpace(row[3])
-			isRPP := strings.ToLower(strings.TrimSpace(row[4]))
-			if nama == "" || (jk != "L" && jk != "P") {
-				issues = append(issues, importIssue{line, "nama wajib; jenis_kelamin L/P"})
+			nama := importCell(row, columns["nama"])
+			jk := strings.ToUpper(importCell(row, columns["jenis_kelamin"]))
+			noHP := importCell(row, columns["no_hp"])
+			alamat := importCell(row, columns["alamat"])
+			dateValue := importCell(row, columns["tanggal_mulai_tugas"])
+			isRPP := strings.ToLower(importCell(row, columns["is_rpp_maker"]))
+			if nama == "" || (jk != "L" && jk != "P") || noHP == "" {
+				issues = append(issues, importIssue{line, "nama, no_hp wajib; jenis_kelamin harus L/P"})
 				continue
+			}
+			var tanggal *time.Time
+			if dateValue != "" {
+				parsed, dateErr := parseFlexibleDate(dateValue)
+				if dateErr != nil {
+					issues = append(issues, importIssue{line, "tanggal_mulai_tugas tidak valid (YYYY-MM-DD)"})
+					continue
+				}
+				tanggal = &parsed
 			}
 			if namaSeen[nama] {
 				issues = append(issues, importIssue{line, "duplikat nama dalam file: " + nama})
@@ -6270,11 +6643,12 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				continue
 			}
 			tutor := Tutor{
-				Nama:         nama,
-				JenisKelamin: jk,
-				NoHP:         noHP,
-				Alamat:       alamat,
-				IsRPPMaker:   isRPP == "true" || isRPP == "1" || isRPP == "ya",
+				Nama:            nama,
+				JenisKelamin:    jk,
+				NoHP:            noHP,
+				Alamat:          alamat,
+				TanggalBertugas: tanggal,
+				IsRPPMaker:      isRPP == "true" || isRPP == "1" || isRPP == "ya",
 			}
 			if ce := s.db.Create(&tutor).Error; ce != nil {
 				issues = append(issues, importIssue{line, "gagal simpan: " + ce.Error()})

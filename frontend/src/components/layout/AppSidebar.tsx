@@ -127,6 +127,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     groupLabel: 'SISTEM',
     items: [
+      { id: 'dokumen-tutor', label: 'Dokumen Tutor', icon: FileText, roles: ['admin', 'guru'] },
       { id: 'akun', label: 'Manajemen Akun', icon: UserCog, roles: ['admin', 'kepala_sekolah'] },
       { id: 'pengaturan-jadwal', label: 'Pengaturan Jadwal', icon: Settings, roles: ['admin', 'kepala_sekolah'] },
       { id: 'audit-log', label: 'Audit Log', icon: ShieldCheck, roles: ['admin', 'kepala_sekolah'] },

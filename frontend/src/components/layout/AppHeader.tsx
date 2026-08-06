@@ -3,6 +3,7 @@ import {
   Bell,
   ChevronDown,
   Command,
+  FileText,
   LogOut,
   Search,
   ShieldAlert,
@@ -450,6 +451,15 @@ export function AppHeader({ token, setPage, user, onLogout }: AppHeaderProps) {
                   >
                     <UserIcon className="mr-2 h-4 w-4 text-gray-500 dark:text-gray-400" />
                     <span>Pengaturan Akun</span>
+                  </DropdownMenuItem>
+                )}
+                {user.role === 'guru' && (
+                  <DropdownMenuItem
+                    onClick={() => setPage('dokumen-tutor')}
+                    className="cursor-pointer"
+                  >
+                    <FileText className="mr-2 h-4 w-4 text-gray-500 dark:text-gray-400" />
+                    <span>Dokumen Tutor</span>
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
