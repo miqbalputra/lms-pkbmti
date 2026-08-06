@@ -265,6 +265,7 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Delete("/kelas/:id", s.deleteKelas)
 	admin.Post("/kelas/duplicate", s.duplicateKelas)
 	admin.Post("/pokjar/migrasi-kelas", s.migratePokjarClasses)
+	admin.Post("/pokjar/sinkronkan-peserta-didik", s.syncStudentPokjarFromClass)
 	admin.Put("/kelas/:id/mapel", s.setKelasMapel)
 	admin.Post("/penugasan", s.createPenugasan)
 	admin.Post("/penugasan/semua-kelas", s.assignAllClasses)
@@ -1274,6 +1275,51 @@ func (s *Server) migratePokjarClasses(c *fiber.Ctx) error {
 		"sourcePokjarId":  source.ID,
 		"targetPokjarId":  target.ID,
 	})
+}
+
+// syncStudentPokjarFromClass repairs legacy imports where students received
+// the first/default Pokjar even though their class already belonged to another
+// Pokjar. The class is the source of truth; this operation does not move any
+// class, it only aligns each student's PokjarID with Kelas.PokjarID.
+func (s *Server) syncStudentPokjarFromClass(c *fiber.Ctx) error {
+	var updated int64
+	var scanned int64
+	uid := c.Locals("userID").(string)
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var classes []Kelas
+		if err := tx.Find(&classes).Error; err != nil {
+			return err
+		}
+		pokjarByClass := make(map[string]string, len(classes))
+		for _, class := range classes {
+			if class.PokjarID != "" {
+				pokjarByClass[class.ID] = class.PokjarID
+			}
+		}
+
+		var students []PesertaDidik
+		if err := tx.Find(&students).Error; err != nil {
+			return err
+		}
+		scanned = int64(len(students))
+		for _, student := range students {
+			targetPokjarID := pokjarByClass[student.KelasID]
+			if targetPokjarID == "" || targetPokjarID == student.PokjarID {
+				continue
+			}
+			if err := tx.Model(&PesertaDidik{}).Where("id = ?", student.ID).Update("pokjar_id", targetPokjarID).Error; err != nil {
+				return err
+			}
+			updated++
+		}
+		detail := fmt.Sprintf("%d dari %d peserta didik disinkronkan mengikuti Pokjar kelas", updated, scanned)
+		s.auditTx(tx, &uid, "sync", "peserta_didik_pokjar", detail)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	return c.JSON(fiber.Map{"scanned": scanned, "updated": updated})
 }
 
 func (s *Server) crudMapel(r fiber.Router) {
@@ -2434,8 +2480,8 @@ func (s *Server) createSiswa(c *fiber.Ctx) error {
 	if e := c.BodyParser(&p); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
-	if p.KelasID == "" || p.PokjarID == "" {
-		return fiber.NewError(400, "kelasId and pokjarId are required")
+	if p.KelasID == "" {
+		return fiber.NewError(400, "kelasId is required")
 	}
 	if p.Status == "" {
 		p.Status = "aktif"
@@ -2450,9 +2496,13 @@ func (s *Server) createSiswa(c *fiber.Ctx) error {
 		if e := tx.First(&k, "id = ?", p.KelasID).Error; e != nil {
 			return fiber.NewError(400, "kelasId does not exist")
 		}
-		if e := tx.First(&Pokjar{}, "id = ?", p.PokjarID).Error; e != nil {
-			return fiber.NewError(400, "pokjarId does not exist")
+		if k.PokjarID == "" || tx.First(&Pokjar{}, "id = ?", k.PokjarID).Error != nil {
+			return fiber.NewError(400, "pokjar kelas tidak ditemukan")
 		}
+		// Pokjar is determined by the selected class. Do not trust a separate
+		// client field, otherwise a student can be saved under a different
+		// Pokjar than the class shown in the UI.
+		p.PokjarID = k.PokjarID
 		if p.OrangTuaID != "" {
 			if e := tx.First(&OrangTua{}, "id = ?", p.OrangTuaID).Error; e != nil {
 				return fiber.NewError(400, "orangTuaId does not exist")
@@ -2557,6 +2607,10 @@ func (s *Server) importSiswa(c *fiber.Ctx) error {
 			if err := tx.First(&class, "id = ?", student.KelasID).Error; err != nil {
 				return fiber.NewError(422, "kelas_id does not exist")
 			}
+			if class.PokjarID == "" || tx.First(&Pokjar{}, "id = ?", class.PokjarID).Error != nil {
+				return fiber.NewError(422, "pokjar kelas tidak ditemukan")
+			}
+			student.PokjarID = class.PokjarID
 			if err := tx.First(&OrangTua{}, "id = ?", student.OrangTuaID).Error; err != nil {
 				return fiber.NewError(422, "orang_tua_id does not exist")
 			}
@@ -2616,9 +2670,19 @@ func (s *Server) updateSiswa(c *fiber.Ctx) error {
 	if e := s.db.Where("nik = ? AND id != ?", row.NIK, row.ID).First(&dup).Error; e == nil {
 		return fiber.NewError(400, "NIK anak sudah digunakan peserta didik lain")
 	}
-	if row.KelasID == "" || row.PokjarID == "" {
-		return fiber.NewError(400, "kelasId and pokjarId are required")
+	if row.KelasID == "" {
+		return fiber.NewError(400, "kelasId is required")
 	}
+	var class Kelas
+	if e := s.db.First(&class, "id = ?", row.KelasID).Error; e != nil {
+		return fiber.NewError(400, "kelasId does not exist")
+	}
+	if class.PokjarID == "" || s.db.First(&Pokjar{}, "id = ?", class.PokjarID).Error != nil {
+		return fiber.NewError(400, "pokjar kelas tidak ditemukan")
+	}
+	// Keep the student Pokjar aligned with the selected class even when an old
+	// client still submits a separate, stale pokjarId field.
+	row.PokjarID = class.PokjarID
 	if row.Status == "" {
 		row.Status = "aktif"
 	}
@@ -2666,6 +2730,7 @@ func (s *Server) promote(c *fiber.Ctx) error {
 					return fiber.NewError(400, "target class must belong to target academic year")
 				}
 				p.KelasID = x.TargetKelasID
+				p.PokjarID = targetClass.PokjarID
 			}
 			if err := tx.Save(&p).Error; err != nil {
 				return err
@@ -2745,7 +2810,10 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 	classQ.Count(&classes)
 	attendanceQ.Count(&attendance)
 	perPokjar := []countRow{}
-	pokjarQ := s.db.Table("peserta_didiks").Select("pokjars.nama_pokjar as label, COUNT(peserta_didiks.id) as total").Joins("JOIN pokjars ON pokjars.id = peserta_didiks.pokjar_id").Where("peserta_didiks.status = ?", "aktif").Group("pokjars.id, pokjars.nama_pokjar").Order("total DESC")
+	// Kelas is the authoritative source for a student's Pokjar. This keeps the
+	// dashboard correct for legacy rows that still carry the old default
+	// peserta_didik.pokjar_id from the previous import behavior.
+	pokjarQ := s.db.Table("peserta_didiks").Select("pokjars.nama_pokjar as label, COUNT(peserta_didiks.id) as total").Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Joins("JOIN pokjars ON pokjars.id = kelas.pokjar_id").Where("peserta_didiks.status = ?", "aktif").Group("pokjars.id, pokjars.nama_pokjar").Order("total DESC")
 	// Select jenjang + nama_rombel and assemble the label in Go. The previous
 	// "'Kelas ' || kelas.jenjang || kelas.nama_rombel" used the || operator on an
 	// integer column, which Postgres rejects ("operator does not exist: integer
@@ -2755,7 +2823,7 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 		var user User
 		s.db.First(&user, "id = ?", c.Locals("userID"))
 		if user.TutorID != nil {
-			pokjarQ = pokjarQ.Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID)
+			pokjarQ = pokjarQ.Where("kelas.wali_kelas_id = ?", *user.TutorID)
 			kelasQ = kelasQ.Where("kelas.wali_kelas_id = ?", *user.TutorID)
 		}
 	}
@@ -7054,11 +7122,6 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 		if total > 1000 {
 			return fiber.NewError(400, "import dibatasi 1000 baris")
 		}
-		// Load default pokjar (first one) for auto-assignment
-		var defaultPokjar Pokjar
-		if s.db.First(&defaultPokjar).Error != nil {
-			return fiber.NewError(400, "tidak ada pokjar di database")
-		}
 		// Pre-load active tahun ajaran
 		var activeYear TahunAjaran
 		if s.db.Where("is_aktif = ?", true).First(&activeYear).Error != nil {
@@ -7154,9 +7217,12 @@ func (s *Server) importTerpusat(c *fiber.Ctx) error {
 				NIK:          nik,
 				TanggalLahir: &tanggalLahir,
 				KelasID:      kelas.ID,
-				PokjarID:     defaultPokjar.ID,
-				OrangTuaID:   ortu.ID,
-				Status:       "aktif",
+				// The class determines the Pokjar. The previous implementation
+				// used the first Pokjar in the database, which put every imported
+				// student under Nashirus Sunnah.
+				PokjarID:   kelas.PokjarID,
+				OrangTuaID: ortu.ID,
+				Status:     "aktif",
 			}
 			if e := s.db.Create(&pd).Error; e != nil {
 				issues = append(issues, importIssue{line, "gagal insert siswa: " + e.Error()})

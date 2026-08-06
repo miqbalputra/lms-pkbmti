@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   UsersRound,
@@ -333,6 +334,8 @@ function PokjarMigrationPanel({ pokjars, token }: { pokjars: Row[]; token: strin
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([])
   const [isMigrating, setIsMigrating] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [syncConfirmOpen, setSyncConfirmOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -379,6 +382,19 @@ function PokjarMigrationPanel({ pokjars, token }: { pokjars: Row[]; token: strin
     setSelectedClassIds(allSourceClassesSelected ? [] : sourceClasses.map((row) => row.id))
   }
 
+  const handleSync = async () => {
+    setIsSyncing(true)
+    try {
+      const result = await request('/pokjar/sinkronkan-peserta-didik', token, 'POST')
+      setSyncConfirmOpen(false)
+      toast.success(`${Number(result?.updated || 0)} peserta didik berhasil disinkronkan mengikuti Pokjar kelas.`)
+    } catch (e: any) {
+      toast.error(`Gagal menyinkronkan data: ${String(e.message || e)}`)
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
   const handleMigrate = async () => {
     setIsMigrating(true)
     try {
@@ -423,6 +439,19 @@ function PokjarMigrationPanel({ pokjars, token }: { pokjars: Row[]; token: strin
                 Pindahkan kelas tertentu ke Pokjar lain. Semua peserta didik di kelas yang dipilih akan ikut berpindah otomatis.
               </p>
             </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div>
+              <p className="text-sm font-medium text-amber-950">Perbaiki data import lama</p>
+              <p className="mt-1 text-xs text-amber-900/80">
+                Jika siswa masih tercatat di Pokjar default, sinkronkan Pokjar siswa mengikuti Pokjar kelasnya. Kelas tidak dipindahkan.
+              </p>
+            </div>
+            <Button type="button" size="sm" variant="outline" className="h-9 shrink-0 border-amber-300 bg-background" onClick={() => setSyncConfirmOpen(true)} disabled={isSyncing}>
+              <RefreshCw className="h-3.5 w-3.5 mr-1" />
+              Sinkronkan siswa
+            </Button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -521,6 +550,23 @@ function PokjarMigrationPanel({ pokjars, token }: { pokjars: Row[]; token: strin
             <AlertDialogCancel disabled={isMigrating}>Batal</AlertDialogCancel>
             <AlertDialogAction onClick={handleMigrate} disabled={isMigrating}>
               {isMigrating ? 'Memindahkan...' : 'Ya, pindahkan'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={syncConfirmOpen} onOpenChange={(open) => !isSyncing && setSyncConfirmOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sinkronkan Pokjar peserta didik?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sistem akan memperbaiki data Pokjar siswa agar mengikuti Pokjar kelas masing-masing. Kelas, nilai, presensi, dan riwayat tidak dipindahkan atau diubah.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isSyncing}>Batal</AlertDialogCancel>
+            <AlertDialogAction onClick={handleSync} disabled={isSyncing}>
+              {isSyncing ? 'Menyinkronkan...' : 'Ya, sinkronkan'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

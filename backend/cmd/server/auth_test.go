@@ -433,6 +433,9 @@ func TestSiswaLengkapImportStoresBirthDate(t *testing.T) {
 	if student.TanggalLahir == nil || student.TanggalLahir.Format("2006-01-02") != "2018-01-02" {
 		t.Fatalf("birth date was not stored, got %v", student.TanggalLahir)
 	}
+	if student.PokjarID != pokjar.ID {
+		t.Fatalf("expected imported student to follow class pokjar %q, got %q", pokjar.ID, student.PokjarID)
+	}
 }
 
 func TestTutorTemplateUsesRenamedSheet(t *testing.T) {
@@ -568,5 +571,49 @@ func TestMigratePokjarClassesMovesClassAndStudents(t *testing.T) {
 		if student.PokjarID != targetPokjar.ID {
 			t.Fatalf("expected student %q to move to target pokjar, got %q", student.Nama, student.PokjarID)
 		}
+	}
+}
+
+func TestSyncStudentPokjarFromClassRepairsLegacyImport(t *testing.T) {
+	s := testServer(t)
+	if err := s.db.AutoMigrate(&Pokjar{}, &TahunAjaran{}, &Kelas{}, &PesertaDidik{}); err != nil {
+		t.Fatal(err)
+	}
+	wrongPokjar := Pokjar{NamaPokjar: "Pokjar Default Lama", Tipe: "pusat"}
+	classPokjar := Pokjar{NamaPokjar: "Pokjar Kelas", Tipe: "binaan"}
+	year := TahunAjaran{NamaTahunAjaran: "2105/2106", IsAktif: true}
+	for _, row := range []any{&wrongPokjar, &classPokjar, &year} {
+		if err := s.db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	class := Kelas{Jenjang: 4, NamaRombel: "B", PokjarID: classPokjar.ID, TahunAjaranID: year.ID}
+	if err := s.db.Create(&class).Error; err != nil {
+		t.Fatal(err)
+	}
+	student := PesertaDidik{Nama: "Siswa Legacy", JenisKelamin: "L", NIS: "4101", NISN: "94101", KelasID: class.ID, PokjarID: wrongPokjar.ID, Status: "aktif"}
+	if err := s.db.Create(&student).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	app.Post("/sync", func(c *fiber.Ctx) error {
+		c.Locals("userID", "test-admin")
+		return s.syncStudentPokjarFromClass(c)
+	})
+	response, err := app.Test(httptest.NewRequest(http.MethodPost, "/sync", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected sync 200, got %d", response.StatusCode)
+	}
+	var repaired PesertaDidik
+	if err := s.db.First(&repaired, "id = ?", student.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if repaired.PokjarID != classPokjar.ID {
+		t.Fatalf("expected legacy student to follow class pokjar %q, got %q", classPokjar.ID, repaired.PokjarID)
 	}
 }
