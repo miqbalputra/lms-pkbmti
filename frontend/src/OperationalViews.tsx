@@ -29,6 +29,17 @@ const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 type Row = Record<string, unknown> & { id: string }
 type Options = { kelas: Row[]; tutor: Row[]; pokjar: Row[]; years: Row[]; parents: Row[]; mapel: Row[] }
 
+function rombelLabel(row: Row) {
+  let value = String(row.namaRombel || '').trim().toUpperCase().replace(/^KELAS\s*/, '')
+  const level = String(row.jenjang || '')
+  if (level && value.startsWith(level)) value = value.slice(level.length).trim()
+  return value || '-'
+}
+
+function classLabel(row: Row) {
+  return `Kelas ${String(row.jenjang || '')}${rombelLabel(row)}`
+}
+
 export function ClassesView({ token, readOnly }: { token: string; readOnly: boolean }) {
   const [rows, setRows] = useState<Row[]>([])
   const [options, setOptions] = useState<Options>()
@@ -82,7 +93,7 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
     <div className="space-y-4">
       <PageToolbar
         title="Kelas & Rombongan Belajar"
-        description={`${rows.length} rombel aktif terdaftar dalam sistem.`}
+        description={`${rows.length} rombel aktif terdaftar. Gunakan nama rombel singkat seperti A atau B; sistem menampilkan kode lengkap seperti Kelas 1A.`}
         actions={
           !readOnly && (
             <Button onClick={() => setAdding(true)}>
@@ -105,14 +116,14 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
       {history && (
         <ClassHistory
           classID={history.id}
-          title={`Kelas ${String(history.jenjang)}${String(history.namaRombel)}`}
+          title={classLabel(history)}
           token={token}
           close={() => setHistory(undefined)}
         />
       )}
 
       {adding && options && (
-        <FormCard title="Buat rombel" description="Tentukan jenjang, lokasi, periode, dan wali kelas.">
+        <FormCard title="Buat rombel" description="Tentukan kelas, nama rombel singkat (A/B/C), lokasi, periode, dan wali kelas.">
           <form className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5" onSubmit={submit}>
             <Field label="Jenjang">
               <Select name="jenjang" defaultValue="1">
@@ -121,7 +132,7 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
                 ))}
               </Select>
             </Field>
-            <Field label="Nama rombel">
+            <Field label="Nama rombel (A/B/C)">
               <Input name="namaRombel" placeholder="A" required />
             </Field>
             <Picker label="Pokjar" name="pokjarId" rows={options.pokjar} field="namaPokjar" />
@@ -141,7 +152,7 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
         <Table>
           <TableHeader>
             <TableRow className="border-b border-border">
-              <TableHead>Rombel</TableHead>
+              <TableHead>Kelas / rombel</TableHead>
               <TableHead>Pokjar</TableHead>
               <TableHead>Wali kelas</TableHead>
               <TableHead>Tahun ajaran</TableHead>
@@ -152,7 +163,8 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
             {rows.map((r) => (
               <TableRow key={r.id}>
                 <TableCell className="font-medium">
-                  Kelas {String(r.jenjang)}{String(r.namaRombel)}
+                  <div>{classLabel(r)}</div>
+                  <div className="text-xs font-normal text-muted-foreground">Rombel: {rombelLabel(r)}</div>
                 </TableCell>
                 <TableCell>{String((r.pokjar as Row)?.namaPokjar || '-')}</TableCell>
                 <TableCell>{String((r.waliKelas as Row)?.nama || 'Belum ditetapkan')}</TableCell>
@@ -167,7 +179,7 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
                       <>
                         <Button size="sm" variant="outline" onClick={() => setEditing(r)}>
                           <Pencil className="h-3.5 w-3.5" />
-                          Wali
+                          Edit data
                         </Button>
                         <Button size="sm" variant="destructive" aria-label="Hapus" onClick={() => setDeletingRow(r)}>
                           <Trash2 className="h-3.5 w-3.5" />
@@ -190,8 +202,8 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
             <AlertDialogTitle>Hapus Rombongan Belajar?</AlertDialogTitle>
             <AlertDialogDescription>
               Apakah Anda yakin ingin menghapus{' '}
-              <strong>
-                Kelas {String(deletingRow?.jenjang)}{String(deletingRow?.namaRombel)}
+                <strong>
+                {deletingRow ? classLabel(deletingRow) : ''}
               </strong>
               ? Tindakan ini tidak dapat dibatalkan.
             </AlertDialogDescription>

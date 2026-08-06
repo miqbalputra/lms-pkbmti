@@ -112,3 +112,28 @@ func TestValidSignatureAcceptsOnlyPNGBase64(t *testing.T) {
 		t.Fatal("PNG signature header must be accepted")
 	}
 }
+
+func TestNormalizeRombelName(t *testing.T) {
+	tests := []struct {
+		name  string
+		level int
+		raw   string
+		want  string
+	}{
+		{name: "short code", level: 1, raw: "A", want: "A"},
+		{name: "full code", level: 1, raw: "1A", want: "A"},
+		{name: "legacy label", level: 1, raw: "KELAS 1A", want: "A"},
+		{name: "legacy label with space", level: 6, raw: "Kelas 6 B", want: "B"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeRombelName(tt.level, tt.raw)
+			if err != nil || got != tt.want {
+				t.Fatalf("normalizeRombelName(%d, %q) = %q, %v; want %q", tt.level, tt.raw, got, err, tt.want)
+			}
+		})
+	}
+	if _, err := normalizeRombelName(1, "KELAS 2A"); err == nil {
+		t.Fatal("expected mismatched class level to be rejected")
+	}
+}

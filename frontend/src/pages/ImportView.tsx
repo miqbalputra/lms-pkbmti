@@ -174,6 +174,8 @@ export function ImportView({ token, user }: { token: string; user: User }) {
         <div className="grid gap-2">
           <Label>File Excel (.xlsx, maks 5 MB)</Label>
           <Input type="file" accept=".xlsx" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          {tipe === 'siswa-lengkap' && <p className="text-xs text-muted-foreground">Kolom <code>kelas</code> memakai kode gabungan tingkat + rombel, misalnya <strong>1A</strong>, <strong>2B</strong>, atau <strong>6A</strong>. Format <strong>KELAS 1A</strong> juga diterima.</p>}
+          {tipe === 'siswa' && <p className="text-xs text-muted-foreground">Template Basic memakai <code>kelas_id</code>, yaitu ID teknis rombel. Untuk input yang lebih mudah dibaca, gunakan template <strong>Peserta Didik Lengkap</strong> dengan kolom <code>kelas</code> seperti 1A atau 6A.</p>}
         </div>
 
         <div className="pt-1">

@@ -1637,6 +1637,53 @@ func (s *Server) listKelas(c *fiber.Ctx) error {
 	}
 	return list[Kelas](q, c)
 }
+
+// normalizeRombelName keeps the database value limited to the rombel part
+// ("A", "B", "Paket C", ...). Users may still enter friendly labels such as
+// "1A" or "KELAS 1A"; the class level is stored separately in Jenjang.
+func normalizeRombelName(jenjang int, raw string) (string, error) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	value = strings.TrimSpace(strings.TrimPrefix(value, "KELAS"))
+	if value == "" {
+		return "", fmt.Errorf("nama rombel wajib diisi, contoh: A")
+	}
+	if value[0] >= '1' && value[0] <= '6' {
+		level := int(value[0] - '0')
+		if level != jenjang {
+			return "", fmt.Errorf("label rombel memakai tingkat %d, padahal jenjang yang dipilih %d", level, jenjang)
+		}
+		value = strings.TrimSpace(value[1:])
+	}
+	value = strings.TrimSpace(strings.Trim(value, "-:"))
+	if value == "" {
+		return "", fmt.Errorf("nama rombel wajib diisi, contoh: A")
+	}
+	return value, nil
+}
+
+func (s *Server) normalizeStoredRombelNames() error {
+	var classes []Kelas
+	if err := s.db.Find(&classes).Error; err != nil {
+		return err
+	}
+	for _, class := range classes {
+		normalized, err := normalizeRombelName(class.Jenjang, class.NamaRombel)
+		if err != nil || normalized == class.NamaRombel {
+			continue
+		}
+		var conflict Kelas
+		if err := s.db.Where("jenjang = ? AND nama_rombel = ? AND pokjar_id = ? AND tahun_ajaran_id = ? AND id <> ?", class.Jenjang, normalized, class.PokjarID, class.TahunAjaranID, class.ID).First(&conflict).Error; err == nil {
+			// Do not turn a legacy duplicate into a unique-index conflict. The
+			// admin can resolve that exceptional case from the edit screen.
+			continue
+		}
+		if err := s.db.Model(&Kelas{}).Where("id = ?", class.ID).Update("nama_rombel", normalized).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Server) listRiwayatWali(c *fiber.Ctx) error {
 	if c.Locals("role") == "guru" {
 		if err := s.canManageKelas(c, id(c)); err != nil {
@@ -1658,7 +1705,12 @@ func (s *Server) createKelas(c *fiber.Ctx) error {
 	if e := c.BodyParser(&k); e != nil || k.Jenjang < 1 || k.Jenjang > 6 {
 		return fiber.NewError(400, "jenjang must be 1 through 6")
 	}
-	if strings.TrimSpace(k.NamaRombel) == "" || k.PokjarID == "" || k.TahunAjaranID == "" {
+	normalizedRombel, err := normalizeRombelName(k.Jenjang, k.NamaRombel)
+	if err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	k.NamaRombel = normalizedRombel
+	if k.PokjarID == "" || k.TahunAjaranID == "" {
 		return fiber.NewError(400, "namaRombel, pokjarId, dan tahunAjaranId wajib")
 	}
 	uid := c.Locals("userID").(string)
@@ -1706,6 +1758,11 @@ func (s *Server) updateKelas(c *fiber.Ctx) error {
 	if k.Jenjang < 1 || k.Jenjang > 6 {
 		return fiber.NewError(400, "jenjang must be 1 through 6")
 	}
+	normalizedRombel, err := normalizeRombelName(k.Jenjang, k.NamaRombel)
+	if err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	k.NamaRombel = normalizedRombel
 	uid := c.Locals("userID").(string)
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(&k).Error; err != nil {
