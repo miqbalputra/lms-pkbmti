@@ -262,7 +262,7 @@ function Workspace({
   if (page === 'nilai') return <Nilai token={token} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'pengaturan-nilai') return readOnly ? <Restricted /> : <PengaturanNilai token={token} />
   if (page === 'buku-kelas') return readOnly ? <Restricted /> : <BukuKelasView token={token} readOnly={readOnly} />
-  if (page === 'peminjaman-buku') return <PeminjamanBuku token={token} readOnly={user.role === 'kepala_sekolah'} user={user} />
+  if (page === 'peminjaman-buku') return user.role === 'guru' ? <PeminjamanBuku token={token} readOnly={false} user={user} /> : <Restricted />
   if (page === 'rekap-buku') return <RekapBuku token={token} />
   if (page === 'pengumuman') return <PengumumanView token={token} user={user} readOnly={user.role !== 'admin' && user.role !== 'guru'} />
   if (page === 'jurnal-mengajar') return <JurnalMengajarView token={token} user={user} readOnly={user.role !== 'admin' && user.role !== 'guru'} />

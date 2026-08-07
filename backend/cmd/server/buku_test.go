@@ -116,6 +116,14 @@ func TestE2E_BukuLending(t *testing.T) {
 	if e := s.db.Create(&siswa).Error; e != nil {
 		t.Fatalf("siswa create: %v", e)
 	}
+	kelasLain := Kelas{Jenjang: 4, NamaRombel: "BUKU-LAIN", PokjarID: pokjar.ID, TahunAjaranID: year.ID, WaliKelasID: &tutor2.ID}
+	if e := s.db.Create(&kelasLain).Error; e != nil {
+		t.Fatalf("kelas lain create: %v", e)
+	}
+	siswaKelasLain := PesertaDidik{Nama: "Siswa Kelas Lain", JenisKelamin: "P", NIS: "NIS-BK-2", NISN: "NISN-BK-2", NIK: "NIK-BK-2", KelasID: kelasLain.ID, PokjarID: pokjar.ID, Status: "aktif"}
+	if e := s.db.Create(&siswaKelasLain).Error; e != nil {
+		t.Fatalf("siswa kelas lain create: %v", e)
+	}
 
 	// 6. Guru records peminjaman for their wali kelas → 201.
 	resPinjam, _ := makeRequest(app, "POST", "/api/peminjaman-buku", guruToken, map[string]interface{}{
@@ -134,11 +142,36 @@ func TestE2E_BukuLending(t *testing.T) {
 		t.Errorf("peminjaman not recorded as Dipinjam, got %+v", created)
 	}
 	peminjamanID := created[0].ID
+	var guruUser User
+	s.db.Where("username = ?", "guru-buku-1").First(&guruUser)
+	if created[0].DicatatOlehUserID != guruUser.ID {
+		t.Errorf("peminjaman should be linked to recording tutor user %s, got %s", guruUser.ID, created[0].DicatatOlehUserID)
+	}
+
+	// 6a. Admin may assign books, but loan transactions must be recorded by the wali tutor.
+	resAdminPinjam, _ := makeRequest(app, "POST", "/api/peminjaman-buku", token, map[string]interface{}{
+		"kelasId":     kelasID,
+		"items":       []map[string]interface{}{{"pesertaDidikId": siswa.ID, "bukuId": buku.ID}},
+		"tandaTangan": validPngSignature,
+	}, "")
+	if resAdminPinjam.StatusCode != 403 {
+		t.Errorf("expected 403 for admin loan transaction, got %d", resAdminPinjam.StatusCode)
+	}
+
+	// A tutor cannot submit a student from another class under their own class.
+	resWrongClassStudent, _ := makeRequest(app, "POST", "/api/peminjaman-buku", guruToken, map[string]interface{}{
+		"kelasId":     kelasID,
+		"items":       []map[string]interface{}{{"pesertaDidikId": siswaKelasLain.ID, "bukuId": buku.ID}},
+		"tandaTangan": validPngSignature,
+	}, "")
+	if resWrongClassStudent.StatusCode != 400 {
+		t.Errorf("expected 400 for student from another class, got %d", resWrongClassStudent.StatusCode)
+	}
 
 	// 6b. Missing signature → 400.
 	resNoSig, _ := makeRequest(app, "POST", "/api/peminjaman-buku", guruToken, map[string]interface{}{
-		"kelasId": kelasID,
-		"items":   []map[string]interface{}{{"pesertaDidikId": siswa.ID, "bukuId": buku.ID}},
+		"kelasId":     kelasID,
+		"items":       []map[string]interface{}{{"pesertaDidikId": siswa.ID, "bukuId": buku.ID}},
 		"tandaTangan": "",
 	}, "")
 	if resNoSig.StatusCode != 400 {
@@ -150,8 +183,8 @@ func TestE2E_BukuLending(t *testing.T) {
 	var buku2 Buku
 	json.NewDecoder(resBuku2.Body).Decode(&buku2)
 	resUnassigned, _ := makeRequest(app, "POST", "/api/peminjaman-buku", guruToken, map[string]interface{}{
-		"kelasId": kelasID,
-		"items":   []map[string]interface{}{{"pesertaDidikId": siswa.ID, "bukuId": buku2.ID}},
+		"kelasId":     kelasID,
+		"items":       []map[string]interface{}{{"pesertaDidikId": siswa.ID, "bukuId": buku2.ID}},
 		"tandaTangan": validPngSignature,
 	}, "")
 	if resUnassigned.StatusCode != 400 {
@@ -160,8 +193,8 @@ func TestE2E_BukuLending(t *testing.T) {
 
 	// 7. Non-wali guru → 403.
 	resForbidden, _ := makeRequest(app, "POST", "/api/peminjaman-buku", guru2Token, map[string]interface{}{
-		"kelasId": kelasID,
-		"items":   []map[string]interface{}{{"pesertaDidikId": siswa.ID, "bukuId": buku.ID}},
+		"kelasId":     kelasID,
+		"items":       []map[string]interface{}{{"pesertaDidikId": siswa.ID, "bukuId": buku.ID}},
 		"tandaTangan": validPngSignature,
 	}, "")
 	if resForbidden.StatusCode != 403 {

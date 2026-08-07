@@ -9393,7 +9393,18 @@ func (s *Server) crudBuku(r fiber.Router) {
 func (s *Server) listBukuKelas(c *fiber.Ctx) error {
 	q := s.db.Preload("Kelas.Pokjar").Preload("Kelas.TahunAjaran").Preload("Buku").Order("created_at desc")
 	if k := strings.TrimSpace(c.Query("kelasId")); k != "" {
+		if c.Locals("role") == "guru" {
+			if e := s.canManageKelas(c, k); e != nil {
+				return e
+			}
+		}
 		q = q.Where("kelas_id = ?", k)
+	} else if c.Locals("role") == "guru" {
+		var u User
+		if s.db.First(&u, "id = ?", c.Locals("userID")).Error != nil || u.TutorID == nil {
+			return fiber.NewError(403, "no tutor profile")
+		}
+		q = q.Where("kelas_id IN (?)", s.db.Model(&Kelas{}).Select("id").Where("wali_kelas_id = ?", *u.TutorID))
 	}
 	if sem := strings.TrimSpace(c.Query("semester")); sem != "" {
 		q = q.Where("semester = ?", sem)
@@ -9472,6 +9483,9 @@ func (s *Server) createPeminjaman(c *fiber.Ctx) error {
 	if in.KelasID == "" || len(in.Items) == 0 {
 		return fiber.NewError(400, "kelasId and items are required")
 	}
+	if c.Locals("role") != "guru" {
+		return fiber.NewError(403, "peminjaman buku hanya dapat dicatat tutor wali kelas")
+	}
 	if !validSignature(in.TandaTangan) {
 		return fiber.NewError(400, "tanda tangan PNG yang valid wajib diisi")
 	}
@@ -9501,6 +9515,9 @@ func (s *Server) createPeminjaman(c *fiber.Ctx) error {
 			var pd PesertaDidik
 			if e := tx.First(&pd, "id = ?", r.it.PesertaDidikID).Error; e != nil {
 				return fiber.NewError(400, "pesertaDidik tidak ditemukan")
+			}
+			if pd.KelasID != in.KelasID {
+				return fiber.NewError(400, "peserta didik bukan anggota kelas yang dipilih")
 			}
 			if e := tx.First(&Buku{}, "id = ?", r.it.BukuID).Error; e != nil {
 				return fiber.NewError(400, "buku tidak ditemukan")
@@ -9535,6 +9552,9 @@ func (s *Server) listPeminjamanAktif(c *fiber.Ctx) error {
 	if kelasID == "" {
 		return fiber.NewError(400, "kelasId is required")
 	}
+	if c.Locals("role") != "guru" {
+		return fiber.NewError(403, "data peminjaman hanya dapat diakses tutor wali kelas")
+	}
 	if e := s.canManageKelas(c, kelasID); e != nil {
 		return e
 	}
@@ -9565,6 +9585,9 @@ func (s *Server) createPengembalian(c *fiber.Ctx) error {
 	}
 	if len(in.Items) == 0 {
 		return fiber.NewError(400, "items are required")
+	}
+	if c.Locals("role") != "guru" {
+		return fiber.NewError(403, "pengembalian buku hanya dapat dicatat tutor wali kelas")
 	}
 	if !validSignature(in.TandaTangan) {
 		return fiber.NewError(400, "tanda tangan PNG yang valid wajib diisi")

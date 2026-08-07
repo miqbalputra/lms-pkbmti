@@ -120,7 +120,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'buku', label: 'Buku', icon: BookOpen, roles: ['admin', 'kepala_sekolah'] },
       { id: 'buku-kelas', label: 'Penetapan Buku', icon: BookMarked, roles: ['admin', 'kepala_sekolah'] },
-      { id: 'peminjaman-buku', label: 'Peminjaman Buku', icon: ClipboardCheck, roles: ['admin', 'guru'] },
+      { id: 'peminjaman-buku', label: 'Peminjaman Buku', icon: ClipboardCheck, roles: ['guru'] },
       { id: 'rekap-buku', label: 'Rekap Peminjaman', icon: ClipboardList, roles: ['admin', 'kepala_sekolah'] },
     ],
   },
