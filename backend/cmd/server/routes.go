@@ -4342,18 +4342,18 @@ func (s *Server) rppJenjangsFor(c *fiber.Ctx) ([]int, bool) {
 	if c.Locals("role") == "admin" || c.Locals("role") == "kepala_sekolah" {
 		return nil, true
 	}
-	var u User
-	if s.db.First(&u, "id = ?", c.Locals("userID")).Error != nil || u.TutorID == nil {
+	tutorID, ok := s.tutorIDForUser(c.Locals("userID").(string))
+	if !ok {
 		return nil, false
 	}
 	set := map[int]bool{}
 	var kelasWali []Kelas
-	s.db.Where("wali_kelas_id = ?", *u.TutorID).Find(&kelasWali)
+	s.db.Where("wali_kelas_id = ?", tutorID).Find(&kelasWali)
 	for _, k := range kelasWali {
 		set[k.Jenjang] = true
 	}
 	var penugasan []PenugasanGuruMapel
-	s.db.Preload("Kelas").Where("tutor_id = ?", *u.TutorID).Find(&penugasan)
+	s.db.Preload("Kelas").Where("tutor_id = ?", tutorID).Find(&penugasan)
 	for _, p := range penugasan {
 		if p.Kelas != nil {
 			set[p.Kelas.Jenjang] = true
@@ -4371,15 +4371,35 @@ func (s *Server) isRppMaker(c *fiber.Ctx) bool {
 	if c.Locals("role") == "admin" {
 		return true
 	}
-	var u User
-	if s.db.First(&u, "id = ?", c.Locals("userID")).Error != nil || u.TutorID == nil {
+	tutorID, ok := s.tutorIDForUser(c.Locals("userID").(string))
+	if !ok {
 		return false
 	}
 	var t Tutor
-	if s.db.First(&t, "id = ?", *u.TutorID).Error != nil {
+	if s.db.First(&t, "id = ?", tutorID).Error != nil {
 		return false
 	}
 	return t.IsRPPMaker
+}
+
+// tutorIDForUser resolves the tutor profile attached to an account. New
+// accounts store User.TutorID, while some older accounts only have the
+// reverse Tutor.UserID link. RPP must support both forms so a valid tutor
+// assignment is not hidden just because the account was created before the
+// two-way link was enforced.
+func (s *Server) tutorIDForUser(userID string) (string, bool) {
+	var u User
+	if s.db.First(&u, "id = ?", userID).Error != nil {
+		return "", false
+	}
+	if u.TutorID != nil && strings.TrimSpace(*u.TutorID) != "" {
+		return strings.TrimSpace(*u.TutorID), true
+	}
+	var t Tutor
+	if s.db.Where("user_id = ?", u.ID).First(&t).Error != nil {
+		return "", false
+	}
+	return t.ID, t.ID != ""
 }
 
 func (s *Server) rppMakerStatus(c *fiber.Ctx) error {
@@ -4455,27 +4475,63 @@ func (s *Server) rppOptions(c *fiber.Ctx) error {
 		}
 	} else {
 		uid := c.Locals("userID").(string)
-		var u User
-		if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
+		tid, ok := s.tutorIDForUser(uid)
+		if !ok {
 			return fiber.NewError(403, "no tutor profile")
 		}
-		tid := *u.TutorID
+
+		// Read assignment IDs first, then resolve the related rows explicitly.
+		// The old preload-based code could panic on a legacy/orphaned relation
+		// (p.Mapel was nil), causing this endpoint to return 500 and leaving the
+		// frontend with an empty "Pilih mapel" dropdown.
 		var pen []PenugasanGuruMapel
-		s.db.Preload("Mapel").Preload("Kelas.TahunAjaran").Where("tutor_id = ?", tid).Find(&pen)
-		mapelSeen := map[string]bool{}
-		kelasSeen := map[string]bool{}
+		if err := s.db.Where("tutor_id = ?", tid).Find(&pen).Error; err != nil {
+			return err
+		}
+		mapelIDs := map[string]bool{}
+		kelasIDs := map[string]bool{}
 		for _, p := range pen {
-			if p.Mapel.ID != "" && !mapelSeen[p.MapelID] {
-				mapelSeen[p.MapelID] = true
-				mapelOpts = append(mapelOpts, mapelOpt{ID: p.Mapel.ID, Nama: p.Mapel.NamaMapel})
+			if strings.TrimSpace(p.MapelID) != "" {
+				mapelIDs[p.MapelID] = true
 			}
-			if p.Kelas != nil && !kelasSeen[p.KelasID] {
-				kelasSeen[p.KelasID] = true
-				addKelas(*p.Kelas)
+			if strings.TrimSpace(p.KelasID) != "" {
+				kelasIDs[p.KelasID] = true
+			}
+		}
+		mapelSeen := map[string]bool{}
+		if len(mapelIDs) > 0 {
+			ids := make([]string, 0, len(mapelIDs))
+			for id := range mapelIDs {
+				ids = append(ids, id)
+			}
+			var ms []MataPelajaran
+			if err := s.db.Where("id IN ?", ids).Order("nama_mapel").Find(&ms).Error; err != nil {
+				return err
+			}
+			for _, m := range ms {
+				mapelSeen[m.ID] = true
+				mapelOpts = append(mapelOpts, mapelOpt{ID: m.ID, Nama: m.NamaMapel})
+			}
+		}
+		kelasSeen := map[string]bool{}
+		if len(kelasIDs) > 0 {
+			ids := make([]string, 0, len(kelasIDs))
+			for id := range kelasIDs {
+				ids = append(ids, id)
+			}
+			var assignedClasses []Kelas
+			if err := s.db.Preload("TahunAjaran").Where("id IN ?", ids).Find(&assignedClasses).Error; err != nil {
+				return err
+			}
+			for _, k := range assignedClasses {
+				kelasSeen[k.ID] = true
+				addKelas(k)
 			}
 		}
 		var kelasWali []Kelas
-		s.db.Preload("TahunAjaran").Where("wali_kelas_id = ?", tid).Find(&kelasWali)
+		if err := s.db.Preload("TahunAjaran").Where("wali_kelas_id = ?", tid).Find(&kelasWali).Error; err != nil {
+			return err
+		}
 		for _, k := range kelasWali {
 			if !kelasSeen[k.ID] {
 				kelasSeen[k.ID] = true
@@ -4553,8 +4609,8 @@ func (s *Server) listRPP(c *fiber.Ctx) error {
 
 func (s *Server) createRPP(c *fiber.Ctx) error {
 	uid := c.Locals("userID").(string)
-	var u User
-	if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
+	tutorID, ok := s.tutorIDForUser(uid)
+	if !ok {
 		return fiber.NewError(403, "no tutor profile")
 	}
 	if !s.isRppMaker(c) {
@@ -4591,7 +4647,7 @@ func (s *Server) createRPP(c *fiber.Ctx) error {
 		pertemuanPtr = &pertemuan
 	}
 	r := RPP{
-		TutorID:          *u.TutorID,
+		TutorID:          tutorID,
 		DibuatOlehUserID: uid,
 		MapelID:          mapelID,
 		Jenjang:          jenjang,
