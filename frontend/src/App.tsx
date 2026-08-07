@@ -278,7 +278,7 @@ function Workspace({
   if (page === 'rapor') return <RaporView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'sumber-nilai') return <SumberNilaiView token={token} readOnly={user.role !== 'admin'} />
   if (page === 'modul-belajar') return <ModulBelajarView token={token} readOnly={user.role !== 'admin'} />
-  if (page === 'kompetensi') return <KompetensiView token={token} user={user} readOnly={user.role !== 'admin'} />
+  if (page === 'kompetensi') return user.role === 'guru' ? <KompetensiView token={token} user={user} readOnly={false} /> : <Restricted />
   if (page === 'nilai-kompetensi') return <NilaiKompetensiView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'laporan') return <LaporanView token={token} />
   if (page === 'import') return user.role === 'admin' || user.role === 'guru' ? <ImportView token={token} user={user} /> : <Restricted />

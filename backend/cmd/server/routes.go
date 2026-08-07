@@ -200,10 +200,21 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/modul-belajar/:id/outcomes", s.listCapaianModul)
 	// Modul M — Kompetensi + capaian + rombel-kompetensi + nilai (read terauth).
 	api.Get("/kompetensi", s.listKompetensi)
+	api.Get("/kompetensi/options", s.kompetensiOptions)
 	api.Get("/kompetensi/:id/outcomes", s.listCapaianKompetensi)
 	api.Get("/rombel-kompetensi", s.listRombelKompetensi)
 	api.Get("/nilai-kompetensi", s.listNilaiKompetensi)
 	api.Post("/nilai-kompetensi", s.saveNilaiKompetensi)
+	// Kompetensi disusun oleh tutor berdasarkan mapel+kelas yang ditugaskan.
+	// Handler memvalidasi scope tutor; admin/kepala hanya dapat membaca data.
+	api.Post("/kompetensi", s.createKompetensi)
+	api.Put("/kompetensi/:id", s.updateKompetensi)
+	api.Delete("/kompetensi/:id", s.deleteKompetensi)
+	api.Post("/kompetensi/:id/outcomes", s.createCapaianKompetensi)
+	api.Put("/kompetensi/:id/outcomes/:oid", s.updateCapaianKompetensi)
+	api.Delete("/kompetensi/:id/outcomes/:oid", s.deleteCapaianKompetensi)
+	api.Post("/rombel-kompetensi", s.createRombelKompetensi)
+	api.Delete("/rombel-kompetensi/:id", s.deleteRombelKompetensi)
 	// Modul J — Pusat Laporan (agregator, dispatch ke handler export). Role gating
 	// per-jenis di laporanExport; guru scoped via kelasId wali di handler terkait.
 	api.Get("/laporan/jenis", s.laporanJenis)
@@ -305,15 +316,6 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Post("/modul-belajar/:id/outcomes", s.createCapaianModul)
 	admin.Put("/modul-belajar/:id/outcomes/:oid", s.updateCapaianModul)
 	admin.Delete("/modul-belajar/:id/outcomes/:oid", s.deleteCapaianModul)
-	// Modul M — Kompetensi + capaian + rombel-kompetensi (admin CRUD).
-	admin.Post("/kompetensi", s.createKompetensi)
-	admin.Put("/kompetensi/:id", s.updateKompetensi)
-	admin.Delete("/kompetensi/:id", s.deleteKompetensi)
-	admin.Post("/kompetensi/:id/outcomes", s.createCapaianKompetensi)
-	admin.Put("/kompetensi/:id/outcomes/:oid", s.updateCapaianKompetensi)
-	admin.Delete("/kompetensi/:id/outcomes/:oid", s.deleteCapaianKompetensi)
-	admin.Post("/rombel-kompetensi", s.createRombelKompetensi)
-	admin.Delete("/rombel-kompetensi/:id", s.deleteRombelKompetensi)
 	// Backup & restore (admin-only writes). n8n uses the GET /backup/download
 	// read endpoint (backupReadAuth) instead; these create/restore/delete a
 	// backup file and require a real admin session.
@@ -6711,12 +6713,126 @@ func (s *Server) deleteCapaianModul(c *fiber.Ctx) error {
 
 // ---------------------------------------------------------------------------
 // Modul M — Kompetensi + Capaian + Nilai + RombelKompetensi (prd_fitur_simpkbm.md).
-// Admin CRUD kompetensi/outcomes/rombel-kompetensi; tutor mengisi nilai kompetensi
-// (bulk per rombel, guard canManageKelas); read nilai di-scope ke kelas wali.
+// Tutor CRUD kompetensi/outcomes/rombel-kompetensi sesuai penugasan mapel+kelas;
+// tutor juga mengisi nilai kompetensi (bulk per rombel, guard canManageKelas).
+// Admin/kepala hanya membaca data kompetensi.
 // ---------------------------------------------------------------------------
+
+func (s *Server) kompetensiTutorID(c *fiber.Ctx) (string, error) {
+	if c.Locals("role") != "guru" {
+		return "", fiber.NewError(403, "fitur kompetensi hanya dapat dikelola tutor")
+	}
+	tutorID, ok := s.tutorIDForUser(c.Locals("userID").(string))
+	if !ok {
+		return "", fiber.NewError(403, "no tutor profile")
+	}
+	return tutorID, nil
+}
+
+func (s *Server) tutorHasKompetensiMapel(tutorID, mapelID string) bool {
+	var count int64
+	s.db.Model(&PenugasanGuruMapel{}).Where("tutor_id = ? AND mapel_id = ?", tutorID, mapelID).Count(&count)
+	return count > 0
+}
+
+func (s *Server) tutorHasKompetensiKelas(tutorID, kelasID string) bool {
+	var count int64
+	s.db.Model(&PenugasanGuruMapel{}).Where("tutor_id = ? AND kelas_id = ?", tutorID, kelasID).Count(&count)
+	return count > 0
+}
+
+func (s *Server) tutorHasKompetensiKelasMapel(tutorID, kelasID, mapelID string) bool {
+	var count int64
+	s.db.Model(&PenugasanGuruMapel{}).Where("tutor_id = ? AND kelas_id = ? AND mapel_id = ?", tutorID, kelasID, mapelID).Count(&count)
+	return count > 0
+}
+
+func (s *Server) tutorCanEditKompetensi(c *fiber.Ctx, kompetensiID string) (Kompetensi, string, error) {
+	var k Kompetensi
+	if err := s.db.First(&k, "id = ?", kompetensiID).Error; err != nil {
+		return k, "", fiber.NewError(404, "kompetensi tidak ditemukan")
+	}
+	tutorID, err := s.kompetensiTutorID(c)
+	if err != nil {
+		return k, "", err
+	}
+	if !s.tutorHasKompetensiMapel(tutorID, k.MapelID) {
+		return k, "", fiber.NewError(403, "kompetensi hanya dapat dikelola untuk mapel yang ditugaskan")
+	}
+	return k, tutorID, nil
+}
+
+// kompetensiOptions mengembalikan mapel dan kelas yang benar-benar ditugaskan
+// kepada tutor, bukan seluruh master mapel/kelas.
+func (s *Server) kompetensiOptions(c *fiber.Ctx) error {
+	tutorID, err := s.kompetensiTutorID(c)
+	if err != nil {
+		return err
+	}
+	type mapelOption struct {
+		ID   string `json:"id"`
+		Nama string `json:"namaMapel"`
+	}
+	type kelasOption struct {
+		ID          string  `json:"id"`
+		Jenjang     int     `json:"jenjang"`
+		NamaRombel  string  `json:"namaRombel"`
+		WaliKelasID *string `json:"waliKelasId"`
+	}
+	mapelIDs := map[string]bool{}
+	kelasIDs := map[string]bool{}
+	var assignments []PenugasanGuruMapel
+	if err := s.db.Where("tutor_id = ?", tutorID).Find(&assignments).Error; err != nil {
+		return err
+	}
+	for _, assignment := range assignments {
+		if assignment.MapelID != "" {
+			mapelIDs[assignment.MapelID] = true
+		}
+		if assignment.KelasID != "" {
+			kelasIDs[assignment.KelasID] = true
+		}
+	}
+	mapelOptions := make([]mapelOption, 0, len(mapelIDs))
+	if len(mapelIDs) > 0 {
+		ids := make([]string, 0, len(mapelIDs))
+		for id := range mapelIDs {
+			ids = append(ids, id)
+		}
+		var mapels []MataPelajaran
+		if err := s.db.Where("id IN ?", ids).Order("nama_mapel").Find(&mapels).Error; err != nil {
+			return err
+		}
+		for _, mapel := range mapels {
+			mapelOptions = append(mapelOptions, mapelOption{ID: mapel.ID, Nama: mapel.NamaMapel})
+		}
+	}
+	kelasOptions := make([]kelasOption, 0, len(kelasIDs))
+	if len(kelasIDs) > 0 {
+		ids := make([]string, 0, len(kelasIDs))
+		for id := range kelasIDs {
+			ids = append(ids, id)
+		}
+		var classes []Kelas
+		if err := s.db.Where("id IN ?", ids).Order("jenjang, nama_rombel").Find(&classes).Error; err != nil {
+			return err
+		}
+		for _, class := range classes {
+			kelasOptions = append(kelasOptions, kelasOption{ID: class.ID, Jenjang: class.Jenjang, NamaRombel: class.NamaRombel, WaliKelasID: class.WaliKelasID})
+		}
+	}
+	return c.JSON(fiber.Map{"mapel": mapelOptions, "kelas": kelasOptions})
+}
 
 func (s *Server) listKompetensi(c *fiber.Ctx) error {
 	q := s.db.Preload("Mapel").Order("nama")
+	if c.Locals("role") == "guru" {
+		tutorID, err := s.kompetensiTutorID(c)
+		if err != nil {
+			return err
+		}
+		q = q.Where("mapel_id IN ?", s.db.Model(&PenugasanGuruMapel{}).Select("mapel_id").Where("tutor_id = ?", tutorID))
+	}
 	if v := c.Query("mapelId"); v != "" {
 		q = q.Where("mapel_id = ?", v)
 	}
@@ -6735,8 +6851,20 @@ func (s *Server) createKompetensi(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
-	if in.Nama == "" {
-		return fiber.NewError(400, "nama wajib diisi")
+	if strings.TrimSpace(in.MapelID) == "" || strings.TrimSpace(in.Nama) == "" {
+		return fiber.NewError(400, "mapel dan nama kompetensi wajib diisi")
+	}
+	tutorID, err := s.kompetensiTutorID(c)
+	if err != nil {
+		return err
+	}
+	in.MapelID = strings.TrimSpace(in.MapelID)
+	in.Nama = strings.TrimSpace(in.Nama)
+	if !s.tutorHasKompetensiMapel(tutorID, in.MapelID) {
+		return fiber.NewError(403, "mapel belum ditugaskan kepada tutor ini")
+	}
+	if s.db.First(&MataPelajaran{}, "id = ?", in.MapelID).Error != nil {
+		return fiber.NewError(400, "mapel tidak ditemukan")
 	}
 	k := Kompetensi{MapelID: in.MapelID, Nama: in.Nama}
 	if e := s.db.Create(&k).Error; e != nil {
@@ -6759,6 +6887,24 @@ func (s *Server) updateKompetensi(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	if strings.TrimSpace(in.MapelID) == "" || strings.TrimSpace(in.Nama) == "" {
+		return fiber.NewError(400, "mapel dan nama kompetensi wajib diisi")
+	}
+	if _, _, err := s.tutorCanEditKompetensi(c, k.ID); err != nil {
+		return err
+	}
+	tutorID, err := s.kompetensiTutorID(c)
+	if err != nil {
+		return err
+	}
+	in.MapelID = strings.TrimSpace(in.MapelID)
+	in.Nama = strings.TrimSpace(in.Nama)
+	if !s.tutorHasKompetensiMapel(tutorID, in.MapelID) {
+		return fiber.NewError(403, "mapel belum ditugaskan kepada tutor ini")
+	}
+	if s.db.First(&MataPelajaran{}, "id = ?", in.MapelID).Error != nil {
+		return fiber.NewError(400, "mapel tidak ditemukan")
+	}
 	k.MapelID = in.MapelID
 	k.Nama = in.Nama
 	if e := s.db.Save(&k).Error; e != nil {
@@ -6770,6 +6916,9 @@ func (s *Server) updateKompetensi(c *fiber.Ctx) error {
 }
 
 func (s *Server) deleteKompetensi(c *fiber.Ctx) error {
+	if _, _, err := s.tutorCanEditKompetensi(c, id(c)); err != nil {
+		return err
+	}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("kompetensi_id = ?", id(c)).Delete(&CapaianKompetensi{}).Error; err != nil {
 			return err
@@ -6790,6 +6939,11 @@ func (s *Server) deleteKompetensi(c *fiber.Ctx) error {
 }
 
 func (s *Server) listCapaianKompetensi(c *fiber.Ctx) error {
+	if c.Locals("role") == "guru" {
+		if _, _, err := s.tutorCanEditKompetensi(c, id(c)); err != nil {
+			return err
+		}
+	}
 	var rows []CapaianKompetensi
 	s.db.Where("kompetensi_id = ?", id(c)).Order("kode").Find(&rows)
 	return c.JSON(rows)
@@ -6806,6 +6960,9 @@ func (s *Server) createCapaianKompetensi(c *fiber.Ctx) error {
 	if in.Kode == "" {
 		return fiber.NewError(400, "kode wajib diisi")
 	}
+	if _, _, err := s.tutorCanEditKompetensi(c, id(c)); err != nil {
+		return err
+	}
 	ck := CapaianKompetensi{KompetensiID: id(c), Kode: in.Kode, Deskripsi: in.Deskripsi}
 	if e := s.db.Create(&ck).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -6820,12 +6977,18 @@ func (s *Server) updateCapaianKompetensi(c *fiber.Ctx) error {
 	if s.db.First(&ck, "id = ?", c.Params("oid")).Error != nil {
 		return fiber.NewError(404, "record not found")
 	}
+	if ck.KompetensiID != id(c) {
+		return fiber.NewError(404, "capaian tidak ditemukan")
+	}
 	var in struct {
 		Kode      string `json:"kode"`
 		Deskripsi string `json:"deskripsi"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if _, _, err := s.tutorCanEditKompetensi(c, id(c)); err != nil {
+		return err
 	}
 	ck.Kode = in.Kode
 	ck.Deskripsi = in.Deskripsi
@@ -6838,6 +7001,13 @@ func (s *Server) updateCapaianKompetensi(c *fiber.Ctx) error {
 }
 
 func (s *Server) deleteCapaianKompetensi(c *fiber.Ctx) error {
+	var ck CapaianKompetensi
+	if s.db.First(&ck, "id = ?", c.Params("oid")).Error != nil {
+		return fiber.NewError(404, "capaian tidak ditemukan")
+	}
+	if _, _, err := s.tutorCanEditKompetensi(c, ck.KompetensiID); err != nil {
+		return err
+	}
 	if e := s.db.Delete(&CapaianKompetensi{}, "id = ?", c.Params("oid")).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}
@@ -6848,6 +7018,16 @@ func (s *Server) deleteCapaianKompetensi(c *fiber.Ctx) error {
 
 func (s *Server) listRombelKompetensi(c *fiber.Ctx) error {
 	q := s.db
+	if c.Locals("role") == "guru" {
+		tutorID, err := s.kompetensiTutorID(c)
+		if err != nil {
+			return err
+		}
+		q = q.Where("kelas_id IN ?", s.db.Model(&PenugasanGuruMapel{}).Select("kelas_id").Where("tutor_id = ?", tutorID))
+		if kelasID := c.Query("kelasId"); kelasID != "" && !s.tutorHasKompetensiKelas(tutorID, kelasID) {
+			return fiber.NewError(403, "kelas bukan bagian dari penugasan tutor")
+		}
+	}
 	if v := c.Query("kelasId"); v != "" {
 		q = q.Where("kelas_id = ?", v)
 	}
@@ -6869,6 +7049,17 @@ func (s *Server) createRombelKompetensi(c *fiber.Ctx) error {
 	if in.KelasID == "" || in.KompetensiID == "" {
 		return fiber.NewError(400, "kelasId dan kompetensiId wajib diisi")
 	}
+	var kompetensi Kompetensi
+	if s.db.First(&kompetensi, "id = ?", in.KompetensiID).Error != nil {
+		return fiber.NewError(404, "kompetensi tidak ditemukan")
+	}
+	tutorID, err := s.kompetensiTutorID(c)
+	if err != nil {
+		return err
+	}
+	if !s.tutorHasKompetensiKelasMapel(tutorID, in.KelasID, kompetensi.MapelID) {
+		return fiber.NewError(403, "mapel kompetensi belum ditugaskan pada kelas ini")
+	}
 	rk := RombelKompetensi{KelasID: in.KelasID, KompetensiID: in.KompetensiID}
 	if e := s.db.Create(&rk).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -6879,6 +7070,21 @@ func (s *Server) createRombelKompetensi(c *fiber.Ctx) error {
 }
 
 func (s *Server) deleteRombelKompetensi(c *fiber.Ctx) error {
+	var rk RombelKompetensi
+	if s.db.First(&rk, "id = ?", id(c)).Error != nil {
+		return fiber.NewError(404, "penugasan kompetensi tidak ditemukan")
+	}
+	var kompetensi Kompetensi
+	if s.db.First(&kompetensi, "id = ?", rk.KompetensiID).Error != nil {
+		return fiber.NewError(404, "kompetensi tidak ditemukan")
+	}
+	tutorID, err := s.kompetensiTutorID(c)
+	if err != nil {
+		return err
+	}
+	if !s.tutorHasKompetensiKelasMapel(tutorID, rk.KelasID, kompetensi.MapelID) {
+		return fiber.NewError(403, "mapel kompetensi belum ditugaskan pada kelas ini")
+	}
 	if e := s.db.Delete(&RombelKompetensi{}, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}

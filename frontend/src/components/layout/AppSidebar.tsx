@@ -90,7 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'sumber-nilai', label: 'Sumber Nilai & Bobot', icon: ClipboardList, roles: ['admin', 'kepala_sekolah'] },
       { id: 'pengaturan-nilai', label: 'Pengaturan Nilai', icon: Award, roles: ['admin'] },
       { id: 'perilaku', label: 'Catatan Perilaku', icon: ClipboardList, roles: ['admin', 'kepala_sekolah', 'guru'] },
-      { id: 'kompetensi', label: 'Kompetensi', icon: ClipboardList, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'kompetensi', label: 'Kompetensi', icon: ClipboardList, roles: ['guru'] },
       { id: 'nilai-kompetensi', label: 'Nilai Kompetensi', icon: ClipboardCheck, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'rapor', label: 'Rapor', icon: BookOpen, roles: ['admin', 'kepala_sekolah', 'guru'] },
     ],

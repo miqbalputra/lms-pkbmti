@@ -35,9 +35,7 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
   const [rombel, setRombel] = useState<Row[]>([])
 
   const isGuru = user.role === 'guru'
-  const kelasOptions = isGuru
-    ? kelas.filter((k) => String(k.waliKelasId || '') === (user.tutorId || ''))
-    : kelas
+  const kelasOptions = kelas
 
   function load() {
     const q = mapelId ? '?mapelId=' + mapelId : ''
@@ -45,9 +43,18 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
   }
 
   useEffect(() => {
-    void request('/mapel', token).then((r: Row[]) => setMapel(r || [])).catch(() => setMapel([]))
-    void request('/kelas', token).then((r: Row[]) => setKelas(r || [])).catch(() => setKelas([]))
-  }, [token])
+    if (!isGuru) {
+      setMapel([])
+      setKelas([])
+      return
+    }
+    void request('/kompetensi/options', token)
+      .then((r: { mapel?: Row[]; kelas?: Row[] }) => {
+        setMapel(Array.isArray(r?.mapel) ? r.mapel : [])
+        setKelas(Array.isArray(r?.kelas) ? r.kelas : [])
+      })
+      .catch(() => { setMapel([]); setKelas([]) })
+  }, [token, isGuru])
 
   useEffect(() => { load() }, [token, mapelId]) // eslint-disable-line react-hooks/exhaustive-deps
 
