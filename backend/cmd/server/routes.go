@@ -55,6 +55,7 @@ func (s *Server) routes(api fiber.Router) {
 	// Other bare-api reads (each handler scopes guru via inline checks).
 	api.Get("/kelas", s.listKelas)
 	api.Get("/kelas/:id/riwayat-wali", s.listRiwayatWali)
+	api.Put("/kelas/:id/peserta-didik-order", s.savePesertaDidikOrder)
 	api.Get("/peserta-didik", s.listSiswa)
 	api.Get("/peserta-didik/export", s.exportSiswa)
 	api.Get("/presensi", s.listPresensi)
@@ -2345,35 +2346,160 @@ func (s *Server) deletePenugasan(c *fiber.Ctx) error {
 	return deleteRow[PenugasanGuruMapel](s, c, "penugasan")
 }
 
+const pesertaDidikRosterOrder = "CASE WHEN urutan > 0 THEN 0 ELSE 1 END, urutan, nama, id"
+const pesertaDidikRosterOrderQualified = "CASE WHEN peserta_didiks.urutan > 0 THEN 0 ELSE 1 END, peserta_didiks.urutan, peserta_didiks.nama, peserta_didiks.id"
+
+func rosterStudentLess(a, b PesertaDidik) bool {
+	aOrdered := a.Urutan > 0
+	bOrdered := b.Urutan > 0
+	if aOrdered != bOrdered {
+		return aOrdered
+	}
+	if aOrdered && a.Urutan != b.Urutan {
+		return a.Urutan < b.Urutan
+	}
+	if a.Nama != b.Nama {
+		return a.Nama < b.Nama
+	}
+	return a.ID < b.ID
+}
+
+func sortPesertaDidikRoster(rows []PesertaDidik) {
+	sort.SliceStable(rows, func(i, j int) bool { return rosterStudentLess(rows[i], rows[j]) })
+}
+
+func sortRekapNilaiRoster(rows []RekapNilaiAkhir) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].PesertaDidik.ID != rows[j].PesertaDidik.ID {
+			return rosterStudentLess(rows[i].PesertaDidik, rows[j].PesertaDidik)
+		}
+		return rows[i].MapelID < rows[j].MapelID
+	})
+}
+
+func sortPresensiDetailsRoster(rows []Presensi) {
+	for i := range rows {
+		sort.SliceStable(rows[i].Details, func(a, b int) bool {
+			return rosterStudentLess(rows[i].Details[a].PesertaDidik, rows[i].Details[b].PesertaDidik)
+		})
+	}
+}
+
+func sortPeminjamanRoster(rows []Peminjaman) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].KelasID != rows[j].KelasID {
+			if rows[i].Kelas.Jenjang != rows[j].Kelas.Jenjang {
+				return rows[i].Kelas.Jenjang < rows[j].Kelas.Jenjang
+			}
+			if rows[i].Kelas.NamaRombel != rows[j].Kelas.NamaRombel {
+				return rows[i].Kelas.NamaRombel < rows[j].Kelas.NamaRombel
+			}
+			return rows[i].KelasID < rows[j].KelasID
+		}
+		if rows[i].PesertaDidik.ID != rows[j].PesertaDidik.ID {
+			return rosterStudentLess(rows[i].PesertaDidik, rows[j].PesertaDidik)
+		}
+		return false
+	})
+}
+
+// savePesertaDidikOrder stores the Dapodik-compatible order for one wali class.
+// The complete roster is required so a partial or cross-class list can never
+// silently alter the order used by nilai, presensi, perpustakaan, and exports.
+func (s *Server) savePesertaDidikOrder(c *fiber.Ctx) error {
+	if c.Locals("role") != "guru" {
+		return fiber.NewError(403, "urutan peserta didik hanya dapat diatur tutor wali kelas")
+	}
+	kelasID := strings.TrimSpace(id(c))
+	if kelasID == "" {
+		return fiber.NewError(400, "kelasId is required")
+	}
+	if err := s.canManageKelas(c, kelasID); err != nil {
+		return err
+	}
+	var in struct {
+		PesertaDidikIDs []string `json:"pesertaDidikIds"`
+	}
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+
+	seen := make(map[string]bool, len(in.PesertaDidikIDs))
+	ids := make([]string, 0, len(in.PesertaDidikIDs))
+	for _, studentID := range in.PesertaDidikIDs {
+		studentID = strings.TrimSpace(studentID)
+		if studentID == "" || seen[studentID] {
+			return fiber.NewError(400, "daftar peserta didik tidak valid atau berisi duplikat")
+		}
+		seen[studentID] = true
+		ids = append(ids, studentID)
+	}
+
+	var classStudentIDs []string
+	if err := s.db.Model(&PesertaDidik{}).Where("kelas_id = ?", kelasID).Pluck("id", &classStudentIDs).Error; err != nil {
+		return err
+	}
+	if len(ids) != len(classStudentIDs) {
+		return fiber.NewError(400, "urutan harus memuat seluruh peserta didik di rombel")
+	}
+	classStudents := make(map[string]bool, len(classStudentIDs))
+	for _, studentID := range classStudentIDs {
+		classStudents[studentID] = true
+	}
+	for _, studentID := range ids {
+		if !classStudents[studentID] {
+			return fiber.NewError(400, "terdapat peserta didik yang bukan anggota rombel ini")
+		}
+	}
+
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		for position, studentID := range ids {
+			if err := tx.Model(&PesertaDidik{}).Where("id = ? AND kelas_id = ?", studentID, kelasID).Update("urutan", position+1).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "update", "urutan_peserta_didik", fmt.Sprintf("kelas=%s siswa=%d", kelasID, len(ids)))
+	return c.JSON(fiber.Map{"kelasId": kelasID, "pesertaDidikIds": ids})
+}
+
 func (s *Server) listSiswa(c *fiber.Ctx) error {
-	q := s.db.Preload("Kelas").Preload("OrangTua").Order("nama")
+	q := s.db.Preload("Kelas").Preload("OrangTua")
 	if kelas := c.Query("kelasId"); kelas != "" {
 		if err := s.canManageKelas(c, kelas); err != nil && c.Locals("role") != "admin" && c.Locals("role") != "kepala_sekolah" {
 			return err
 		}
-		q = q.Where("kelas_id = ?", kelas)
+		q = q.Where("kelas_id = ?", kelas).Order(pesertaDidikRosterOrder)
 	} else if c.Locals("role") == "guru" {
 		var user User
 		if s.db.First(&user, "id = ?", c.Locals("userID")).Error != nil || user.TutorID == nil {
 			return c.JSON([]PesertaDidik{})
 		}
-		q = q.Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID)
+		q = q.Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID).
+			Order("kelas.jenjang, kelas.nama_rombel, " + pesertaDidikRosterOrderQualified)
+	} else {
+		q = q.Joins("LEFT JOIN kelas ON kelas.id = peserta_didiks.kelas_id").
+			Order("kelas.jenjang, kelas.nama_rombel, " + pesertaDidikRosterOrderQualified)
 	}
 	return list[PesertaDidik](q, c)
 }
 
 // scopedSiswaQuery builds a PesertaDidik query preloaded with class-related
-// data needed by the export, ordered by nama, scoped to the caller's role
+// data needed by the export, ordered by class + saved roster position, scoped to the caller's role
 // (guru → wali kelas; admin/kepala → all; optional kelasId filter). Parent data
 // is intentionally not preloaded or exported. Mirrors listSiswa scoping.
 func (s *Server) scopedSiswaQuery(c *fiber.Ctx) (*gorm.DB, string, error) {
-	q := s.db.Preload("Kelas.Pokjar").Preload("Kelas.TahunAjaran").Preload("Kelas.WaliKelas").Order("nama")
+	q := s.db.Preload("Kelas.Pokjar").Preload("Kelas.TahunAjaran").Preload("Kelas.WaliKelas")
 	label := "Semua Peserta Didik"
 	if kelas := c.Query("kelasId"); kelas != "" {
 		if err := s.canManageKelas(c, kelas); err != nil && c.Locals("role") != "admin" && c.Locals("role") != "kepala_sekolah" {
 			return nil, "", err
 		}
-		q = q.Where("kelas_id = ?", kelas)
+		q = q.Where("kelas_id = ?", kelas).Order(pesertaDidikRosterOrder)
 		var k Kelas
 		if s.db.First(&k, "id = ?", kelas).Error == nil {
 			label = kelasLabel(k)
@@ -2383,13 +2509,17 @@ func (s *Server) scopedSiswaQuery(c *fiber.Ctx) (*gorm.DB, string, error) {
 		if s.db.First(&user, "id = ?", c.Locals("userID")).Error != nil || user.TutorID == nil {
 			return q.Where("1 = 0"), "Peserta Didik", nil
 		}
-		q = q.Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID)
+		q = q.Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID).
+			Order("kelas.jenjang, kelas.nama_rombel, " + pesertaDidikRosterOrderQualified)
 		label = "Peserta Didik (Kelas Wali)"
+	} else {
+		q = q.Joins("LEFT JOIN kelas ON kelas.id = peserta_didiks.kelas_id").
+			Order("kelas.jenjang, kelas.nama_rombel, " + pesertaDidikRosterOrderQualified)
 	}
 	return q, label, nil
 }
 
-// exportSiswa dispatches peserta-didik export to XLSX or PDF, urut abjad nama.
+// exportSiswa dispatches peserta-didik export to XLSX or PDF, mengikuti urutan rombel.
 func (s *Server) exportSiswa(c *fiber.Ctx) error {
 	q, label, err := s.scopedSiswaQuery(c)
 	if err != nil {
@@ -2464,7 +2594,7 @@ func (s *Server) exportSiswaPDF(c *fiber.Ctx, rows []PesertaDidik, label string)
 	pdf.CellFormat(283, 8, "Daftar Peserta Didik PKBM Tunas Ilmu", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 10)
 	pdf.CellFormat(283, 6, label, "", 1, "C", false, 0, "")
-	pdf.CellFormat(283, 6, "Total: "+strconv.Itoa(len(rows))+" siswa (urut abjad nama)", "", 1, "C", false, 0, "")
+	pdf.CellFormat(283, 6, "Total: "+strconv.Itoa(len(rows))+" siswa (urutan rombel)", "", 1, "C", false, 0, "")
 	pdf.Ln(4)
 	ws := []float64{7, 36, 9, 19, 21, 24, 20, 20, 25, 16, 22, 22, 15, 12}
 	hs := []string{"No", "Nama Lengkap", "JK", "NIS", "NISN", "NIK", "Program", "Tgl Lahir", "Pokjar", "Kelas", "Tahun Ajaran", "Wali Kelas", "Status", "Foto"}
@@ -2695,6 +2825,7 @@ func (s *Server) createSiswa(c *fiber.Ctx) error {
 	if p.Status == "" {
 		p.Status = "aktif"
 	}
+	p.Urutan = 0
 	if p.NIK == "" {
 		return fiber.NewError(400, "nik anak wajib diisi")
 	}
@@ -2869,8 +3000,13 @@ func (s *Server) updateSiswa(c *fiber.Ctx) error {
 	if e := s.db.First(&row, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
 	}
+	previousClassID, previousOrder := row.KelasID, row.Urutan
 	if e := c.BodyParser(&row); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	row.Urutan = previousOrder
+	if row.KelasID != previousClassID {
+		row.Urutan = 0
 	}
 	if row.NIK == "" {
 		return fiber.NewError(400, "nik anak wajib diisi")
@@ -2940,6 +3076,7 @@ func (s *Server) promote(c *fiber.Ctx) error {
 				}
 				p.KelasID = x.TargetKelasID
 				p.PokjarID = targetClass.PokjarID
+				p.Urutan = 0
 			}
 			if err := tx.Save(&p).Error; err != nil {
 				return err
@@ -3080,6 +3217,7 @@ func (s *Server) arsip(c *fiber.Ctx) error {
 	if e := s.db.Preload("Kelas").Preload("Details.PesertaDidik").Joins("JOIN kelas ON kelas.id = presensis.kelas_id").Where("kelas.tahun_ajaran_id = ? AND presensis.semester = ?", ta, semester).Order("presensis.tanggal desc").Find(&attendance).Error; e != nil {
 		return e
 	}
+	sortPresensiDetailsRoster(attendance)
 	return c.JSON(fiber.Map{"riwayatKelas": rows, "presensi": attendance, "semester": semester})
 }
 
@@ -3097,7 +3235,12 @@ func (s *Server) listPresensi(c *fiber.Ctx) error {
 		}
 		q = q.Joins("JOIN kelas ON kelas.id = presensis.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID)
 	}
-	return list[Presensi](q, c)
+	var rows []Presensi
+	if err := q.Find(&rows).Error; err != nil {
+		return err
+	}
+	sortPresensiDetailsRoster(rows)
+	return c.JSON(rows)
 }
 func (s *Server) exportPresensi(c *fiber.Ctx) error {
 	meetings, label, err := s.scopedPresensiMeetings(c)
@@ -3154,6 +3297,7 @@ func (s *Server) scopedPresensiMeetings(c *fiber.Ctx) ([]Presensi, string, error
 	if err := q.Find(&meetings).Error; err != nil {
 		return nil, "", err
 	}
+	sortPresensiDetailsRoster(meetings)
 	return meetings, label, nil
 }
 
@@ -3170,9 +3314,11 @@ func flattenPresensi(meetings []Presensi) []presensiRow {
 	var out []presensiRow
 	for _, mtg := range meetings {
 		kelas := kelasLabel(mtg.Kelas)
-		// detail per pertemuan diurutkan by nama agar rapi di export
+		// detail per pertemuan mengikuti urutan rombel yang disimpan wali kelas
 		details := mtg.Details
-		sort.Slice(details, func(i, j int) bool { return details[i].PesertaDidik.Nama < details[j].PesertaDidik.Nama })
+		sort.SliceStable(details, func(i, j int) bool {
+			return rosterStudentLess(details[i].PesertaDidik, details[j].PesertaDidik)
+		})
 		for _, d := range details {
 			out = append(out, presensiRow{
 				Tanggal:         mtg.Tanggal,
@@ -3285,7 +3431,7 @@ func (s *Server) rekapPresensi(c *fiber.Ctx) error {
 		Alpa           int64  `json:"alpa"`
 	}
 	var rows []recap
-	query := s.db.Table("peserta_didiks").Select("peserta_didiks.id as peserta_didik_id, peserta_didiks.nama, peserta_didiks.nis, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Hadir' THEN 1 ELSE 0 END) as hadir, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Sakit' THEN 1 ELSE 0 END) as sakit, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Izin' THEN 1 ELSE 0 END) as izin, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Alpa' THEN 1 ELSE 0 END) as alpa").Joins("LEFT JOIN presensi_details ON presensi_details.peserta_didik_id = peserta_didiks.id").Joins("LEFT JOIN presensis ON presensis.id = presensi_details.presensi_id AND presensis.semester = ? AND presensis.kelas_id = ?", semester, kelasID).Where("peserta_didiks.kelas_id = ?", kelasID).Group("peserta_didiks.id, peserta_didiks.nama, peserta_didiks.nis").Order("peserta_didiks.nama")
+	query := s.db.Table("peserta_didiks").Select("peserta_didiks.id as peserta_didik_id, peserta_didiks.nama, peserta_didiks.nis, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Hadir' THEN 1 ELSE 0 END) as hadir, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Sakit' THEN 1 ELSE 0 END) as sakit, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Izin' THEN 1 ELSE 0 END) as izin, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Alpa' THEN 1 ELSE 0 END) as alpa").Joins("LEFT JOIN presensi_details ON presensi_details.peserta_didik_id = peserta_didiks.id").Joins("LEFT JOIN presensis ON presensis.id = presensi_details.presensi_id AND presensis.semester = ? AND presensis.kelas_id = ?", semester, kelasID).Where("peserta_didiks.kelas_id = ?", kelasID).Group("peserta_didiks.id, peserta_didiks.nama, peserta_didiks.nis, peserta_didiks.urutan").Order("CASE WHEN peserta_didiks.urutan > 0 THEN 0 ELSE 1 END, peserta_didiks.urutan, peserta_didiks.nama, peserta_didiks.id")
 	if err := query.Scan(&rows).Error; err != nil {
 		return err
 	}
@@ -3308,7 +3454,7 @@ func (s *Server) rekapPresensiPDF(c *fiber.Ctx) error {
 		Hadir, Sakit, Izin, Alpa int64
 	}
 	var rows []row
-	q := s.db.Table("peserta_didiks").Select("peserta_didiks.nama, peserta_didiks.nis, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Hadir' THEN 1 ELSE 0 END) as hadir, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Sakit' THEN 1 ELSE 0 END) as sakit, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Izin' THEN 1 ELSE 0 END) as izin, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Alpa' THEN 1 ELSE 0 END) as alpa").Joins("LEFT JOIN presensi_details ON presensi_details.peserta_didik_id = peserta_didiks.id").Joins("LEFT JOIN presensis ON presensis.id = presensi_details.presensi_id AND presensis.semester = ? AND presensis.kelas_id = ?", semester, kelasID).Where("peserta_didiks.kelas_id = ?", kelasID).Group("peserta_didiks.id, peserta_didiks.nama, peserta_didiks.nis").Order("peserta_didiks.nama")
+	q := s.db.Table("peserta_didiks").Select("peserta_didiks.nama, peserta_didiks.nis, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Hadir' THEN 1 ELSE 0 END) as hadir, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Sakit' THEN 1 ELSE 0 END) as sakit, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Izin' THEN 1 ELSE 0 END) as izin, SUM(CASE WHEN presensis.id IS NOT NULL AND presensi_details.status_kehadiran = 'Alpa' THEN 1 ELSE 0 END) as alpa").Joins("LEFT JOIN presensi_details ON presensi_details.peserta_didik_id = peserta_didiks.id").Joins("LEFT JOIN presensis ON presensis.id = presensi_details.presensi_id AND presensis.semester = ? AND presensis.kelas_id = ?", semester, kelasID).Where("peserta_didiks.kelas_id = ?", kelasID).Group("peserta_didiks.id, peserta_didiks.nama, peserta_didiks.nis, peserta_didiks.urutan").Order("CASE WHEN peserta_didiks.urutan > 0 THEN 0 ELSE 1 END, peserta_didiks.urutan, peserta_didiks.nama, peserta_didiks.id")
 	if err := q.Scan(&rows).Error; err != nil {
 		return err
 	}
@@ -3353,6 +3499,9 @@ func (s *Server) exportPresensiPDF(c *fiber.Ctx) error {
 	if err := s.canManageKelas(c, meeting.KelasID); err != nil && c.Locals("role") == "guru" {
 		return err
 	}
+	sort.SliceStable(meeting.Details, func(i, j int) bool {
+		return rosterStudentLess(meeting.Details[i].PesertaDidik, meeting.Details[j].PesertaDidik)
+	})
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(15, 15, 15)
 	pdf.AddPage()
@@ -5983,7 +6132,7 @@ func (s *Server) printKartuGroup(c *fiber.Ctx) error {
 		return e
 	}
 	var siswa []PesertaDidik
-	s.db.Preload("Kelas").Preload("Kelas.TahunAjaran").Preload("Kelas.Pokjar").Where("kelas_id = ?", kelasID).Order("nama").Find(&siswa)
+	s.db.Preload("Kelas").Preload("Kelas.TahunAjaran").Preload("Kelas.Pokjar").Where("kelas_id = ?", kelasID).Order(pesertaDidikRosterOrder).Find(&siswa)
 	if len(siswa) == 0 {
 		return fiber.NewError(404, "tidak ada peserta didik di kelas ini")
 	}
@@ -8582,7 +8731,7 @@ func (s *Server) gridTema(c *fiber.Ctx) error {
 		}
 	}
 	var students []PesertaDidik
-	s.db.Where("kelas_id = ? AND status = ?", tema.KelasID, "aktif").Order("nama").Find(&students)
+	s.db.Where("kelas_id = ? AND status = ?", tema.KelasID, "aktif").Order(pesertaDidikRosterOrder).Find(&students)
 	// Capaian preload is not ordered by GORM; sort explicitly by urutan_cp.
 	sort.Slice(tema.Capaian, func(i, j int) bool { return tema.Capaian[i].UrutanCP < tema.Capaian[j].UrutanCP })
 	var cps []NilaiCP
@@ -9054,6 +9203,7 @@ func (s *Server) getRekap(c *fiber.Ctx) error {
 	if e := q.Order("peserta_didik_id, mapel_id").Find(&rows).Error; e != nil {
 		return e
 	}
+	sortRekapNilaiRoster(rows)
 	return c.JSON(rows)
 }
 
@@ -9195,6 +9345,7 @@ func (s *Server) exportNilai(c *fiber.Ctx) error {
 		// group by the distinct mapels present.
 		var allRekap []RekapNilaiAkhir
 		s.db.Preload("PesertaDidik").Where("kelas_id = ? AND tahun_ajaran_id = ? AND semester = ?", kelasID, tahunID, semester).Find(&allRekap)
+		sortRekapNilaiRoster(allRekap)
 		mdIdx := map[string]int{}
 		for _, r := range allRekap {
 			if _, ok := mdIdx[r.MapelID]; ok {
@@ -9216,6 +9367,7 @@ func (s *Server) exportNilai(c *fiber.Ctx) error {
 			s.db.First(&mp, "id = ?", mid)
 			var rekaps []RekapNilaiAkhir
 			s.db.Preload("PesertaDidik").Where("kelas_id = ? AND mapel_id = ? AND tahun_ajaran_id = ? AND semester = ?", kelasID, mid, tahunID, semester).Find(&rekaps)
+			sortRekapNilaiRoster(rekaps)
 			var temas []Tema
 			s.db.Preload("Capaian").Where("kelas_id = ? AND mapel_id = ? AND tahun_ajaran_id = ? AND semester = ?", kelasID, mid, tahunID, semester).Order("urutan").Find(&temas)
 			grids := map[string]map[int]*float64{}
@@ -9562,6 +9714,7 @@ func (s *Server) listPeminjamanAktif(c *fiber.Ctx) error {
 	if e := s.db.Preload("PesertaDidik").Preload("Buku").Where("kelas_id = ? AND status = ?", kelasID, "Dipinjam").Order("tanggal_pinjam desc, created_at desc").Find(&rows).Error; e != nil {
 		return e
 	}
+	sortPeminjamanRoster(rows)
 	return c.JSON(rows)
 }
 
@@ -9671,6 +9824,7 @@ func (s *Server) rekapBuku(c *fiber.Ctx) error {
 	if e := q.Order("tanggal_pinjam desc, created_at desc").Find(&pinjam).Error; e != nil {
 		return e
 	}
+	sortPeminjamanRoster(pinjam)
 	ids := make([]string, 0, len(pinjam))
 	for _, p := range pinjam {
 		ids = append(ids, p.ID)
@@ -9737,6 +9891,7 @@ func (s *Server) exportBuku(c *fiber.Ctx) error {
 	if e := q.Order("tanggal_pinjam desc, created_at desc").Find(&pinjam).Error; e != nil {
 		return e
 	}
+	sortPeminjamanRoster(pinjam)
 	ids := make([]string, 0, len(pinjam))
 	for _, p := range pinjam {
 		ids = append(ids, p.ID)

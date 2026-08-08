@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Download, FileSpreadsheet, FileText, History, ListChecks, Pencil, Plus, Trash2, Users } from 'lucide-react'
+import { Download, FileSpreadsheet, FileText, GripVertical, History, ListChecks, Pencil, Plus, Save, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { downloadFile } from './lib/api'
 import { ClassEditor } from './ClassEditor'
@@ -225,7 +225,7 @@ export function ClassesView({ token, readOnly }: { token: string; readOnly: bool
   )
 }
 
-export function StudentsView({ token, readOnly }: { token: string; readOnly: boolean }) {
+export function StudentsView({ token, readOnly, user }: { token: string; readOnly: boolean; user?: { role: string } }) {
   const [rows, setRows] = useState<Row[]>([])
   const [o, setO] = useState<Options>()
   const [editing, setEditing] = useState<Row>()
@@ -291,6 +291,7 @@ export function StudentsView({ token, readOnly }: { token: string; readOnly: boo
           </>
         }
       />
+      {user?.role === 'guru' && <StudentRosterOrder token={token} />}
       {importing && <StudentImport token={token} close={() => setImporting(false)} done={load} />}
       {editing && o && (
         <StudentEditor
@@ -372,6 +373,164 @@ export function StudentsView({ token, readOnly }: { token: string; readOnly: boo
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+function StudentRosterOrder({ token }: { token: string }) {
+  const [classes, setClasses] = useState<Row[]>([])
+  const [classID, setClassID] = useState('')
+  const [students, setStudents] = useState<Row[]>([])
+  const [draggingID, setDraggingID] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+
+  useEffect(() => {
+    void request('/kelas', token)
+      .then((rows: Row[]) => {
+        const next = rows || []
+        setClasses(next)
+        if (next.length) setClassID(next[0].id)
+      })
+      .catch(() => setClasses([]))
+  }, [token])
+
+  useEffect(() => {
+    if (!classID) {
+      setStudents([])
+      return
+    }
+    setLoading(true)
+    void request(`/peserta-didik?kelasId=${classID}`, token)
+      .then((rows: Row[]) => {
+        setStudents(rows || [])
+        setDirty(false)
+      })
+      .catch(() => setStudents([]))
+      .finally(() => setLoading(false))
+  }, [token, classID])
+
+  function changeClass(nextID: string) {
+    if (dirty && !window.confirm('Perubahan urutan belum disimpan. Ganti rombel dan batalkan perubahan ini?')) return
+    setClassID(nextID)
+  }
+
+  function moveStudent(sourceID: string, targetID: string) {
+    if (!sourceID || sourceID === targetID) return
+    setStudents((current) => {
+      const sourceIndex = current.findIndex((student) => student.id === sourceID)
+      const targetIndex = current.findIndex((student) => student.id === targetID)
+      if (sourceIndex < 0 || targetIndex < 0) return current
+      const next = [...current]
+      const [moved] = next.splice(sourceIndex, 1)
+      next.splice(targetIndex, 0, moved)
+      return next
+    })
+    setDirty(true)
+  }
+
+  async function saveOrder() {
+    if (!classID || !dirty) return
+    setSaving(true)
+    try {
+      await request(`/kelas/${classID}/peserta-didik-order`, token, 'PUT', {
+        pesertaDidikIds: students.map((student) => student.id),
+      })
+      setDirty(false)
+      toast.success('Urutan peserta didik berhasil disimpan.')
+    } catch (err: any) {
+      toast.error(err.message || 'Gagal menyimpan urutan peserta didik.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const selectedClass = classes.find((row) => row.id === classID)
+
+  return (
+    <Card className="rounded-2xl border border-primary/20 bg-card shadow-2xs">
+      <CardHeader className="border-b border-border/60 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <CardTitle>Atur Urutan Peserta Didik untuk Dapodik</CardTitle>
+          <CardDescription>
+            Susun sesuai urutan nama pada template Dapodik. Urutan tersimpan akan dipakai bersama pada nilai, presensi,
+            peminjaman buku, kartu pelajar, dan export.
+          </CardDescription>
+        </div>
+        <Button disabled={!dirty || saving || loading} onClick={() => void saveOrder()}>
+          <Save className="h-4 w-4" />
+          {saving ? 'Menyimpan...' : 'Simpan urutan'}
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4 pt-6">
+        <div className="grid gap-2 sm:max-w-sm">
+          <Label>Rombel wali</Label>
+          <Select value={classID} onChange={(event) => changeClass(event.target.value)} disabled={!classes.length || loading}>
+            <option value="">Pilih rombel</option>
+            {classes.map((row) => (
+              <option key={row.id} value={row.id}>
+                {classLabel(row)}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {selectedClass && (
+          <p className="text-xs text-muted-foreground">
+            Tarik baris dengan ikon ⋮⋮ lalu lepas pada posisi yang sesuai. {students.length} peserta didik di {classLabel(selectedClass)}.
+          </p>
+        )}
+        <div className="overflow-x-auto rounded-xl border border-border/60">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-b border-border">
+                <TableHead className="w-16 text-center">No.</TableHead>
+                <TableHead>Urutan nama Dapodik</TableHead>
+                <TableHead>NIS / NISN</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {students.map((student, index) => (
+                <TableRow
+                  key={student.id}
+                  draggable
+                  onDragStart={(event) => {
+                    setDraggingID(student.id)
+                    event.dataTransfer.effectAllowed = 'move'
+                    event.dataTransfer.setData('text/plain', student.id)
+                  }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    moveStudent(draggingID || event.dataTransfer.getData('text/plain'), student.id)
+                    setDraggingID('')
+                  }}
+                  onDragEnd={() => setDraggingID('')}
+                  className={`cursor-grab active:cursor-grabbing ${draggingID === student.id ? 'opacity-50' : ''}`}
+                >
+                  <TableCell className="text-center font-semibold text-muted-foreground">{index + 1}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2 font-medium">
+                      <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      {String(student.nama)}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {String(student.nis || '-')} / {String(student.nisn || '-')}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {!students.length && (
+                <tr>
+                  <td colSpan={3} className="h-24 text-center text-sm text-muted-foreground">
+                    {loading ? 'Memuat peserta didik...' : 'Belum ada peserta didik di rombel ini.'}
+                  </td>
+                </tr>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 

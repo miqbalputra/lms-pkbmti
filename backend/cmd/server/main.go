@@ -213,6 +213,7 @@ type PesertaDidik struct {
 	NIK          string     `json:"nik"` // NIK anak, wajib; keunikan dicek di handler
 	TanggalLahir *time.Time `json:"tanggalLahir"`
 	KelasID      string     `gorm:"index" json:"kelasId"`
+	Urutan       int        `gorm:"index;default:0" json:"urutan"`
 	PokjarID     string     `json:"pokjarId"`
 	OrangTuaID   string     `gorm:"index" json:"orangTuaId"`
 	ProgramID    *string    `gorm:"index" json:"programId"` // Modul O — opsional

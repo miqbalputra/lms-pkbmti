@@ -255,7 +255,7 @@ function Workspace({
   if (page === 'audit-log') return readOnly ? <Restricted /> : <AuditLogs token={token} />
   if (page === 'kelas-mapel') return readOnly ? <Restricted /> : <ClassSubjects token={token} />
   if (page === 'kelas') return <ClassesView token={token} readOnly={readOnly} />
-  if (page === 'peserta-didik') return <StudentsView token={token} readOnly={readOnly} />
+  if (page === 'peserta-didik') return <StudentsView token={token} readOnly={readOnly} user={user} />
   if (page === 'relasi-orang-tua') return <RelasiOrangTua token={token} readOnly={readOnly} />
   if (page === 'penugasan') return <AssignmentsView token={token} readOnly={readOnly} />
   if (page === 'presensi') return <AttendanceWorkspace token={token} readOnly={attendanceReadOnly} userName={user?.username} />
