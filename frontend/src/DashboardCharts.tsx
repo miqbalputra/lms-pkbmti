@@ -12,10 +12,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { BarChart3, Inbox, LineChart as LineChartIcon, PieChart as PieChartIcon } from 'lucide-react'
+import { BarChart3, Inbox, LineChart as LineChartIcon, PieChart as PieChartIcon, Users } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
 
 export type Point = { label: string; total: number }
+export type RombelPoint = { label: string; lakiLaki: number; perempuan: number; total: number }
 
 // Categorical palette for the pie/donut chart. Derived from theme tokens so
 // slices stay readable in both light and dark themes. The primary brand color
@@ -70,16 +71,132 @@ function ChartSkeleton() {
 export function DashboardCharts({
   perPokjar,
   perKelas,
+  perRombel,
+  jenisKelamin,
   loading = false,
 }: {
   perPokjar: Point[]
   perKelas: Point[]
+  perRombel: RombelPoint[]
+  jenisKelamin: Point[]
   loading?: boolean
 }) {
   const totalPokjarSiswa = perPokjar.reduce((sum, p) => sum + p.total, 0)
+  const totalRombelSiswa = perRombel.reduce((sum, p) => sum + p.total, 0)
+  const totalGenderSiswa = jenisKelamin.reduce((sum, p) => sum + p.total, 0)
+  const genderColors = ['#465fff', '#ec4899', '#98a2b3']
 
   return (
     <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
+        <Card className="rounded-2xl border border-border bg-card shadow-2xs overflow-hidden">
+          <CardHeader className="pb-3 border-b border-border/60">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                <Users className="h-4 w-4" />
+              </div>
+              <div>
+                <CardTitle className="text-base font-bold">Jumlah Peserta Didik per Rombel</CardTitle>
+                <CardDescription className="text-xs">Rincian peserta didik aktif berdasarkan jenis kelamin.</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="space-y-3 p-6">
+                {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-9 rounded bg-muted animate-pulse" />)}
+              </div>
+            ) : perRombel.length === 0 ? (
+              <div className="flex h-56 items-center justify-center px-6 text-sm text-muted-foreground">Belum ada data rombel.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[520px] text-sm">
+                  <thead className="bg-muted/35 text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="w-14 px-4 py-3 text-center font-semibold">No.</th>
+                      <th className="px-4 py-3 text-left font-semibold">Nama Rombel</th>
+                      <th className="w-20 px-4 py-3 text-center font-semibold">L</th>
+                      <th className="w-20 px-4 py-3 text-center font-semibold">P</th>
+                      <th className="w-24 px-4 py-3 text-center font-semibold">Jml</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {perRombel.map((row, index) => (
+                      <tr key={row.label} className="border-t border-border/60 hover:bg-muted/20">
+                        <td className="px-4 py-3 text-center text-muted-foreground">{index + 1}</td>
+                        <td className="px-4 py-3 font-medium text-foreground">{row.label}</td>
+                        <td className="px-4 py-3 text-center">{row.lakiLaki}</td>
+                        <td className="px-4 py-3 text-center">{row.perempuan}</td>
+                        <td className="px-4 py-3 text-center font-bold">{row.total}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="border-t-2 border-border bg-muted/25 font-bold text-foreground">
+                    <tr>
+                      <td colSpan={2} className="px-4 py-3 text-right">Total</td>
+                      <td className="px-4 py-3 text-center">{perRombel.reduce((sum, row) => sum + row.lakiLaki, 0)}</td>
+                      <td className="px-4 py-3 text-center">{perRombel.reduce((sum, row) => sum + row.perempuan, 0)}</td>
+                      <td className="px-4 py-3 text-center">{totalRombelSiswa}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border border-border bg-card shadow-2xs">
+          <CardHeader className="pb-3 border-b border-border/60">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                <PieChartIcon className="h-4 w-4" />
+              </div>
+              <div>
+                <CardTitle className="text-base font-bold">Perbandingan Jenis Kelamin</CardTitle>
+                <CardDescription className="text-xs">Komposisi peserta didik aktif.</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {loading ? (
+              <ChartSkeleton />
+            ) : jenisKelamin.length === 0 || totalGenderSiswa === 0 ? (
+              <EmptyChartState title="Belum ada data gender" description="Data perbandingan jenis kelamin akan tampil setelah peserta didik terdaftar." />
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie data={jenisKelamin} dataKey="total" nameKey="label" innerRadius={55} outerRadius={82} paddingAngle={4}>
+                      {jenisKelamin.map((row, index) => <Cell key={row.label} fill={genderColors[index % genderColors.length]} />)}
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="space-y-2 border-t border-border/60 pt-3">
+                  {jenisKelamin.map((row, index) => {
+                    const percentage = totalGenderSiswa > 0 ? (row.total / totalGenderSiswa) * 100 : 0
+                    return (
+                      <div key={row.label}>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-2 font-medium text-foreground">
+                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: genderColors[index % genderColors.length] }} />
+                            {row.label}
+                          </span>
+                          <span className="font-bold text-foreground">{row.total} ({percentage.toFixed(2)}%)</span>
+                        </div>
+                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div className="h-full rounded-full" style={{ width: `${percentage}%`, backgroundColor: genderColors[index % genderColors.length] }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Top Bar: TailAdmin Line Chart (https://free-react-demo.tailadmin.com/line-chart) */}
       <Card className="rounded-2xl border border-border bg-card shadow-2xs">
         <CardHeader className="pb-3 border-b border-border/60 flex flex-row items-center justify-between">
@@ -221,4 +338,3 @@ export function DashboardCharts({
     </div>
   )
 }
-

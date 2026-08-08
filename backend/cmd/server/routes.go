@@ -3145,7 +3145,7 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 	if c.Locals("role") == "guru" {
 		var user User
 		if s.db.First(&user, "id = ?", c.Locals("userID")).Error != nil || user.TutorID == nil {
-			return c.JSON(fiber.Map{"pesertaDidik": 0, "kelas": 0, "hadir": 0, "perPokjar": []countRow{}, "perKelas": []countRow{}})
+			return c.JSON(fiber.Map{"pesertaDidik": 0, "kelas": 0, "hadir": 0, "perPokjar": []countRow{}, "perKelas": []countRow{}, "perRombel": []fiber.Map{}, "jenisKelamin": []fiber.Map{}})
 		}
 		studentQ = studentQ.Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID)
 		classQ = classQ.Where("wali_kelas_id = ?", *user.TutorID)
@@ -3164,7 +3164,7 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 	// "'Kelas ' || kelas.jenjang || kelas.nama_rombel" used the || operator on an
 	// integer column, which Postgres rejects ("operator does not exist: integer
 	// || text") and made /api/dashboard return 500 on a Postgres backend.
-	kelasQ := s.db.Table("peserta_didiks").Select("kelas.jenjang as jenjang, kelas.nama_rombel as nama_rombel, COUNT(peserta_didiks.id) as total").Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("peserta_didiks.status = ?", "aktif").Group("kelas.id, kelas.jenjang, kelas.nama_rombel").Order("kelas.jenjang, kelas.nama_rombel")
+	kelasQ := s.db.Table("peserta_didiks").Select("kelas.jenjang as jenjang, kelas.nama_rombel as nama_rombel, SUM(CASE WHEN peserta_didiks.jenis_kelamin IN ('L', 'Laki-laki') THEN 1 ELSE 0 END) as laki_laki, SUM(CASE WHEN peserta_didiks.jenis_kelamin IN ('P', 'Perempuan') THEN 1 ELSE 0 END) as perempuan, COUNT(peserta_didiks.id) as total").Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("peserta_didiks.status = ?", "aktif").Group("kelas.id, kelas.jenjang, kelas.nama_rombel").Order("kelas.jenjang, kelas.nama_rombel")
 	if c.Locals("role") == "guru" {
 		var user User
 		s.db.First(&user, "id = ?", c.Locals("userID"))
@@ -3177,13 +3177,55 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 	type kelasCount struct {
 		Jenjang    int
 		NamaRombel string
-		Total      int64
+		LakiLaki   int64 `json:"lakiLaki"`
+		Perempuan  int64 `json:"perempuan"`
+		Total      int64 `json:"total"`
 	}
 	var kRows []kelasCount
 	kelasQ.Scan(&kRows)
 	perKelas := make([]countRow, 0, len(kRows))
+	perRombel := make([]fiber.Map, 0, len(kRows))
 	for _, r := range kRows {
 		perKelas = append(perKelas, countRow{Label: "Kelas " + strconv.Itoa(r.Jenjang) + r.NamaRombel, Total: r.Total})
+		perRombel = append(perRombel, fiber.Map{
+			"label":     "Kelas " + strconv.Itoa(r.Jenjang) + r.NamaRombel,
+			"lakiLaki":  r.LakiLaki,
+			"perempuan": r.Perempuan,
+			"total":     r.Total,
+		})
+	}
+
+	type genderCount struct {
+		JenisKelamin string
+		Total        int64
+	}
+	genderQ := s.db.Model(&PesertaDidik{}).Select("jenis_kelamin, COUNT(id) as total").Where("status = ?", "aktif").Group("jenis_kelamin")
+	if c.Locals("role") == "guru" {
+		var user User
+		s.db.First(&user, "id = ?", c.Locals("userID"))
+		if user.TutorID != nil {
+			genderQ = genderQ.Joins("JOIN kelas ON kelas.id = peserta_didiks.kelas_id").Where("kelas.wali_kelas_id = ?", *user.TutorID)
+		}
+	}
+	var genderRows []genderCount
+	genderQ.Scan(&genderRows)
+	genderTotals := map[string]int64{"Laki-laki": 0, "Perempuan": 0, "Tidak diisi": 0}
+	for _, row := range genderRows {
+		switch strings.ToUpper(strings.TrimSpace(row.JenisKelamin)) {
+		case "L", "LAKI-LAKI":
+			genderTotals["Laki-laki"] += row.Total
+		case "P", "PEREMPUAN":
+			genderTotals["Perempuan"] += row.Total
+		default:
+			genderTotals["Tidak diisi"] += row.Total
+		}
+	}
+	jenisKelamin := []fiber.Map{
+		{"label": "Laki-laki", "total": genderTotals["Laki-laki"]},
+		{"label": "Perempuan", "total": genderTotals["Perempuan"]},
+	}
+	if genderTotals["Tidak diisi"] > 0 {
+		jenisKelamin = append(jenisKelamin, fiber.Map{"label": "Tidak diisi", "total": genderTotals["Tidak diisi"]})
 	}
 	// Upcoming kalender events (next 30 days)
 	var upcomingEvents []KalenderEvent
@@ -3198,6 +3240,8 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 		"hadir":          attendance,
 		"perPokjar":      perPokjar,
 		"perKelas":       perKelas,
+		"perRombel":      perRombel,
+		"jenisKelamin":   jenisKelamin,
 		"upcomingEvents": upcomingEvents,
 		"unreadNotif":    unreadCount,
 	})

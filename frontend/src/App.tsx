@@ -461,6 +461,8 @@ function Dashboard({ token }: { token: string }) {
         <DashboardCharts
           perPokjar={(data.perPokjar as { label: string; total: number }[]) || []}
           perKelas={(data.perKelas as { label: string; total: number }[]) || []}
+          perRombel={(data.perRombel as { label: string; lakiLaki: number; perempuan: number; total: number }[]) || []}
+          jenisKelamin={(data.jenisKelamin as { label: string; total: number }[]) || []}
           loading={loading}
         />
       </Suspense>
