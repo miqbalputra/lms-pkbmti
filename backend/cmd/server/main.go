@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
@@ -24,6 +25,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/helmet"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -805,6 +807,10 @@ func main() {
 		// validate their own file sizes before writing anything to disk.
 		BodyLimit: backupUploadLimit(),
 	})
+	// Jangan biarkan panic pada satu handler memutus koneksi upstream dan
+	// disamarkan reverse proxy sebagai HTTP 502. apiError tetap menyamarkan
+	// detail internal pada respons production, sementara stack tercatat di log.
+	app.Use(recover.New(recover.Config{EnableStackTrace: true}))
 	app.Use(logger.New())
 	app.Use(helmet.New())
 	app.Use(compress.New())

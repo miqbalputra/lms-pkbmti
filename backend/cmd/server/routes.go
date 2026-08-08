@@ -8181,7 +8181,17 @@ func (s *Server) requireActiveYear(c *fiber.Ctx, kelasID string) error {
 	return nil
 }
 
-var wibLocation, _ = time.LoadLocation("Asia/Jakarta")
+func loadWIBLocation() *time.Location {
+	if location, err := time.LoadLocation("Asia/Jakarta"); err == nil && location != nil {
+		return location
+	}
+	// Container minimal mungkin tidak membawa /usr/share/zoneinfo. Offset WIB
+	// tidak menggunakan daylight-saving time, sehingga fallback UTC+7 aman dan
+	// yang terpenting tidak pernah meneruskan *time.Location nil ke time package.
+	return time.FixedZone("WIB", 7*60*60)
+}
+
+var wibLocation = loadWIBLocation()
 
 func parsePresensiDate(value string) (time.Time, error) {
 	value = strings.TrimSpace(value)
