@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type ReactNode } from 'react'
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Image as ImageIcon, Info, Save, Trash2, UploadCloud } from 'lucide-react'
 import { AttendanceRecap } from './AttendanceRecap'
+import { apiBase, request } from './lib/api'
 import { isSaturdayWibDate, isTodaySaturdayWib, nextSaturdayWib, wibToday } from './lib/wib'
 import { Alert, AlertDescription } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
@@ -15,7 +16,84 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { toast } from 'sonner'
 
 type Row = Record<string, unknown> & { id: string }
-const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
+
+const MAX_SOURCE_PHOTO_BYTES = 15 * 1024 * 1024
+const TARGET_PHOTO_BYTES = 750 * 1024
+const PHOTO_MAX_DIMENSION = 1600
+
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Foto tidak dapat dibaca.'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+function canvasToJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('Foto tidak dapat dikompres.'))),
+      'image/jpeg',
+      quality,
+    )
+  })
+}
+
+function loadPhoto(file: File): Promise<{ image: HTMLImageElement; url: string }> {
+  const url = URL.createObjectURL(file)
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve({ image, url })
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error(`Foto ${file.name} tidak dapat dibuka. Gunakan JPG, PNG, atau WEBP.`))
+    }
+    image.src = url
+  })
+}
+
+async function optimizeAttendancePhoto(file: File): Promise<string> {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    throw new Error(`Format ${file.name} tidak didukung. Gunakan JPG, PNG, atau WEBP.`)
+  }
+  if (file.size > MAX_SOURCE_PHOTO_BYTES) {
+    throw new Error(`Ukuran ${file.name} melebihi 15 MB.`)
+  }
+
+  const { image, url } = await loadPhoto(file)
+  try {
+    if (!image.naturalWidth || !image.naturalHeight) {
+      throw new Error(`Dimensi foto ${file.name} tidak valid.`)
+    }
+
+    let maxDimension = PHOTO_MAX_DIMENSION
+    let smallest: Blob | null = null
+    for (let resizeAttempt = 0; resizeAttempt < 4; resizeAttempt += 1) {
+      const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Browser tidak mendukung pemrosesan foto.')
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      context.drawImage(image, 0, 0, canvas.width, canvas.height)
+
+      for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+        const blob = await canvasToJpeg(canvas, quality)
+        smallest = blob
+        if (blob.size <= TARGET_PHOTO_BYTES) return blobToDataURL(blob)
+      }
+      maxDimension = Math.floor(maxDimension * 0.8)
+    }
+
+    if (!smallest) throw new Error(`Foto ${file.name} tidak dapat dikompres.`)
+    return blobToDataURL(smallest)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
 
 export function AttendanceWorkspace({
   token,
@@ -40,6 +118,7 @@ export function AttendanceWorkspace({
   const [message, setMessage] = useState('')
   const [previewModalUrl, setPreviewModalUrl] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [processingPhotos, setProcessingPhotos] = useState(false)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const todayIsSaturday = isTodaySaturdayWib(new Date())
@@ -115,34 +194,36 @@ export function AttendanceWorkspace({
     )
   }
 
-  const handlePhotoUpload = (e: ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
+  const handlePhotoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget
+    const files = input.files
     if (!files || files.length === 0) return
 
     if (photos.length + files.length > 5) {
       toast.error('Maksimal 5 foto bukti pembelajaran kegiatan KBM.')
+      input.value = ''
       return
     }
 
     const fileList = Array.from(files)
-    fileList.forEach((file) => {
-      if (!file.type.startsWith('image/')) {
-        toast.error(`File ${file.name} bukan berupa gambar.`)
-        return
-      }
-      const reader = new FileReader()
-      reader.onload = (event) => {
-        const result = event.target?.result as string
-        if (result) {
-          setPhotos((prev) => {
-            if (prev.length >= 5) return prev
-            return [...prev, result]
-          })
+    input.value = ''
+    setProcessingPhotos(true)
+    try {
+      const optimized: string[] = []
+      for (const file of fileList) {
+        try {
+          optimized.push(await optimizeAttendancePhoto(file))
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : `Foto ${file.name} gagal diproses.`)
         }
       }
-      reader.readAsDataURL(file)
-    })
-    e.target.value = ''
+      if (optimized.length > 0) {
+        setPhotos((previous) => [...previous, ...optimized].slice(0, 5))
+        toast.success(`${optimized.length} foto siap diunggah.`)
+      }
+    } finally {
+      setProcessingPhotos(false)
+    }
   }
 
   const handleRemovePhoto = (index: number) => {
@@ -472,19 +553,20 @@ export function AttendanceWorkspace({
                 {/* Upload Dropzone */}
                 {photos.length < 5 && (
                   <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-2 cursor-pointer rounded-xl border border-dashed border-primary/50 bg-primary/5 hover:bg-primary/10 px-4 py-3 text-xs font-semibold text-primary transition-all">
+                    <label className={`flex items-center gap-2 rounded-xl border border-dashed border-primary/50 bg-primary/5 px-4 py-3 text-xs font-semibold text-primary transition-all ${processingPhotos ? 'cursor-wait opacity-60' : 'cursor-pointer hover:bg-primary/10'}`}>
                       <UploadCloud className="h-4 w-4" />
-                      <span>Pilih Foto KBM...</span>
+                      <span>{processingPhotos ? 'Memproses foto...' : 'Pilih Foto KBM...'}</span>
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/jpeg,image/png,image/webp"
                         multiple
                         onChange={handlePhotoUpload}
+                        disabled={processingPhotos}
                         className="hidden"
                       />
                     </label>
                     <span className="text-[11px] text-muted-foreground">
-                      Format JPG, PNG, WEBP (Maksimal 5 foto per pertemuan).
+                      JPG, PNG, WEBP; maks. 15 MB/foto. Foto otomatis dikompres sebelum disimpan.
                     </span>
                   </div>
                 )}
@@ -549,7 +631,7 @@ export function AttendanceWorkspace({
 
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                 <Button
-                  disabled={readOnly || !students.length || submitting}
+                  disabled={readOnly || !students.length || submitting || processingPhotos}
                   onClick={() => void save()}
                   className={`h-11 rounded-xl px-6 font-bold shadow-2xs transition-all ${
                     isSignatureValid && isPhotosValid
@@ -557,7 +639,7 @@ export function AttendanceWorkspace({
                       : 'bg-primary/80 hover:bg-primary text-primary-foreground'
                   }`}
                 >
-                  <Save className="h-4 w-4 mr-2" /> {submitting ? 'Menyimpan...' : 'Simpan Presensi & Bukti KBM'}
+                  <Save className="h-4 w-4 mr-2" /> {processingPhotos ? 'Memproses foto...' : submitting ? 'Menyimpan...' : 'Simpan Presensi & Bukti KBM'}
                 </Button>
                 {message && (
                   <Alert className="py-2.5 px-4 text-xs font-semibold">
@@ -599,19 +681,4 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </div>
   )
-}
-
-async function request(path: string, token: string, method = 'GET', body?: unknown) {
-  const r = await fetch(apiBase + path, {
-    method,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  const result = r.status === 204 ? null : await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(result?.error || 'Permintaan gagal')
-  return result
 }

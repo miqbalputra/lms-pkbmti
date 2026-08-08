@@ -49,6 +49,16 @@ function isAuthEndpoint(path: string) {
   return path.startsWith('/auth/')
 }
 
+function fallbackRequestError(status: number) {
+  if (status === 413) {
+    return 'Ukuran foto terlalu besar untuk dikirim. Pilih ulang foto agar dikompres otomatis.'
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return `Server belum dapat memproses permintaan (${status}). Silakan coba simpan kembali.`
+  }
+  return `Permintaan gagal (${status}). Periksa kembali koneksi atau data yang diisi.`
+}
+
 async function fetchWithToken(
   path: string,
   token: string,
@@ -100,7 +110,7 @@ export async function request(
     throw new Error(
       x.error ||
         x.message ||
-        `Permintaan gagal (${r.status}). Periksa kembali koneksi atau kredensial Anda.`,
+        fallbackRequestError(r.status),
     )
   }
   return r.status === 204 ? null : r.json()
