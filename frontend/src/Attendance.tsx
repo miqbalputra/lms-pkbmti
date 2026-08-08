@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ChangeEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Image as ImageIcon, Info, Save, Trash2, UploadCloud } from 'lucide-react'
 import { AttendanceRecap } from './AttendanceRecap'
 import { apiBase, request } from './lib/api'
@@ -18,7 +18,7 @@ import { toast } from 'sonner'
 type Row = Record<string, unknown> & { id: string }
 
 const MAX_SOURCE_PHOTO_BYTES = 15 * 1024 * 1024
-const TARGET_PHOTO_BYTES = 750 * 1024
+const TARGET_PHOTO_BYTES = 500 * 1024
 const PHOTO_MAX_DIMENSION = 1600
 
 function blobToDataURL(blob: Blob): Promise<string> {
@@ -119,6 +119,8 @@ export function AttendanceWorkspace({
   const [previewModalUrl, setPreviewModalUrl] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [processingPhotos, setProcessingPhotos] = useState(false)
+  const [loadingMeeting, setLoadingMeeting] = useState(false)
+  const selectionVersion = useRef(0)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const todayIsSaturday = isTodaySaturdayWib(new Date())
@@ -154,10 +156,12 @@ export function AttendanceWorkspace({
     }
   }, [classID, token, selectedID])
 
-  function choose(id: string) {
+  async function choose(id: string) {
+    const version = ++selectionVersion.current
     setSelectedID(id)
     setMessage('')
     if (id === 'new') {
+      setLoadingMeeting(false)
       setClassID('')
       setDate(nextSaturdayWib())
       setSignature('')
@@ -165,33 +169,50 @@ export function AttendanceWorkspace({
       setStatus('berlangsung')
       return
     }
-    const row = meetings.find((m) => m.id === id)
-    if (!row) return
-    setClassID(String(row.kelasId))
-    setDate(String(row.tanggal).slice(0, 10))
-    setStatus(String(row.statusPertemuan))
-    setSignature(String(row.tandaTangan || ''))
-    
-    // Parse stored evidence photos
-    let loadedPhotos: string[] = []
-    if (row.buktiFoto) {
-      try {
-        loadedPhotos = JSON.parse(String(row.buktiFoto))
-        if (!Array.isArray(loadedPhotos)) loadedPhotos = []
-      } catch {
-        loadedPhotos = [String(row.buktiFoto)]
-      }
-    }
-    setPhotos(loadedPhotos)
+    const summary = meetings.find((meeting) => meeting.id === id)
+    if (!summary) return
+    setClassID(String(summary.kelasId))
+    setDate(String(summary.tanggal).slice(0, 10))
+    setStatus(String(summary.statusPertemuan))
+    setSignature('')
+    setPhotos([])
+    setMarks({})
+    setLoadingMeeting(true)
+    try {
+      const row = await request('/presensi/' + id, token)
+      if (selectionVersion.current !== version) return
+      setClassID(String(row.kelasId))
+      setDate(String(row.tanggal).slice(0, 10))
+      setStatus(String(row.statusPertemuan))
+      setSignature(String(row.tandaTangan || ''))
 
-    setMarks(
-      Object.fromEntries(
-        ((row.details as Row[]) || []).map((d) => [
-          String(d.pesertaDidikId),
-          String(d.statusKehadiran),
-        ])
+      let loadedPhotos: string[] = []
+      if (row.buktiFoto) {
+        try {
+          loadedPhotos = JSON.parse(String(row.buktiFoto))
+          if (!Array.isArray(loadedPhotos)) loadedPhotos = []
+        } catch {
+          loadedPhotos = [String(row.buktiFoto)]
+        }
+      }
+      setPhotos(loadedPhotos)
+
+      setMarks(
+        Object.fromEntries(
+          ((row.details as Row[]) || []).map((detail) => [
+            String(detail.pesertaDidikId),
+            String(detail.statusKehadiran),
+          ])
+        )
       )
-    )
+    } catch (error) {
+      if (selectionVersion.current !== version) return
+      const detail = error instanceof Error ? error.message : String(error)
+      setMessage(`Data pertemuan gagal dimuat: ${detail}`)
+      toast.error(`Data pertemuan gagal dimuat: ${detail}`)
+    } finally {
+      if (selectionVersion.current === version) setLoadingMeeting(false)
+    }
   }
 
   const handlePhotoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -266,27 +287,61 @@ export function AttendanceWorkspace({
         statusPertemuan: status,
         dibuatOtomatis: false,
         tandaTangan: signature,
-        buktiFoto: JSON.stringify(photos),
       }
-      const meeting =
-        selectedID === 'new'
-          ? await request('/presensi', token, 'POST', payload)
-          : await request('/presensi/' + selectedID, token, 'PUT', payload)
+      let meeting: Row
+      try {
+        meeting =
+          selectedID === 'new'
+            ? await request('/presensi', token, 'POST', payload)
+            : await request('/presensi/' + selectedID, token, 'PUT', payload)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        throw new Error(`Data pertemuan gagal disimpan: ${detail}`)
+      }
 
-      await request(
-        '/presensi/' + meeting.id + '/details',
-        token,
-        'POST',
-        students.map((s) => ({
-          pesertaDidikId: s.id,
-          statusKehadiran: marks[s.id] || 'Hadir',
-        }))
-      )
+      // Simpan ID segera setelah tahap pertama berhasil. Jika tahap foto gagal,
+      // klik ulang akan memperbarui record yang sama, bukan membuat duplikat.
+      setSelectedID(meeting.id)
+      setMeetings((current) => {
+        const previous = current.find((row) => row.id === meeting.id)
+        const kelas = previous?.kelas || classes.find((row) => row.id === classID)
+        const summary = { ...previous, ...meeting, kelas }
+        return previous
+          ? current.map((row) => (row.id === meeting.id ? summary : row))
+          : [summary, ...current]
+      })
+
+      try {
+        await request(
+          '/presensi/' + meeting.id + '/details',
+          token,
+          'POST',
+          students.map((student) => ({
+            pesertaDidikId: student.id,
+            statusKehadiran: marks[student.id] || 'Hadir',
+          }))
+        )
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        throw new Error(`Pertemuan tersimpan, tetapi checklist siswa gagal disimpan: ${detail}`)
+      }
+
+      try {
+        await request('/presensi/' + meeting.id + '/photos', token, 'PUT', {
+          buktiFoto: JSON.stringify(photos),
+        })
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        throw new Error(`Presensi siswa tersimpan, tetapi foto KBM gagal disimpan: ${detail}. Klik Simpan kembali untuk mencoba ulang.`)
+      }
 
       toast.success('Data presensi, tanda tangan & foto bukti KBM berhasil disimpan.')
       setMessage('Presensi, tanda tangan & bukti KBM berhasil disimpan.')
-      await loadMeetings()
-      setSelectedID(meeting.id)
+      try {
+        await loadMeetings()
+      } catch {
+        toast.warning('Presensi sudah tersimpan, tetapi daftar pertemuan belum dapat dimuat ulang.')
+      }
     } catch (e: any) {
       const err = String(e.message || e)
       setMessage(err)
@@ -343,7 +398,7 @@ export function AttendanceWorkspace({
           )}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Pertemuan">
-              <Select value={selectedID} onChange={(e) => choose(e.target.value)}>
+              <Select value={selectedID} onChange={(e) => void choose(e.target.value)}>
                 <option value="new">+ Pertemuan tambahan baru</option>
                 {meetings.map((m) => (
                   <option key={m.id} value={m.id}>
@@ -631,7 +686,7 @@ export function AttendanceWorkspace({
 
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                 <Button
-                  disabled={readOnly || !students.length || submitting || processingPhotos}
+                  disabled={readOnly || !students.length || submitting || processingPhotos || loadingMeeting}
                   onClick={() => void save()}
                   className={`h-11 rounded-xl px-6 font-bold shadow-2xs transition-all ${
                     isSignatureValid && isPhotosValid
@@ -639,7 +694,7 @@ export function AttendanceWorkspace({
                       : 'bg-primary/80 hover:bg-primary text-primary-foreground'
                   }`}
                 >
-                  <Save className="h-4 w-4 mr-2" /> {processingPhotos ? 'Memproses foto...' : submitting ? 'Menyimpan...' : 'Simpan Presensi & Bukti KBM'}
+                  <Save className="h-4 w-4 mr-2" /> {loadingMeeting ? 'Memuat presensi...' : processingPhotos ? 'Memproses foto...' : submitting ? 'Menyimpan...' : 'Simpan Presensi & Bukti KBM'}
                 </Button>
                 {message && (
                   <Alert className="py-2.5 px-4 text-xs font-semibold">

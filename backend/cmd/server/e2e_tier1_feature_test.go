@@ -578,11 +578,47 @@ func TestE2E_Tier1_AttendanceCanvas(t *testing.T) {
 	}
 	var meeting Presensi
 	json.NewDecoder(resCreate.Body).Decode(&meeting)
+	resRetry, _ := makeRequest(app, "POST", "/api/presensi", token, map[string]interface{}{
+		"kelasId":         class.ID,
+		"tanggal":         testSaturday().Format(time.RFC3339),
+		"statusPertemuan": "berlangsung",
+		"tandaTangan":     validSignaturePNG,
+	}, "")
+	if resRetry.StatusCode != 200 {
+		t.Fatalf("expected idempotent presensi retry to return 200, got %d", resRetry.StatusCode)
+	}
+	var meetingCount int64
+	s.db.Model(&Presensi{}).Where("kelas_id = ?", class.ID).Count(&meetingCount)
+	if meetingCount != 1 {
+		t.Fatalf("expected retry to keep one presensi record, got %d", meetingCount)
+	}
+	photoJSON, _ := json.Marshal([]string{validSignaturePNG})
+	resPhotos, _ := makeRequest(app, "PUT", "/api/presensi/"+meeting.ID+"/photos", token, map[string]interface{}{
+		"buktiFoto": string(photoJSON),
+	}, "")
+	if resPhotos.StatusCode != 204 {
+		t.Fatalf("expected 204 for presensi photo save, got %d", resPhotos.StatusCode)
+	}
 
-	// 2. List Attendance Sessions
+	// 2. List Attendance Sessions. Payload daftar harus ringan tanpa Base64;
+	// detail satu pertemuan tetap menyediakan foto saat dipilih.
 	resList, _ := makeRequest(app, "GET", "/api/presensi?kelasId="+class.ID, token, nil, "")
 	if resList.StatusCode != 200 {
 		t.Errorf("expected 200 for presensi list, got %d", resList.StatusCode)
+	}
+	var summaries []Presensi
+	json.NewDecoder(resList.Body).Decode(&summaries)
+	if len(summaries) != 1 || summaries[0].BuktiFoto != "" || summaries[0].TandaTangan != "" {
+		t.Fatal("presensi list must omit signatures and Base64 photos")
+	}
+	resDetail, _ := makeRequest(app, "GET", "/api/presensi/"+meeting.ID, token, nil, "")
+	if resDetail.StatusCode != 200 {
+		t.Fatalf("expected 200 for presensi detail, got %d", resDetail.StatusCode)
+	}
+	var detail Presensi
+	json.NewDecoder(resDetail.Body).Decode(&detail)
+	if detail.BuktiFoto != string(photoJSON) {
+		t.Fatal("presensi detail must include the saved photos")
 	}
 
 	// 3. Update Attendance Meeting

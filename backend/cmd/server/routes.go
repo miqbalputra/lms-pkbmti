@@ -63,6 +63,7 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/presensi/rekap", s.rekapPresensi)
 	api.Get("/presensi/rekap/pdf", s.rekapPresensiPDF)
 	api.Get("/presensi/:id/pdf", s.exportPresensiPDF)
+	api.Get("/presensi/:id", s.getPresensi)
 	api.Get("/penugasan", s.listPenugasan)
 	api.Get("/settings/jadwal", s.getJadwal)
 
@@ -71,6 +72,7 @@ func (s *Server) routes(api fiber.Router) {
 	api.Post("/presensi", s.createPresensi)
 	api.Put("/presensi/:id", s.updatePresensi)
 	api.Post("/presensi/:id/details", s.saveDetails)
+	api.Put("/presensi/:id/photos", s.savePresensiPhotos)
 
 	// Modul Peminjaman Buku (PRD_pinjam_buku.md) — bare-api reads/writes. Guru is
 	// scoped to rombel they walikan via canManageKelas inside each write handler.
@@ -3266,7 +3268,10 @@ func (s *Server) arsip(c *fiber.Ctx) error {
 }
 
 func (s *Server) listPresensi(c *fiber.Ctx) error {
-	q := s.db.Preload("Kelas").Preload("Details.PesertaDidik").Order("tanggal desc")
+	// Daftar pertemuan hanya dipakai untuk isi dropdown. Jangan ikut mengirim
+	// tanda tangan, foto Base64, dan seluruh detail siswa pada setiap pemuatan
+	// halaman karena responsnya akan terus membesar sepanjang semester.
+	q := s.db.Omit("TandaTangan", "BuktiFoto").Preload("Kelas").Order("tanggal desc")
 	if k := c.Query("kelasId"); k != "" {
 		if err := s.canManageKelas(c, k); err != nil && c.Locals("role") == "guru" {
 			return err
@@ -3283,8 +3288,19 @@ func (s *Server) listPresensi(c *fiber.Ctx) error {
 	if err := q.Find(&rows).Error; err != nil {
 		return err
 	}
-	sortPresensiDetailsRoster(rows)
 	return c.JSON(rows)
+}
+
+func (s *Server) getPresensi(c *fiber.Ctx) error {
+	var meeting Presensi
+	if err := s.db.Preload("Kelas").Preload("Details.PesertaDidik").First(&meeting, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "record not found")
+	}
+	if err := s.canManageKelas(c, meeting.KelasID); err != nil {
+		return err
+	}
+	sortPresensiDetailsRoster([]Presensi{meeting})
+	return c.JSON(meeting)
 }
 func (s *Server) exportPresensi(c *fiber.Ctx) error {
 	meetings, label, err := s.scopedPresensiMeetings(c)
@@ -8187,6 +8203,62 @@ func validPresensiSaturday(t time.Time) bool {
 	return t.In(wibLocation).Weekday() == time.Saturday
 }
 
+const (
+	maxPresensiPhotoBytes = 2 * 1024 * 1024
+	maxPresensiPhotosSize = 8 * 1024 * 1024
+)
+
+func validPresensiPhotoBytes(mime string, data []byte) bool {
+	switch mime {
+	case "image/jpeg":
+		return len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff
+	case "image/png":
+		return len(data) >= 8 && bytes.Equal(data[:8], []byte{137, 80, 78, 71, 13, 10, 26, 10})
+	case "image/webp":
+		return len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP"
+	default:
+		return false
+	}
+}
+
+func validatePresensiPhotos(value string) error {
+	var photos []string
+	if err := json.Unmarshal([]byte(value), &photos); err != nil {
+		return errors.New("format bukti foto tidak valid")
+	}
+	if len(photos) < 1 || len(photos) > 5 {
+		return errors.New("bukti foto wajib berjumlah 1 sampai 5")
+	}
+	total := 0
+	for _, photo := range photos {
+		comma := strings.IndexByte(photo, ',')
+		if comma < 0 || !strings.HasSuffix(photo[:comma], ";base64") {
+			return errors.New("format bukti foto tidak valid")
+		}
+		mime := strings.TrimPrefix(strings.TrimSuffix(photo[:comma], ";base64"), "data:")
+		data, err := base64.StdEncoding.DecodeString(photo[comma+1:])
+		if err != nil || !validPresensiPhotoBytes(mime, data) {
+			return errors.New("isi bukti foto tidak valid")
+		}
+		if len(data) > maxPresensiPhotoBytes {
+			return errors.New("ukuran setiap bukti foto maksimal 2 MB")
+		}
+		total += len(data)
+	}
+	if total > maxPresensiPhotosSize {
+		return errors.New("total ukuran bukti foto maksimal 8 MB")
+	}
+	return nil
+}
+
+func presensiWriteResponse(p Presensi) Presensi {
+	// Foto disimpan melalui endpoint khusus dan tidak perlu dipantulkan lagi
+	// dalam respons write. Ini menghindari respons Base64 besar melewati proxy.
+	p.BuktiFoto = ""
+	p.Details = nil
+	return p
+}
+
 func (s *Server) createPresensi(c *fiber.Ctx) error {
 	// Hanya field yang boleh diatur klien yang diparse. Sebelumnya
 	// BodyParser(&p) ke seluruh struct Presensi membiarkan klien menyetel
@@ -8245,12 +8317,36 @@ func (s *Server) createPresensi(c *fiber.Ctx) error {
 	if !validSignature(p.TandaTangan) {
 		return fiber.NewError(400, "a valid PNG signature is required")
 	}
+	if p.BuktiFoto != "" {
+		if err := validatePresensiPhotos(p.BuktiFoto); err != nil {
+			return fiber.NewError(400, err.Error())
+		}
+	}
+	// Satu rombel hanya memiliki satu presensi pada tanggal yang sama. Selain
+	// mencegah duplikat, jalur idempoten ini memulihkan retry ketika proxy putus
+	// setelah database sebenarnya sudah menerima request pertama.
+	var existing Presensi
+	if err := s.db.Where("kelas_id = ? AND tanggal = ?", p.KelasID, p.Tanggal).First(&existing).Error; err == nil {
+		existing.StatusPertemuan = p.StatusPertemuan
+		existing.Keterangan = p.Keterangan
+		existing.TandaTangan = p.TandaTangan
+		existing.DibuatOtomatis = false
+		if p.BuktiFoto != "" {
+			existing.BuktiFoto = p.BuktiFoto
+		}
+		if err := s.db.Save(&existing).Error; err != nil {
+			return fiber.NewError(400, err.Error())
+		}
+		uid := c.Locals("userID").(string)
+		s.audit(&uid, "update", "presensi", existing.KelasID+" @ "+existing.Tanggal.Format("2006-01-02"))
+		return c.JSON(presensiWriteResponse(existing))
+	}
 	if e := s.db.Create(&p).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}
 	uid := c.Locals("userID").(string)
 	s.audit(&uid, "create", "presensi", p.KelasID+" @ "+p.Tanggal.Format("2006-01-02"))
-	return c.Status(201).JSON(p)
+	return c.Status(201).JSON(presensiWriteResponse(p))
 }
 func (s *Server) updatePresensi(c *fiber.Ctx) error {
 	var p Presensi
@@ -8290,6 +8386,9 @@ func (s *Server) updatePresensi(c *fiber.Ctx) error {
 	}
 	p.TandaTangan = in.TandaTangan
 	if in.BuktiFoto != "" {
+		if err := validatePresensiPhotos(in.BuktiFoto); err != nil {
+			return fiber.NewError(400, err.Error())
+		}
 		p.BuktiFoto = in.BuktiFoto
 	}
 	// Guard against any path that could have moved the record off its class.
@@ -8304,7 +8403,32 @@ func (s *Server) updatePresensi(c *fiber.Ctx) error {
 	}
 	uid := c.Locals("userID").(string)
 	s.audit(&uid, "update", "presensi", p.ID)
-	return c.JSON(p)
+	return c.JSON(presensiWriteResponse(p))
+}
+
+func (s *Server) savePresensiPhotos(c *fiber.Ctx) error {
+	var meeting Presensi
+	if err := s.db.Select("id", "kelas_id").First(&meeting, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "record not found")
+	}
+	if err := s.canManageKelas(c, meeting.KelasID); err != nil {
+		return err
+	}
+	var in struct {
+		BuktiFoto string `json:"buktiFoto"`
+	}
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "invalid request body")
+	}
+	if err := validatePresensiPhotos(in.BuktiFoto); err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	if err := s.db.Model(&Presensi{}).Where("id = ?", meeting.ID).Update("bukti_foto", in.BuktiFoto).Error; err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "update", "presensi_foto", meeting.ID)
+	return c.SendStatus(fiber.StatusNoContent)
 }
 func (s *Server) saveDetails(c *fiber.Ctx) error {
 	var p Presensi
