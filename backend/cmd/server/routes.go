@@ -71,6 +71,7 @@ func (s *Server) routes(api fiber.Router) {
 	// canManageKelas inside each handler enforces that).
 	api.Post("/presensi", s.createPresensi)
 	api.Put("/presensi/:id", s.updatePresensi)
+	api.Delete("/presensi/:id", s.deletePresensi)
 	api.Post("/presensi/:id/details", s.saveDetails)
 	api.Put("/presensi/:id/photos", s.savePresensiPhotos)
 
@@ -3296,8 +3297,10 @@ func (s *Server) getPresensi(c *fiber.Ctx) error {
 	if err := s.db.Preload("Kelas").Preload("Details.PesertaDidik").First(&meeting, "id = ?", id(c)).Error; err != nil {
 		return fiber.NewError(404, "record not found")
 	}
-	if err := s.canManageKelas(c, meeting.KelasID); err != nil {
-		return err
+	if c.Locals("role") != "kepala_sekolah" {
+		if err := s.canManageKelas(c, meeting.KelasID); err != nil {
+			return err
+		}
 	}
 	sortPresensiDetailsRoster([]Presensi{meeting})
 	return c.JSON(meeting)
@@ -8440,6 +8443,28 @@ func (s *Server) savePresensiPhotos(c *fiber.Ctx) error {
 	s.audit(&uid, "update", "presensi_foto", meeting.ID)
 	return c.SendStatus(fiber.StatusNoContent)
 }
+
+func (s *Server) deletePresensi(c *fiber.Ctx) error {
+	var meeting Presensi
+	if err := s.db.Select("id", "kelas_id", "tanggal").First(&meeting, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "record not found")
+	}
+	if err := s.canManageKelas(c, meeting.KelasID); err != nil {
+		return err
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("presensi_id = ?", meeting.ID).Delete(&PresensiDetail{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&meeting).Error
+	}); err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "delete", "presensi", meeting.KelasID+" @ "+meeting.Tanggal.Format("2006-01-02"))
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
 func (s *Server) saveDetails(c *fiber.Ctx) error {
 	var p Presensi
 	if e := s.db.First(&p, "id = ?", id(c)).Error; e != nil {

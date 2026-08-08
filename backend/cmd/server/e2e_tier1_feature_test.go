@@ -648,6 +648,18 @@ func TestE2E_Tier1_AttendanceCanvas(t *testing.T) {
 	if resCSV.StatusCode != 200 {
 		t.Errorf("expected 200 for export presensi CSV, got %d", resCSV.StatusCode)
 	}
+
+	// 6. Delete Attendance Session and its student details.
+	resDelete, _ := makeRequest(app, "DELETE", "/api/presensi/"+meeting.ID, token, nil, "")
+	if resDelete.StatusCode != 204 {
+		t.Fatalf("expected 204 for presensi delete, got %d", resDelete.StatusCode)
+	}
+	var deletedMeetingCount, deletedDetailCount int64
+	s.db.Model(&Presensi{}).Where("id = ?", meeting.ID).Count(&deletedMeetingCount)
+	s.db.Model(&PresensiDetail{}).Where("presensi_id = ?", meeting.ID).Count(&deletedDetailCount)
+	if deletedMeetingCount != 0 || deletedDetailCount != 0 {
+		t.Fatalf("expected meeting and details to be deleted, got meeting=%d details=%d", deletedMeetingCount, deletedDetailCount)
+	}
 }
 
 // Tier 1 - F11: Promotion (Kenaikan Kelas)

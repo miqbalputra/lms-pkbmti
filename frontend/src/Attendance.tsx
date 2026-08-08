@@ -4,6 +4,16 @@ import { AttendanceRecap } from './AttendanceRecap'
 import { apiBase, request } from './lib/api'
 import { isSaturdayWibDate, isTodaySaturdayWib, nextSaturdayWib, wibToday } from './lib/wib'
 import { Alert, AlertDescription } from './components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './components/ui/alert-dialog'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
@@ -120,6 +130,8 @@ export function AttendanceWorkspace({
   const [submitting, setSubmitting] = useState(false)
   const [processingPhotos, setProcessingPhotos] = useState(false)
   const [loadingMeeting, setLoadingMeeting] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const selectionVersion = useRef(0)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
@@ -351,6 +363,25 @@ export function AttendanceWorkspace({
     }
   }
 
+  async function deleteSelectedMeeting() {
+    if (selectedID === 'new') return
+    setDeleting(true)
+    try {
+      await request('/presensi/' + selectedID, token, 'DELETE')
+      setMeetings((current) => current.filter((meeting) => meeting.id !== selectedID))
+      await choose('new')
+      setDeleteDialogOpen(false)
+      setMessage('Data presensi berhasil dihapus.')
+      toast.success('Data presensi dan seluruh checklist siswa berhasil dihapus.')
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      setMessage(`Data presensi gagal dihapus: ${detail}`)
+      toast.error(`Gagal menghapus presensi: ${detail}`)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   async function download(path: string, name: string) {
     const r = await fetch(apiBase + path, {
       headers: { Authorization: `Bearer ${token}` },
@@ -493,7 +524,11 @@ export function AttendanceWorkspace({
           <CardHeader className="border-b border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <CardTitle>Pengisian Presensi & Dokumentasi Kegiatan</CardTitle>
-              <CardDescription>Lengkapi 3 langkah wajib sebelum menyimpan data presensi.</CardDescription>
+              <CardDescription>
+                {selectedID === 'new'
+                  ? 'Lengkapi 3 langkah wajib sebelum menyimpan data presensi.'
+                  : 'Mode edit: ubah data yang salah, lalu simpan perubahan atau hapus presensi.'}
+              </CardDescription>
             </div>
             <div className="flex flex-wrap gap-2 text-xs font-semibold">
               <Badge variant={isSignatureValid && isPhotosValid ? 'secondary' : 'outline'} className="gap-1 px-3 py-1">
@@ -685,17 +720,37 @@ export function AttendanceWorkspace({
               </div>
 
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <Button
-                  disabled={readOnly || !students.length || submitting || processingPhotos || loadingMeeting}
-                  onClick={() => void save()}
-                  className={`h-11 rounded-xl px-6 font-bold shadow-2xs transition-all ${
-                    isSignatureValid && isPhotosValid
-                      ? 'bg-primary hover:bg-primary/90 text-primary-foreground'
-                      : 'bg-primary/80 hover:bg-primary text-primary-foreground'
-                  }`}
-                >
-                  <Save className="h-4 w-4 mr-2" /> {loadingMeeting ? 'Memuat presensi...' : processingPhotos ? 'Memproses foto...' : submitting ? 'Menyimpan...' : 'Simpan Presensi & Bukti KBM'}
-                </Button>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Button
+                    disabled={readOnly || !students.length || submitting || processingPhotos || loadingMeeting || deleting}
+                    onClick={() => void save()}
+                    className={`h-11 rounded-xl px-6 font-bold shadow-2xs transition-all ${
+                      isSignatureValid && isPhotosValid
+                        ? 'bg-primary hover:bg-primary/90 text-primary-foreground'
+                        : 'bg-primary/80 hover:bg-primary text-primary-foreground'
+                    }`}
+                  >
+                    <Save className="h-4 w-4 mr-2" />{' '}
+                    {loadingMeeting
+                      ? 'Memuat presensi...'
+                      : processingPhotos
+                        ? 'Memproses foto...'
+                        : submitting
+                          ? selectedID === 'new' ? 'Menyimpan...' : 'Menyimpan perubahan...'
+                          : selectedID === 'new' ? 'Simpan Presensi & Bukti KBM' : 'Simpan Perubahan'}
+                  </Button>
+                  {selectedID !== 'new' && !readOnly && (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="h-11 rounded-xl px-5 font-bold"
+                      disabled={submitting || loadingMeeting || deleting}
+                      onClick={() => setDeleteDialogOpen(true)}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" /> Hapus Presensi
+                    </Button>
+                  )}
+                </div>
                 {message && (
                   <Alert className="py-2.5 px-4 text-xs font-semibold">
                     <AlertDescription>{message}</AlertDescription>
@@ -725,6 +780,27 @@ export function AttendanceWorkspace({
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => !deleting && setDeleteDialogOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Data Presensi?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Presensi tanggal <strong>{date}</strong>, termasuk checklist kehadiran siswa, tanda tangan, dan seluruh foto KBM akan dihapus permanen.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => void deleteSelectedMeeting()}
+              disabled={deleting}
+            >
+              {deleting ? 'Menghapus...' : 'Ya, Hapus Presensi'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

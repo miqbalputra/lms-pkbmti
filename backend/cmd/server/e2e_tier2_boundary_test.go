@@ -301,6 +301,20 @@ func TestE2E_Tier2_Role_Boundaries(t *testing.T) {
 	if resIDOR.StatusCode != 403 {
 		t.Errorf("expected 403 for guru cross-class IDOR, got %d", resIDOR.StatusCode)
 	}
+	foreignMeeting := Presensi{KelasID: otherClass.ID, Tanggal: testSaturday(), TandaTangan: validSig, StatusPertemuan: "berlangsung"}
+	s.db.Create(&foreignMeeting)
+	resKepsekDetail, _ := makeRequest(app, "GET", "/api/presensi/"+foreignMeeting.ID, kepsekToken, nil, "")
+	if resKepsekDetail.StatusCode != 200 {
+		t.Errorf("expected kepala sekolah to read presensi detail, got %d", resKepsekDetail.StatusCode)
+	}
+	resKepsekDelete, _ := makeRequest(app, "DELETE", "/api/presensi/"+foreignMeeting.ID, kepsekToken, nil, "")
+	if resKepsekDelete.StatusCode != 403 {
+		t.Errorf("expected kepala sekolah presensi delete to stay read-only, got %d", resKepsekDelete.StatusCode)
+	}
+	resDeleteIDOR, _ := makeRequest(app, "DELETE", "/api/presensi/"+foreignMeeting.ID, guruToken, nil, "")
+	if resDeleteIDOR.StatusCode != 403 {
+		t.Errorf("expected 403 for guru cross-class presensi delete, got %d", resDeleteIDOR.StatusCode)
+	}
 }
 
 // 6. Promotion Boundaries
