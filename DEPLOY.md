@@ -50,6 +50,7 @@ Add these environment variables in your application:
 | `BACKUP_AUTO_RESTART` | Restart otomatis setelah upload restore | `true` |
 | `BACKUP_MAX_UPLOAD_MB` | Batas upload file restore | `512` |
 | `BACKUP_API_KEY` | Key untuk download backup via n8n | Optional |
+| `N8N_PRESENSI_API_KEY` | API key khusus workflow pengingat presensi tutor | Wajib jika workflow n8n presensi digunakan |
 | `BACKUP_OFFSITE_URL` | Endpoint S3 presigned/n8n untuk arsip terenkripsi | Optional |
 | `BACKUP_OFFSITE_METHOD` | Metode upload offsite | `PUT` |
 | `BACKUP_OFFSITE_TOKEN` | Token gateway offsite | Optional |
@@ -58,6 +59,16 @@ Add these environment variables in your application:
 | `BACKUP_DRILL_DATABASE_URL` | Database PostgreSQL disposable untuk restore drill | Optional, sangat disarankan |
 
 **Note**: Coolify can reference database variables automatically using Coolify's variable syntax.
+
+### Workflow n8n Pengingat Presensi Tutor
+
+1. Buat nilai acak yang panjang (minimal 32 karakter), lalu isi nilai yang sama sebagai `N8N_PRESENSI_API_KEY` pada service LMS dan service n8n.
+2. Redeploy/restart LMS agar endpoint `GET /api/automation/presensi-reminders` aktif dengan key tersebut.
+3. Impor `n8n-presensi-tutor-reminder-workflow.json` ke n8n.
+4. Pada n8n, isi `LMS_API_BASE_URL` (opsional; default `https://edu.pkbmtunasilmu.web.id/api`) dan `LMS_WEB_URL` (opsional).
+5. Pilih credential GOWA pada node **Kirim WhatsApp via GOWA**, jalankan manual sekali, lalu aktifkan workflow.
+
+Workflow memakai header `X-Automation-Key`; jangan memakai akun/password admin karena login production membutuhkan Turnstile. Endpoint hanya mengirim ringkasan kelengkapan per tutor dan tidak mengirim foto Base64, tanda tangan, atau identitas peserta didik.
 
 ### Backup Offsite dan Restore Drill
 

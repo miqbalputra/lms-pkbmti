@@ -864,6 +864,9 @@ func main() {
 	api.Get("/backup", s.backupReadAuth, s.listBackupsHandler)
 	api.Get("/backup/download", s.backupReadAuth, s.downloadBackup)
 	api.Get("/backup/file/:name", s.backupReadAuth, s.downloadBackupFile)
+	// Endpoint ringkas untuk workflow pengingat presensi n8n. Menggunakan API
+	// key khusus karena login username/password production dilindungi Turnstile.
+	api.Get("/automation/presensi-reminders", s.presensiAutomationAuth, s.presensiAutomationReminders)
 	// Public Ujian Online page & API — no auth. Siswa masuk via NISN + Kode Akses.
 	api.Get("/ujian", s.serveUjianOnlinePage)
 	api.Get("/ujian-online/page", s.serveUjianOnlinePage) // backward compat redirect

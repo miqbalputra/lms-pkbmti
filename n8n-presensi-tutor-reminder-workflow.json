@@ -1,0 +1,260 @@
+{
+  "name": "PKBM - Pengingat Presensi Tutor via GOWA",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Konfigurasi wajib\n1. Isi `N8N_PRESENSI_API_KEY` di Coolify LMS dan n8n dengan nilai acak yang sama.\n2. Opsional: isi `LMS_API_BASE_URL` dan `LMS_WEB_URL`. Default sudah mengarah ke edu.pkbmtunasilmu.web.id.\n3. Pilih credential GOWA pada node **Kirim WhatsApp via GOWA**.\n4. Workflow berjalan setiap hari pukul 17.00 WIB dan hanya memeriksa jadwal hari Sabtu dalam semester aktif.\n\nWorkflow tidak lagi login memakai akun admin karena login production dilindungi Turnstile.",
+        "height": 300,
+        "width": 520,
+        "color": 5
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a017",
+      "name": "Petunjuk Konfigurasi",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 17 * * *"
+            }
+          ]
+        }
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a001",
+      "name": "Jalankan Setiap Hari 17.00 WIB",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9d6f6a3e-5b7c-4c10-bb8a-1a2b3c4d5e6f",
+              "name": "portalUrl",
+              "type": "string",
+              "value": "={{ $env.LMS_WEB_URL || 'https://edu.pkbmtunasilmu.web.id' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a002",
+      "name": "Konfigurasi Workflow",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.LMS_API_BASE_URL || 'https://edu.pkbmtunasilmu.web.id/api') + '/automation/presensi-reminders' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Automation-Key",
+              "value": "={{ $env.N8N_PRESENSI_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        },
+        "responseFormat": "json"
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a009",
+      "name": "Ambil Status Pengingat Presensi",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        360
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizePhone(value) {\n  let digits = String(value || '').replace(/\\D/g, '');\n  if (digits.startsWith('00')) digits = digits.slice(2);\n  if (digits.startsWith('0')) digits = `62${digits.slice(1)}`;\n  if (digits.startsWith('8')) digits = `62${digits}`;\n  return digits;\n}\n\nfunction prettyDate(iso) {\n  const [year, month, day] = String(iso || '').split('-');\n  return year && month && day ? `${day}/${month}/${year}` : String(iso || '-');\n}\n\nconst payload = $input.first().json || {};\nif (payload.status !== 'ok') return [];\nconst reminders = Array.isArray(payload.reminders) ? payload.reminders : [];\nconst config = $('Konfigurasi Workflow').first().json || {};\nconst portal = String(config.portalUrl || 'https://edu.pkbmtunasilmu.web.id').replace(/\\/$/, '');\n\nreturn reminders\n  .map((reminder) => {\n    const phone = normalizePhone(reminder.phone);\n    const rows = Array.isArray(reminder.missingDates) ? reminder.missingDates : [];\n    const lines = rows.map((row, index) => {\n      const moved = row.actualDate ? `, dipindah ke ${prettyDate(row.actualDate)}` : '';\n      return `${index + 1}. ${row.classLabel} — ${prettyDate(row.date)}${moved} (${row.reason})`;\n    });\n    const message = [\n      '*Pengingat Presensi Peserta Didik*',\n      '',\n      `Assalamu’alaikum ${reminder.tutorName || 'Tutor'},`,\n      `Mohon melengkapi presensi KBM Semester ${payload.semester || '-'} Tahun Ajaran ${payload.tahunAjaran || '-'}.`,\n      '',\n      `Ditemukan ${rows.length} tanggal/kelas yang belum lengkap:`,\n      ...lines,\n      '',\n      `Silakan buka: ${portal}`,\n      'Pilih menu Presensi Mingguan, lalu lengkapi checklist siswa, tanda tangan tutor, dan foto bukti KBM.',\n      '',\n      'Pesan ini dikirim otomatis oleh Tunas Ilmu Learn.'\n    ].join('\\n');\n\n    return {\n      json: {\n        phone,\n        tutorId: String(reminder.tutorId || ''),\n        tutorName: String(reminder.tutorName || 'Tutor'),\n        missingCount: rows.length,\n        missingDates: rows,\n        message\n      }\n    };\n  })\n  .filter((item) => item.json.phone && item.json.missingCount > 0);"
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a012",
+      "name": "Buat Pesan WhatsApp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a013",
+      "name": "Kirim Satu Tutor per Batch",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        960,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "send",
+        "operation": "sendText",
+        "deviceIdOverride": "",
+        "phoneNumber": "={{ $json.phone }}",
+        "message": "={{ $json.message }}",
+        "duration": 0,
+        "isForwarded": false
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a014",
+      "name": "Kirim WhatsApp via GOWA",
+      "type": "n8n-nodes-base.gowa",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        360
+      ],
+      "credentials": {
+        "goWhatsappApi": {
+          "id": "",
+          "name": "GOWA API - pilih credential"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 2,
+        "unit": "seconds",
+        "options": {}
+      },
+      "id": "4b7cb8c7-a51f-4cb0-9f92-f7e8ec71a015",
+      "name": "Jeda Anti Rate Limit",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        360
+      ]
+    }
+  ],
+  "connections": {
+    "Jalankan Setiap Hari 17.00 WIB": {
+      "main": [
+        [
+          {
+            "node": "Konfigurasi Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Konfigurasi Workflow": {
+      "main": [
+        [
+          {
+            "node": "Ambil Status Pengingat Presensi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Status Pengingat Presensi": {
+      "main": [
+        [
+          {
+            "node": "Buat Pesan WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buat Pesan WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Kirim Satu Tutor per Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim Satu Tutor per Batch": {
+      "main": [
+        [
+          {
+            "node": "Kirim WhatsApp via GOWA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Kirim WhatsApp via GOWA": {
+      "main": [
+        [
+          {
+            "node": "Jeda Anti Rate Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jeda Anti Rate Limit": {
+      "main": [
+        [
+          {
+            "node": "Kirim Satu Tutor per Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": false
+  },
+  "versionId": "3d61c8d0-ff6c-4a7e-a94d-8053f56ba021",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "pkbm-presensi-tutor-reminder-gowa",
+  "tags": []
+}
