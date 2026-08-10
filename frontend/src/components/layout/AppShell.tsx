@@ -13,8 +13,6 @@ interface User {
 interface AppShellProps {
   user: User
   token: string
-  page: string
-  setPage: (p: string) => void
   onLogout: () => void
   onOpenTutorAccount: () => void
   children: ReactNode
@@ -23,8 +21,6 @@ interface AppShellProps {
 function ShellContent({
   user,
   token,
-  page,
-  setPage,
   onLogout,
   onOpenTutorAccount,
   children,
@@ -34,7 +30,7 @@ function ShellContent({
   return (
     <div className="min-h-screen xl:flex bg-gray-50 dark:bg-gray-900">
       <div>
-        <AppSidebar page={page} setPage={setPage} role={user.role} />
+        <AppSidebar role={user.role} />
         <Backdrop />
       </div>
       <div
@@ -44,7 +40,6 @@ function ShellContent({
       >
         <AppHeader
           token={token}
-          setPage={setPage}
           user={user}
           onLogout={onLogout}
           onOpenTutorAccount={onOpenTutorAccount}
@@ -60,8 +55,6 @@ function ShellContent({
 export function AppShell({
   user,
   token,
-  page,
-  setPage,
   onLogout,
   onOpenTutorAccount,
   children,
@@ -71,8 +64,6 @@ export function AppShell({
       <ShellContent
         user={user}
         token={token}
-        page={page}
-        setPage={setPage}
         onLogout={onLogout}
         onOpenTutorAccount={onOpenTutorAccount}
       >

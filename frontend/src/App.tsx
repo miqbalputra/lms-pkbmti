@@ -7,6 +7,7 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Alert, AlertDescription } from './components/ui/alert'
 import { Card, CardContent } from './components/ui/card'
 import { Toaster } from './components/ui/sonner'
@@ -15,6 +16,7 @@ import { LoginView } from './pages/Login'
 import { InstallPrompt } from './components/InstallPrompt'
 import { TutorEmailPrompt } from './components/TutorEmailPrompt'
 import { refreshSession, request, setOnTokenRefreshed, setOnUnauthorized } from './lib/api'
+import { PAGE_IDS, pathFor, pathsFor } from './lib/router'
 
 // Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
 // berfungsi (sumber kebenaran kini di ./lib/api, tanpa import sirkular).
@@ -107,7 +109,6 @@ export default function App() {
   const [token, setToken] = useState('')
   const [user, setUser] = useState<User | null>(null)
   const [ready, setReady] = useState(false)
-  const [page, setPage] = useState('dashboard')
   const [tutorAccountOpen, setTutorAccountOpen] = useState(false)
 
   useEffect(() => {
@@ -193,30 +194,15 @@ export default function App() {
   }
 
   return (
-    <>
+    <BrowserRouter>
       <Toaster position="top-right" />
       <InstallPrompt />
-      <AppShell
+      <AuthenticatedApp
         user={user}
         token={token}
-        page={page}
-        setPage={setPage}
         onLogout={handleLogout}
         onOpenTutorAccount={() => setTutorAccountOpen(true)}
-      >
-        <Suspense fallback={<PageFallback />}>
-          <ErrorBoundary key={page}>
-            <Workspace
-              page={page}
-              setPage={setPage}
-              token={token}
-              user={user}
-              readOnly={user.role !== 'admin'}
-              attendanceReadOnly={user.role === 'kepala_sekolah'}
-            />
-          </ErrorBoundary>
-        </Suspense>
-      </AppShell>
+      />
       <TutorEmailPrompt
         token={token}
         user={user}
@@ -228,20 +214,70 @@ export default function App() {
           setTutorAccountOpen(false)
         }}
       />
-    </>
+    </BrowserRouter>
+  )
+}
+
+// Navigasi berbasis router: setiap halaman punya path sendiri (lihat lib/router),
+// jadi URL berubah & halaman bisa dibuka/dibagikan langsung lewat link.
+function AuthenticatedApp({
+  user,
+  token,
+  onLogout,
+  onOpenTutorAccount,
+}: {
+  user: User
+  token: string
+  onLogout: () => void
+  onOpenTutorAccount: () => void
+}) {
+  const location = useLocation()
+  const readOnly = user.role !== 'admin'
+  const attendanceReadOnly = user.role === 'kepala_sekolah'
+
+  return (
+    <AppShell
+      user={user}
+      token={token}
+      onLogout={onLogout}
+      onOpenTutorAccount={onOpenTutorAccount}
+    >
+      <Suspense fallback={<PageFallback />}>
+        <ErrorBoundary key={location.pathname}>
+          <Routes>
+            {PAGE_IDS.flatMap((id) =>
+              pathsFor(id).map((path) => (
+                <Route
+                  key={path}
+                  path={path}
+                  element={
+                    <Workspace
+                      page={id}
+                      token={token}
+                      user={user}
+                      readOnly={readOnly}
+                      attendanceReadOnly={attendanceReadOnly}
+                    />
+                  }
+                />
+              ))
+            )}
+            <Route path="*" element={<Navigate to={pathFor('dashboard')} replace />} />
+          </Routes>
+        </ErrorBoundary>
+      </Suspense>
+    </AppShell>
   )
 }
 
 function Workspace({
   page,
-  setPage,
   token,
   user,
   readOnly,
   attendanceReadOnly,
 }: {
   page: string
-  setPage: (p: string) => void
   token: string
   user: User
   readOnly: boolean
@@ -271,7 +307,7 @@ function Workspace({
   if (page === 'rpp') return <RppView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'kelas-virtual') return <KelasVirtualView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'bank-soal') return <BankSoalView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
-  if (page === 'ujian') return <UjianView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} setPage={setPage} />
+  if (page === 'ujian') return <UjianView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'sertifikat') return <SertifikatView token={token} readOnly={user.role !== 'admin'} />
   if (page === 'kartu-pelajar') return <KartuPelajarView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'perilaku') return <PerilakuView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
@@ -292,8 +328,7 @@ function Workspace({
   if (page === 'analytics') return <AnalyticsView token={token} />
   if (page === 'portal-ortu') {
     window.open('/orangtua', '_blank')
-    setPage('dashboard')
-    return null
+    return <Navigate to={pathFor('dashboard')} replace />
   }
   return <MasterData resource={page} token={token} readOnly={readOnly} />
 }

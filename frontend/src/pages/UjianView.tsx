@@ -30,6 +30,8 @@ import {
 } from '../components/ui/dialog'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { useNavigate } from 'react-router-dom'
+import { pathFor } from '../lib/router'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -61,12 +63,10 @@ export function UjianView({
   token,
   user,
   readOnly,
-  setPage,
 }: {
   token: string
   user: User
   readOnly: boolean
-  setPage?: (p: string) => void
 }) {
   const [rows, setRows] = useState<Row[]>([])
   const [mapel, setMapel] = useState<Row[]>([])
@@ -78,6 +78,7 @@ export function UjianView({
   const [form, setForm] = useState({ ...emptyForm })
   const [soalUjian, setSoalUjian] = useState<Row | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const navigate = useNavigate()
 
   const isGuru = user.role === 'guru'
   const kelasOptions = isGuru
@@ -394,11 +395,11 @@ export function UjianView({
                           🎓 Siswa
                         </Button>
                       )}
-                      {Boolean(r.aksesKode) && setPage && (
+                      {Boolean(r.aksesKode) && (
                         <Button
                           size="sm"
                           variant="default"
-                          onClick={() => setPage('ujian-monitor')}
+                          onClick={() => navigate(pathFor('ujian-monitor'))}
                           title="Monitor ujian berlangsung"
                         >
                           📊 Monitor

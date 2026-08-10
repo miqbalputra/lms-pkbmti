@@ -33,6 +33,8 @@ import { NAV_ITEMS } from './AppSidebar'
 import { useSidebar } from '../../context/SidebarContext'
 import { toast } from 'sonner'
 import { request } from '../../lib/api'
+import { useNavigate } from 'react-router-dom'
+import { pathFor } from '../../lib/router'
 
 interface User {
   id: string
@@ -52,7 +54,6 @@ interface Notif {
 
 interface AppHeaderProps {
   token: string
-  setPage: (p: string) => void
   user: User
   onLogout: () => void
   onOpenTutorAccount: () => void
@@ -77,12 +78,15 @@ const tipeIcon: Record<string, string> = {
   umum: '📢',
 }
 
-export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }: AppHeaderProps) {
+export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHeaderProps) {
   const [logoutModalOpen, setLogoutModalOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const { toggleSidebar, toggleMobileSidebar, isExpanded } = useSidebar()
+  const navigate = useNavigate()
+
+  const go = (pageId: string) => navigate(pathFor(pageId))
 
   // Real notifications state
   const [notifs, setNotifs] = useState<Notif[]>([])
@@ -172,7 +176,7 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
   )
 
   const handleSelectSearchItem = (pageId: string, label: string) => {
-    setPage(pageId)
+    go(pageId)
     setSearchTerm('')
     setIsSearchFocused(false)
     toast.success(`Membuka halaman ${label}`)
@@ -362,11 +366,11 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
                         key={n.id}
                         onClick={() => {
                           markNotifRead(n.id)
-                          if (n.tipe === 'ujian') setPage('ujian')
-                          else if (n.tipe === 'tugas') setPage('tugas')
-                          else if (n.tipe === 'presensi') setPage('presensi')
-                          else if (n.tipe === 'rapor') setPage('rapor')
-                          else setPage('notifikasi')
+                          if (n.tipe === 'ujian') go('ujian')
+                          else if (n.tipe === 'tugas') go('tugas')
+                          else if (n.tipe === 'presensi') go('presensi')
+                          else if (n.tipe === 'rapor') go('rapor')
+                          else go('notifikasi')
                         }}
                         className={`flex items-start gap-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors dark:hover:bg-white/[0.03] ${
                           !n.isRead ? 'bg-brand-50/50 dark:bg-brand-500/5' : ''
@@ -396,7 +400,7 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => { setPage('notifikasi'); toast.success('Membuka pusat notifikasi') }}
+                    onClick={() => { go('notifikasi'); toast.success('Membuka pusat notifikasi') }}
                     className="flex-1 justify-center py-1 font-medium text-brand-500 hover:underline"
                   >
                     Lihat Semua
@@ -450,7 +454,7 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
                 <DropdownMenuSeparator />
                 {user.role === 'admin' && (
                   <DropdownMenuItem
-                    onClick={() => setPage('akun')}
+                    onClick={() => go('akun')}
                     className="cursor-pointer"
                   >
                     <UserIcon className="mr-2 h-4 w-4 text-gray-500 dark:text-gray-400" />
@@ -464,7 +468,7 @@ export function AppHeader({ token, setPage, user, onLogout, onOpenTutorAccount }
                       <span>Pengaturan Akun</span>
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      onClick={() => setPage('dokumen-tutor')}
+                      onClick={() => go('dokumen-tutor')}
                       className="cursor-pointer"
                     >
                       <FileText className="mr-2 h-4 w-4 text-gray-500 dark:text-gray-400" />

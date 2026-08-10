@@ -24,6 +24,8 @@ import {
 } from 'lucide-react'
 import { useSidebar } from '../../context/SidebarContext'
 import { cn } from '../../lib/utils'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { pageFromPath, pathFor } from '../../lib/router'
 
 export interface NavItem {
   id: string
@@ -139,17 +141,19 @@ export const NAV_GROUPS: NavGroup[] = [
 
 export const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items)
 
-interface AppSidebarProps {
-  page: string
-  setPage: (p: string) => void
-  role: string
-}
-
-export function AppSidebar({ page, setPage, role }: AppSidebarProps) {
+export function AppSidebar({ role }: { role: string }) {
   const { isExpanded, isMobileOpen, isHovered, setIsHovered, setMobileOpen } =
     useSidebar()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const currentPage = pageFromPath(pathname)
 
   const showLabels = isExpanded || isHovered || isMobileOpen
+
+  const go = (pageId: string) => {
+    navigate(pathFor(pageId))
+    if (isMobileOpen) setMobileOpen(false)
+  }
 
   return (
     <aside
@@ -170,10 +174,7 @@ export function AppSidebar({ page, setPage, role }: AppSidebarProps) {
         )}
       >
         <button
-          onClick={() => {
-            setPage('dashboard')
-            if (isMobileOpen) setMobileOpen(false)
-          }}
+          onClick={() => go('dashboard')}
           className="flex items-center gap-3"
           title="Tunas Ilmu Learn"
         >
@@ -215,14 +216,11 @@ export function AppSidebar({ page, setPage, role }: AppSidebarProps) {
                   <ul className="flex flex-col gap-1.5">
                     {filtered.map((item) => {
                       const Icon = item.icon
-                      const isActive = page === item.id
+                      const isActive = currentPage === item.id
                       return (
                         <li key={item.id}>
                           <button
-                            onClick={() => {
-                              setPage(item.id)
-                              if (isMobileOpen) setMobileOpen(false)
-                            }}
+                            onClick={() => go(item.id)}
                             className={cn(
                               'menu-item group',
                               isActive ? 'menu-item-active' : 'menu-item-inactive',
