@@ -158,6 +158,7 @@ func (s *Server) routes(api fiber.Router) {
 	api.Delete("/ujian/:id/soal/:sid", s.deleteUjianSoal)
 	api.Get("/ujian/:id/print", s.printUjian)
 	api.Get("/ujian/:id/export", s.exportUjianResults)
+	api.Get("/ujian-online/monitor/:ujianId", s.monitorUjianOnline)
 
 	// Modul Notifikasi — CRUD notifikasi user.
 	api.Get("/notifikasi", s.listNotifikasi)
@@ -5929,13 +5930,17 @@ func (s *Server) exportUjianResults(c *fiber.Ctx) error {
 
 	// Data rows
 	for i, p := range participants {
+		score := "-"
+		if p.Skor != nil {
+			score = fmt.Sprintf("%.1f", *p.Skor)
+		}
 		row := []string{
 			strconv.Itoa(i + 1),
 			p.PesertaDidik.Nama,
 			p.PesertaDidik.NISN,
 			fmt.Sprintf("Kelas %d%s", p.PesertaDidik.Kelas.Jenjang, p.PesertaDidik.Kelas.NamaRombel),
 			p.Status,
-			fmt.Sprintf("%.1f", *p.Skor),
+			score,
 		}
 		if pMap, ok := answerMap[p.ID]; ok {
 			for _, sid := range soalIDs {

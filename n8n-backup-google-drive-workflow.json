@@ -8,7 +8,7 @@
         "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {
-          "binaryPropertyName": "data"
+          "rawBody": true
         }
       },
       "id": "f1d0c1ef-7f00-4fbb-90e8-0a7a306cd201",

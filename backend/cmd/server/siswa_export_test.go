@@ -8,17 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
 	"github.com/xuri/excelize/v2"
-	"gorm.io/gorm"
 )
 
 func TestExportSiswaIncludesStudentDataWithoutParentData(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:siswa-export?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedTestDB(t, "siswa-export")
 	if err := db.AutoMigrate(&Tutor{}, &Pokjar{}, &TahunAjaran{}, &Kelas{}, &PesertaDidik{}, &Program{}); err != nil {
 		t.Fatal(err)
 	}

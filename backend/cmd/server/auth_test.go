@@ -11,19 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 )
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedTestDB(t, t.Name())
 	if err := db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}); err != nil {
 		t.Fatal(err)
 	}

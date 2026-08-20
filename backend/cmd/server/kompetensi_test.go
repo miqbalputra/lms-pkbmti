@@ -7,16 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
 )
 
 func TestKompetensiTutorOptionsAndScope(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:kompetensi-tutor?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedTestDB(t, "kompetensi-tutor")
 	if err := db.AutoMigrate(&User{}, &Tutor{}, &MataPelajaran{}, &Pokjar{}, &TahunAjaran{}, &Kelas{}, &PenugasanGuruMapel{}, &Kompetensi{}, &CapaianKompetensi{}, &RombelKompetensi{}, &NilaiKompetensi{}); err != nil {
 		t.Fatal(err)
 	}

@@ -5,16 +5,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
 )
 
 func TestRppOptionsReturnsAssignedMapelForGuru(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:rpp-options?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedTestDB(t, "rpp-options")
 	if err := db.AutoMigrate(&User{}, &Tutor{}, &MataPelajaran{}, &Pokjar{}, &TahunAjaran{}, &Kelas{}, &KelasMapel{}, &PenugasanGuruMapel{}, &Fase{}); err != nil {
 		t.Fatal(err)
 	}
@@ -74,10 +69,7 @@ func TestRppOptionsReturnsAssignedMapelForGuru(t *testing.T) {
 }
 
 func TestRppOptionsResolvesReverseTutorLinkForLegacyGuruAccount(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:rpp-options-reverse?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedTestDB(t, "rpp-options-reverse")
 	if err := db.AutoMigrate(&User{}, &Tutor{}, &MataPelajaran{}, &Pokjar{}, &TahunAjaran{}, &Kelas{}, &KelasMapel{}, &PenugasanGuruMapel{}, &Fase{}); err != nil {
 		t.Fatal(err)
 	}

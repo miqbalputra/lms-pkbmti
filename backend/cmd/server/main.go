@@ -867,8 +867,9 @@ func main() {
 	// Endpoint ringkas untuk workflow pengingat presensi n8n. Menggunakan API
 	// key khusus karena login username/password production dilindungi Turnstile.
 	api.Get("/automation/presensi-reminders", s.presensiAutomationAuth, s.presensiAutomationReminders)
-	// Public Ujian Online page & API — no auth. Siswa masuk via NISN + Kode Akses.
-	api.Get("/ujian", s.serveUjianOnlinePage)
+	// Public Ujian Online API — no auth. Halaman siswa sendiri tersedia pada
+	// /ujian (di luar prefix /api); jangan daftarkan halaman HTML di /api/ujian
+	// karena endpoint itu dipakai dashboard untuk daftar ujian terproteksi.
 	api.Get("/ujian-online/page", s.serveUjianOnlinePage) // backward compat redirect
 	publicExamLoginMax := 60
 	publicParentLoginMax := 30

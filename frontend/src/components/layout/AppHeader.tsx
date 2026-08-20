@@ -32,7 +32,7 @@ import { ThemeToggleButton } from '../common/ThemeToggleButton'
 import { NAV_ITEMS } from './AppSidebar'
 import { useSidebar } from '../../context/SidebarContext'
 import { toast } from 'sonner'
-import { request } from '../../lib/api'
+import { apiBase, request } from '../../lib/api'
 import { useNavigate } from 'react-router-dom'
 import { pathFor } from '../../lib/router'
 
@@ -103,10 +103,13 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
   useEffect(() => {
     loadNotifs()
     // Use SSE for real-time notifications, fall back to polling
-    const apiBase = (import.meta as any).env?.VITE_API_URL || window.location.origin
     let evtSource: EventSource | null = null
+    let pollingTimer: ReturnType<typeof setInterval> | null = null
+    const startPolling = () => {
+      if (pollingTimer === null) pollingTimer = setInterval(loadNotifs, 30000)
+    }
     try {
-      evtSource = new EventSource(apiBase + '/api/notifikasi/stream?token=' + encodeURIComponent(token), { withCredentials: true } as any)
+      evtSource = new EventSource(`${apiBase}/notifikasi/stream?token=${encodeURIComponent(token)}`, { withCredentials: true } as any)
       evtSource.addEventListener('notifikasi', (e) => {
         try {
           const newNotifs = JSON.parse(e.data)
@@ -124,16 +127,15 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
       evtSource.onerror = () => {
         evtSource?.close()
         evtSource = null
-        // Fall back to polling
-        const interval = setInterval(loadNotifs, 30000)
-        return () => clearInterval(interval)
+        startPolling()
       }
     } catch {
-      // SSE not supported, use polling
-      const interval = setInterval(loadNotifs, 30000)
-      return () => clearInterval(interval)
+      startPolling()
     }
-    return () => { evtSource?.close() }
+    return () => {
+      evtSource?.close()
+      if (pollingTimer !== null) clearInterval(pollingTimer)
+    }
   }, [loadNotifs, token])
 
   const markNotifRead = (id: string) => {

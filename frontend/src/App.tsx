@@ -105,6 +105,27 @@ function PageFallback() {
   )
 }
 
+// Access-token TTL dapat berbeda antar environment (misalnya 5 menit di
+// produksi, 15 menit di lokal). Jadwal refresh harus mengikuti klaim `exp`,
+// bukan interval tetap, agar sesi username/password tidak habis lebih dahulu.
+function refreshDelayForAccessToken(token: string) {
+  try {
+    const encoded = token.split('.')[1]
+    if (!encoded) throw new Error('JWT payload missing')
+    const padded = encoded.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encoded.length / 4) * 4, '=')
+    const payload = JSON.parse(atob(padded)) as { exp?: unknown }
+    const expiresAt = Number(payload.exp) * 1000
+    if (!Number.isFinite(expiresAt) || expiresAt <= 0) throw new Error('JWT exp missing')
+    // Sisakan satu menit untuk respons jaringan. Jika token sudah sangat dekat
+    // dengan kedaluwarsa, tunggu minimum 5 detik supaya tidak membuat loop.
+    return Math.max(5_000, expiresAt - Date.now() - 60_000)
+  } catch {
+    // Fallback aman untuk token lama/non-JWT; request terpusat tetap akan
+    // melakukan refresh ulang ketika menerima 401.
+    return 10 * 60 * 1000
+  }
+}
+
 export default function App() {
   const [token, setToken] = useState('')
   const [user, setUser] = useState<User | null>(null)
@@ -144,26 +165,36 @@ export default function App() {
     }
   }, [handleLogout, token])
 
-  // Keep-alive: refresh before the normal 15-minute access-token expiry.
-  // refreshSession() is single-flight, so a transient race cannot log the
-  // admin out while they are typing or working in multiple requests.
+  // Keep-alive mengikuti `exp` token (bukan asumsi 15 menit). refreshSession
+  // bersifat single-flight sehingga beberapa request/tab tidak merotasi cookie
+  // yang sama secara bersamaan.
   useEffect(() => {
     if (!token) return
-    const REFRESH_MS = 10 * 60 * 1000
-    const timer = setInterval(() => {
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    const timer = setTimeout(() => {
       void refreshSession()
         .then((r) => {
           setToken(r.accessToken)
           setUser(r.user as User)
         })
         // Keep the current session on a transient network error. A later API
-        // call will retry refresh; only an actual unauthorized API response
-        // ends the session.
-        .catch(() => undefined)
-    }, REFRESH_MS)
+        // call will retry refresh; retry shortly as well because a token may
+        // use a TTL shorter than the historical fixed 10-minute interval.
+        .catch(() => {
+          retryTimer = setTimeout(() => {
+            void refreshSession()
+              .then((r) => {
+                setToken(r.accessToken)
+                setUser(r.user as User)
+              })
+              .catch(() => undefined)
+          }, 30_000)
+        })
+    }, refreshDelayForAccessToken(token))
 
     return () => {
-      clearInterval(timer)
+      clearTimeout(timer)
+      if (retryTimer) clearTimeout(retryTimer)
     }
   }, [token])
 

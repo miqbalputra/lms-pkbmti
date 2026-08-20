@@ -3,30 +3,18 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
 )
 
 // setupE2EServer initializes a clean in-memory database and Fiber application with all routes configured.
 func setupE2EServer(t *testing.T) (*Server, *fiber.App) {
 	t.Helper()
-	dbName := fmt.Sprintf("file:%s_%d?mode=memory&cache=shared", t.Name(), time.Now().UnixNano())
-	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-
-	// Limit SQLite to 1 open connection to prevent in-memory transaction deadlocks
-	if sqlDB, err := db.DB(); err == nil {
-		sqlDB.SetMaxOpenConns(1)
-	}
+	db := isolatedTestDB(t, t.Name())
 
 	cfg := Config{
 		AccessSecret:  "e2e-access-secret-minimum-32-characters-long",

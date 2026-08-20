@@ -5,7 +5,8 @@ import { Card } from '../components/ui/card'
 import { EmptyState, PageToolbar } from '../components/ui/page'
 import { Badge } from '../components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
-import { request } from '../lib/api'
+import { downloadFile, request } from '../lib/api'
+import { toast } from 'sonner'
 
 type Peserta = Record<string, unknown> & { id: string }
 
@@ -37,21 +38,10 @@ export function UjianMonitorView({
   const exportResults = async () => {
     if (!selected) return
     try {
-      const apiBase = (import.meta as any).env?.VITE_API_URL || window.location.origin
-      const res = await fetch(apiBase + '/api/ujian/' + selected + '/export', {
-        credentials: 'include',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error('Gagal export')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'hasil-ujian.csv'
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch {
-      // silently fail
+      await downloadFile(`/ujian/${selected}/export`, token, 'hasil-ujian.csv')
+      toast.success('Hasil ujian berhasil diunduh.')
+    } catch (error) {
+      toast.error(String((error as Error).message || 'Gagal mengekspor hasil ujian.'))
     }
   }
 

@@ -6,16 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
 )
 
 func TestUpdateKelasRecordsWaliHistory(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:wali-history?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedTestDB(t, "wali-history")
 	if err := db.AutoMigrate(&Tutor{}, &Pokjar{}, &TahunAjaran{}, &Kelas{}, &RiwayatWaliKelas{}); err != nil {
 		t.Fatal(err)
 	}
@@ -73,10 +68,7 @@ func TestUpdateKelasRecordsWaliHistory(t *testing.T) {
 }
 
 func TestKelasCombinationMustBeUnique(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:kelas-unique?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := isolatedTestDB(t, "kelas-unique")
 	if err := db.AutoMigrate(&Pokjar{}, &TahunAjaran{}, &Kelas{}); err != nil {
 		t.Fatal(err)
 	}

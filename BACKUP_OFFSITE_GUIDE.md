@@ -113,7 +113,7 @@ Setelah import, pilih credential Google Drive pada node **Upload ke Google Drive
 4. Aktifkan autentikasi webhook **Header Auth**. Buat credential dengan:
    - nama header: `Authorization`;
    - nilai: `Bearer TOKEN_RANDOM_YANG_SAMA_DENGAN_APLIKASI`.
-5. Pada options, isi **Binary Property: `data`**.
+5. Pada options, aktifkan **Raw Body** agar body `application/octet-stream` disimpan sebagai berkas biner `data`.
 6. Pilih response menggunakan node **Respond to Webhook** setelah proses selesai.
 
 Salin **Production URL** dari node Webhook, lalu isi di aplikasi:
@@ -124,7 +124,7 @@ BACKUP_OFFSITE_METHOD=PUT
 BACKUP_OFFSITE_TOKEN=TOKEN_RANDOM_YANG_SAMA_DENGAN_CREDENTIAL_N8N
 ```
 
-Jangan memakai Test URL untuk production. Webhook n8n memang mendukung method `PUT` dan menerima file melalui binary property; node Google Drive kemudian menggunakan nama binary property tersebut untuk upload.
+Jangan memakai Test URL untuk production. Webhook n8n memang mendukung method `PUT`; opsi **Raw Body** memastikan file terenkripsi diteruskan pada binary property `data` ke node Google Drive.
 
 ### Konfigurasi Google Drive
 
