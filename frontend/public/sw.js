@@ -1,5 +1,13 @@
-const CACHE_NAME = 'tunas-ilmu-v2';
-const APP_SHELL = ['/', '/index.html', '/icon-192.png', '/icon-512.png', '/favicon.svg'];
+const CACHE_NAME = 'pkbmti-lms-v1';
+const APP_SHELL = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/pkbmti-lms-icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable.png',
+];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE_NAME).then((c) => c.addAll(APP_SHELL)));

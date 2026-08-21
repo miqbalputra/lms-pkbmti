@@ -199,55 +199,51 @@ export default function App() {
     }
   }, [token])
 
-  if (!ready) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-background text-sm text-muted-foreground">
-        <div className="flex items-center gap-2 font-medium">
-          <div className="h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-          Memulihkan sesi aman...
-        </div>
-      </div>
-    )
-  }
-
-  if (!token || !user) {
-    return (
-      <>
-        <Toaster position="top-right" />
-        <LoginView
-          onLogin={(t, u) => {
-            setToken(t)
-            setUser(u)
-          }}
-          requestFn={request}
-        />
-      </>
-    )
-  }
-
   return (
-    <BrowserRouter>
-      <Toaster position="top-right" />
+    <>
       <InstallPrompt />
-      <AuthenticatedApp
-        user={user}
-        token={token}
-        onLogout={handleLogout}
-        onOpenTutorAccount={() => setTutorAccountOpen(true)}
-      />
-      <GuruTaskReminder token={token} user={user} />
-      <TutorEmailPrompt
-        token={token}
-        user={user}
-        required={user.role === 'guru' && !String(user.email || '').trim()}
-        open={tutorAccountOpen || (user.role === 'guru' && !String(user.email || '').trim())}
-        onOpenChange={setTutorAccountOpen}
-        onSaved={(email) => {
-          setUser((current) => (current ? { ...current, email } : current))
-          setTutorAccountOpen(false)
-        }}
-      />
-    </BrowserRouter>
+      {!ready ? (
+        <div className="grid min-h-screen place-items-center bg-background text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 font-medium">
+            <div className="h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+            Memulihkan sesi aman...
+          </div>
+        </div>
+      ) : !token || !user ? (
+        <>
+          <Toaster position="top-right" />
+          <LoginView
+            onLogin={(t, u) => {
+              setToken(t)
+              setUser(u)
+            }}
+            requestFn={request}
+          />
+        </>
+      ) : (
+        <BrowserRouter>
+          <Toaster position="top-right" />
+          <AuthenticatedApp
+            user={user}
+            token={token}
+            onLogout={handleLogout}
+            onOpenTutorAccount={() => setTutorAccountOpen(true)}
+          />
+          <GuruTaskReminder token={token} user={user} />
+          <TutorEmailPrompt
+            token={token}
+            user={user}
+            required={user.role === 'guru' && !String(user.email || '').trim()}
+            open={tutorAccountOpen || (user.role === 'guru' && !String(user.email || '').trim())}
+            onOpenChange={setTutorAccountOpen}
+            onSaved={(email) => {
+              setUser((current) => (current ? { ...current, email } : current))
+              setTutorAccountOpen(false)
+            }}
+          />
+        </BrowserRouter>
+      )}
+    </>
   )
 }
 

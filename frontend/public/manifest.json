@@ -1,12 +1,17 @@
 {
-  "name": "Tunas Ilmu Learn - PKBM Tunas Ilmu",
-  "short_name": "Tunas Ilmu",
+  "id": "/",
+  "name": "PKBMTI LMS",
+  "short_name": "PKBMTI LMS",
   "description": "Learning Management System (LMS) resmi PKBM Tunas Ilmu",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#f9fafb",
-  "theme_color": "#4f46e5",
+  "background_color": "#F5F9FF",
+  "theme_color": "#0B63CE",
   "orientation": "any",
+  "lang": "id-ID",
+  "dir": "ltr",
+  "categories": ["education", "productivity"],
   "icons": [
     {
       "src": "/icon-192.png",
