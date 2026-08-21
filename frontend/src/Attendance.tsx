@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Image as ImageIcon, Info, Save, Trash2, UploadCloud } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { AttendanceRecap } from './AttendanceRecap'
 import { apiBase, request } from './lib/api'
 import { isSaturdayWibDate, isTodaySaturdayWib, nextSaturdayWib, wibToday } from './lib/wib'
@@ -114,8 +115,11 @@ export function AttendanceWorkspace({
   readOnly: boolean
   userName?: string
 }) {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [classes, setClasses] = useState<Row[]>([])
   const [meetings, setMeetings] = useState<Row[]>([])
+  const [classesLoaded, setClassesLoaded] = useState(false)
+  const [meetingsLoaded, setMeetingsLoaded] = useState(false)
   const [classID, setClassID] = useState('')
   const [selectedID, setSelectedID] = useState('new')
   const [wibDateToday, setWibDateToday] = useState(() => wibToday())
@@ -133,6 +137,7 @@ export function AttendanceWorkspace({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const selectionVersion = useRef(0)
+  const reminderPrefillHandled = useRef('')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const todayIsSaturday = isTodaySaturdayWib(new Date())
@@ -150,10 +155,13 @@ export function AttendanceWorkspace({
     }
   }, [selectedID, wibDateToday])
 
-  const loadMeetings = useCallback(() => request('/presensi', token).then(setMeetings), [token])
+  const loadMeetings = useCallback(
+    () => request('/presensi', token).then(setMeetings).finally(() => setMeetingsLoaded(true)),
+    [token],
+  )
 
   useEffect(() => {
-    void request('/kelas', token).then(setClasses)
+    void request('/kelas', token).then(setClasses).finally(() => setClassesLoaded(true))
     void loadMeetings()
   }, [loadMeetings, token])
 
@@ -226,6 +234,42 @@ export function AttendanceWorkspace({
       if (selectionVersion.current === version) setLoadingMeeting(false)
     }
   }
+
+  // Pengingat dashboard mengarahkan guru tepat ke pertemuan yang belum lengkap
+  // atau, bila belum ada entri, ke form baru dengan kelas dan tanggal terisi.
+  // Parameter dibersihkan setelah sekali diproses agar refresh tidak membuka
+  // ulang form yang sudah ditutup guru.
+  useEffect(() => {
+    const meetingID = searchParams.get('presensiId') || ''
+    const reminderClassID = searchParams.get('kelasId') || ''
+    const reminderDate = searchParams.get('tanggal') || ''
+    const key = [meetingID, reminderClassID, reminderDate].join('|')
+    if (!key.replaceAll('|', '') || reminderPrefillHandled.current === key || !classesLoaded || !meetingsLoaded) return
+
+    reminderPrefillHandled.current = key
+    if (meetingID && meetings.some((meeting) => meeting.id === meetingID)) {
+      void choose(meetingID)
+    } else if (
+      !meetingID &&
+      reminderClassID &&
+      reminderDate &&
+      isSaturdayWibDate(reminderDate) &&
+      classes.some((classRow) => classRow.id === reminderClassID)
+    ) {
+      setSelectedID('new')
+      setClassID(reminderClassID)
+      setDate(reminderDate)
+      setStatus('berlangsung')
+      setSignature('')
+      setPhotos([])
+    }
+
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('presensiId')
+    nextParams.delete('kelasId')
+    nextParams.delete('tanggal')
+    setSearchParams(nextParams, { replace: true })
+  }, [classes, classesLoaded, meetings, meetingsLoaded, searchParams, setSearchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePhotoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const input = e.currentTarget

@@ -66,6 +66,10 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/presensi/:id", s.getPresensi)
 	api.Get("/penugasan", s.listPenugasan)
 	api.Get("/settings/jadwal", s.getJadwal)
+	// Pengingat pekerjaan di dashboard hanya untuk guru yang sedang login.
+	// Scope kelas dan kelengkapan data dihitung server-side agar data guru lain
+	// tidak pernah terbaca oleh browser.
+	api.Get("/dashboard/guru-reminders", s.guruDashboardReminders)
 
 	// Bare-api writes (guru may create/update presensi for classes they manage;
 	// canManageKelas inside each handler enforces that).

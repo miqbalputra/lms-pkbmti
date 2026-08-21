@@ -15,6 +15,7 @@ import { AppShell } from './components/layout/AppShell'
 import { LoginView } from './pages/Login'
 import { InstallPrompt } from './components/InstallPrompt'
 import { TutorEmailPrompt } from './components/TutorEmailPrompt'
+import { GuruTaskReminder } from './components/GuruTaskReminder'
 import { refreshSession, request, setOnTokenRefreshed, setOnUnauthorized } from './lib/api'
 import { PAGE_IDS, pathFor, pathsFor } from './lib/router'
 
@@ -234,6 +235,7 @@ export default function App() {
         onLogout={handleLogout}
         onOpenTutorAccount={() => setTutorAccountOpen(true)}
       />
+      <GuruTaskReminder token={token} user={user} />
       <TutorEmailPrompt
         token={token}
         user={user}

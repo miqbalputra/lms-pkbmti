@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ImageIcon, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -52,6 +53,7 @@ export function JurnalMengajarView({
   user: User
   readOnly: boolean
 }) {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [rows, setRows] = useState<Row[]>([])
   const [tutors, setTutors] = useState<Row[]>([])
   const [mapel, setMapel] = useState<Row[]>([])
@@ -63,6 +65,7 @@ export function JurnalMengajarView({
   const [form, setForm] = useState({ ...emptyForm })
   const [foto, setFoto] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
+  const reminderPrefillHandled = useRef('')
 
   const isGuru = user.role === 'guru'
   const isAdmin = user.role === 'admin'
@@ -87,6 +90,29 @@ export function JurnalMengajarView({
     setFoto(null)
     setAdding(true)
   }
+
+  // Aksi dari popup pengingat membawa kelas dan tanggal melalui URL. Konsumsi
+  // sekali saja lalu bersihkan query agar refresh halaman tidak membuka form
+  // jurnal kembali setelah guru membatalkannya.
+  useEffect(() => {
+    const reminderClassID = searchParams.get('kelasId') || ''
+    const reminderDate = searchParams.get('tanggal') || ''
+    const key = `${reminderClassID}|${reminderDate}`
+    if (!isGuru || !reminderClassID || !/^\d{4}-\d{2}-\d{2}$/.test(reminderDate) || reminderPrefillHandled.current === key) return
+    if (!kelas.length) return
+
+    reminderPrefillHandled.current = key
+    if (kelas.some((classRow) => classRow.id === reminderClassID && String(classRow.waliKelasId || '') === (user.tutorId || ''))) {
+      setForm({ ...emptyForm, kelasId: reminderClassID, tanggal: reminderDate })
+      setEditing(null)
+      setFoto(null)
+      setAdding(true)
+    }
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('kelasId')
+    nextParams.delete('tanggal')
+    setSearchParams(nextParams, { replace: true })
+  }, [isGuru, kelas, searchParams, setSearchParams, user.tutorId])
 
   function openEdit(r: Row) {
     setEditing(r)
