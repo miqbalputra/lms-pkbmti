@@ -35,6 +35,7 @@ function fmtDate(v: unknown): string {
 }
 
 const emptyForm = {
+  tutorId: '',
   mapelId: '',
   kelasId: '',
   tanggal: new Date().toISOString().slice(0, 10),
@@ -52,6 +53,7 @@ export function JurnalMengajarView({
   readOnly: boolean
 }) {
   const [rows, setRows] = useState<Row[]>([])
+  const [tutors, setTutors] = useState<Row[]>([])
   const [mapel, setMapel] = useState<Row[]>([])
   const [kelas, setKelas] = useState<Row[]>([])
   const [adding, setAdding] = useState(false)
@@ -63,6 +65,7 @@ export function JurnalMengajarView({
   const [saving, setSaving] = useState(false)
 
   const isGuru = user.role === 'guru'
+  const isAdmin = user.role === 'admin'
   const kelasOptions = isGuru
     ? kelas.filter((k) => String(k.waliKelasId || '') === (user.tutorId || ''))
     : kelas
@@ -73,9 +76,10 @@ export function JurnalMengajarView({
 
   useEffect(() => {
     load()
+    if (isAdmin) void request('/tutor', token).then((r: Row[]) => setTutors(r || [])).catch(() => setTutors([]))
     void request('/mapel', token).then((r: Row[]) => setMapel(r || [])).catch(() => setMapel([]))
     void request('/kelas', token).then((r: Row[]) => setKelas(r || [])).catch(() => setKelas([]))
-  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, isAdmin]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function openAdd() {
     setForm({ ...emptyForm })
@@ -87,6 +91,7 @@ export function JurnalMengajarView({
   function openEdit(r: Row) {
     setEditing(r)
     setForm({
+      tutorId: String(r.tutorId || ''),
       mapelId: String(r.mapelId || ''),
       kelasId: String(r.kelasId || ''),
       tanggal: fmtDate(r.tanggal),
@@ -99,13 +104,14 @@ export function JurnalMengajarView({
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    if (!form.mapelId || !form.kelasId || !form.tanggal) {
+    if (!form.mapelId || !form.kelasId || !form.tanggal || (isAdmin && !editing && !form.tutorId)) {
       toast.error('Mapel, kelas, dan tanggal wajib diisi.')
       return
     }
     setSaving(true)
     try {
       const data = new FormData()
+      if (isAdmin && !editing) data.append('tutorId', form.tutorId)
       data.append('mapelId', form.mapelId)
       data.append('kelasId', form.kelasId)
       data.append('tanggal', form.tanggal)
@@ -184,6 +190,23 @@ export function JurnalMengajarView({
           description="Foto dokumentasi opsional (jpg/png, maks 5 MB). Jurnal langsung berlaku begitu disimpan."
         >
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
+			{isAdmin && (
+			  <div className="grid gap-2 sm:col-span-2">
+				<Label>Tutor pemilik jurnal</Label>
+				<Select
+				  value={form.tutorId}
+				  onChange={(e) => setForm({ ...form, tutorId: e.target.value })}
+				  required={!editing}
+				  disabled={!!editing}
+				>
+				  <option value="">Pilih tutor</option>
+				  {tutors.map((t) => (
+					<option key={t.id} value={t.id}>{String(t.nama || '-')}</option>
+				  ))}
+				</Select>
+				{editing && <p className="text-xs text-muted-foreground">Tutor pemilik jurnal tidak dapat diubah.</p>}
+			  </div>
+			)}
             <div className="grid gap-2">
               <Label>Mata Pelajaran</Label>
               <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>

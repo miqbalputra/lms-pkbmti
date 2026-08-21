@@ -41,6 +41,7 @@ function fmtSize(bytes: number): string {
 }
 
 const emptyForm = {
+  tutorId: '',
   mapelId: '',
   jenjang: '',
   tahunAjaranId: '',
@@ -62,6 +63,7 @@ export function RppView({
   readOnly: boolean
 }) {
   const [rows, setRows] = useState<Row[]>([])
+  const [tutors, setTutors] = useState<Row[]>([])
   const [options, setOptions] = useState<Options>({ mapel: [], jenjang: [], tahunAjaran: [], fase: [], activeTahunAjaranId: '' })
   const [makerStatus, setMakerStatus] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -86,6 +88,7 @@ export function RppView({
 
   useEffect(() => {
     load()
+    if (user.role === 'admin') void request('/tutor', token).then((r: Row[]) => setTutors(r || [])).catch(() => setTutors([]))
     void request('/rpp/options', token)
       .then((r) => {
         if (r && typeof r === 'object') {
@@ -102,7 +105,7 @@ export function RppView({
     void request('/rpp/maker-status', token)
       .then((r: Row) => setMakerStatus(Boolean((r as Row)?.isRppMaker)))
       .catch(() => setMakerStatus(false))
-  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, user.role]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     load()
@@ -123,6 +126,7 @@ export function RppView({
     setEditing(r)
     const tgl = r.tanggal ? String(r.tanggal).slice(0, 10) : ''
     setForm({
+      tutorId: String(r.tutorId || ''),
       mapelId: String(r.mapelId || ''),
       jenjang: String(r.jenjang ?? ''),
       tahunAjaranId: String(r.tahunAjaranId || ''),
@@ -144,7 +148,7 @@ export function RppView({
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    if (!form.judul || !form.mapelId || !form.jenjang || !form.tahunAjaranId) {
+    if (!form.judul || !form.mapelId || !form.jenjang || !form.tahunAjaranId || (user.role === 'admin' && !editing && !form.tutorId)) {
       toast.error('Judul, mapel, jenjang, dan tahun ajaran wajib diisi.')
       return
     }
@@ -155,6 +159,7 @@ export function RppView({
     setSaving(true)
     try {
       const data = new FormData()
+      if (user.role === 'admin' && !editing) data.append('tutorId', form.tutorId)
       data.append('mapelId', form.mapelId)
       data.append('jenjang', form.jenjang)
       data.append('tahunAjaranId', form.tahunAjaranId)
@@ -279,6 +284,21 @@ export function RppView({
           description="Identitas RPP diisi lengkap. File maks 10 MB (pdf, docx, doc). Semester diisi otomatis."
         >
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
+            {user.role === 'admin' && (
+              <div className="grid gap-2 sm:col-span-2">
+                <Label>Tutor penyusun RPP</Label>
+                <Select
+                  value={form.tutorId}
+                  onChange={(e) => setForm({ ...form, tutorId: e.target.value })}
+                  required={!editing}
+                  disabled={!!editing}
+                >
+                  <option value="">Pilih tutor</option>
+                  {tutors.map((t) => <option key={t.id} value={t.id}>{String(t.nama || '-')}</option>)}
+                </Select>
+                {editing && <p className="text-xs text-muted-foreground">Tutor penyusun tidak dapat diubah.</p>}
+              </div>
+            )}
             <div className="grid gap-2 sm:col-span-2">
               <Label>Judul / Topik RPP *</Label>
               <Input value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required placeholder="Mis. RPP Tema 1 — Diriku" />

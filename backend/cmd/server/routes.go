@@ -3844,15 +3844,28 @@ func (s *Server) createJurnal(c *fiber.Ctx) error {
 		return fiber.NewError(403, "not permitted")
 	}
 	uid := c.Locals("userID").(string)
-	var u User
-	if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
-		return fiber.NewError(403, "no tutor profile")
-	}
 	kelasID := c.FormValue("kelasId")
-	if kelasID == "" {
-		return fiber.NewError(400, "kelasId wajib diisi")
+	mapelID := c.FormValue("mapelId")
+	if kelasID == "" || mapelID == "" {
+		return fiber.NewError(400, "mapelId dan kelasId wajib diisi")
 	}
 	if e := s.canManageKelas(c, kelasID); e != nil {
+		return e
+	}
+	var tutorID string
+	if role == "admin" {
+		tutorID = strings.TrimSpace(c.FormValue("tutorId"))
+		if tutorID == "" {
+			return fiber.NewError(400, "tutorId wajib diisi saat admin mencatat jurnal")
+		}
+	} else {
+		var u User
+		if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
+			return fiber.NewError(403, "no tutor profile")
+		}
+		tutorID = *u.TutorID
+	}
+	if e := s.validateJurnalReferences(tutorID, mapelID, kelasID); e != nil {
 		return e
 	}
 	tanggal, e := time.Parse("2006-01-02", c.FormValue("tanggal"))
@@ -3868,8 +3881,8 @@ func (s *Server) createJurnal(c *fiber.Ctx) error {
 		foto = &fotoPath
 	}
 	j := JurnalMengajar{
-		TutorID:  *u.TutorID,
-		MapelID:  c.FormValue("mapelId"),
+		TutorID:  tutorID,
+		MapelID:  mapelID,
 		KelasID:  kelasID,
 		Tanggal:  tanggal,
 		Materi:   c.FormValue("materi"),
@@ -3889,20 +3902,32 @@ func (s *Server) updateJurnal(c *fiber.Ctx) error {
 	if e := s.db.First(&j, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
 	}
-	uid := c.Locals("userID").(string)
-	var u User
-	if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
-		return fiber.NewError(403, "no tutor profile")
+	role := c.Locals("role").(string)
+	if role != "guru" && role != "admin" {
+		return fiber.NewError(403, "not permitted")
 	}
-	if j.TutorID != *u.TutorID {
-		return fiber.NewError(403, "hanya pemilik jurnal yang dapat mengubah")
+	uid := c.Locals("userID").(string)
+	if role == "guru" {
+		var u User
+		if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
+			return fiber.NewError(403, "no tutor profile")
+		}
+		if j.TutorID != *u.TutorID {
+			return fiber.NewError(403, "hanya pemilik jurnal yang dapat mengubah")
+		}
 	}
 	if v := c.FormValue("mapelId"); v != "" {
+		if err := s.validateJurnalReferences(j.TutorID, v, j.KelasID); err != nil {
+			return err
+		}
 		j.MapelID = v
 	}
 	if v := c.FormValue("kelasId"); v != "" {
 		if e := s.canManageKelas(c, v); e != nil {
 			return e
+		}
+		if err := s.validateJurnalReferences(j.TutorID, j.MapelID, v); err != nil {
+			return err
 		}
 		j.KelasID = v
 	}
@@ -3924,7 +3949,16 @@ func (s *Server) updateJurnal(c *fiber.Ctx) error {
 		return e
 	}
 	if fotoPath != "" {
+		oldPath := j.FotoPath
 		j.FotoPath = &fotoPath
+		if e := s.db.Save(&j).Error; e != nil {
+			return fiber.NewError(400, e.Error())
+		}
+		if oldPath != nil && *oldPath != fotoPath {
+			removeUpload(*oldPath)
+		}
+		s.audit(&uid, "update", "jurnal", j.ID)
+		return c.JSON(j)
 	}
 	if e := s.db.Save(&j).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -3948,8 +3982,27 @@ func (s *Server) deleteJurnal(c *fiber.Ctx) error {
 	if e := s.db.Delete(&j).Error; e != nil {
 		return e
 	}
+	if j.FotoPath != nil {
+		removeUpload(*j.FotoPath)
+	}
 	s.audit(&uid, "delete", "jurnal", j.ID)
 	return c.SendStatus(204)
+}
+
+// validateJurnalReferences protects the journal from dangling IDs. SQLite does
+// not enforce foreign keys for this application, so validating at the boundary
+// is necessary to keep list/detail preloads reliable.
+func (s *Server) validateJurnalReferences(tutorID, mapelID, kelasID string) error {
+	if err := s.db.First(&Tutor{}, "id = ?", tutorID).Error; err != nil {
+		return fiber.NewError(400, "tutor tidak ditemukan")
+	}
+	if err := s.db.First(&MataPelajaran{}, "id = ?", mapelID).Error; err != nil {
+		return fiber.NewError(400, "mata pelajaran tidak ditemukan")
+	}
+	if err := s.db.First(&Kelas{}, "id = ?", kelasID).Error; err != nil {
+		return fiber.NewError(400, "kelas tidak ditemukan")
+	}
+	return nil
 }
 
 func (s *Server) jurnalFoto(c *fiber.Ctx) error {
@@ -4068,10 +4121,6 @@ func (s *Server) createTugas(c *fiber.Ctx) error {
 		return fiber.NewError(403, "not permitted")
 	}
 	uid := c.Locals("userID").(string)
-	var u User
-	if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
-		return fiber.NewError(403, "no tutor profile")
-	}
 	kelasID := c.FormValue("kelasId")
 	if kelasID == "" {
 		return fiber.NewError(400, "kelasId wajib diisi")
@@ -4384,10 +4433,6 @@ func (s *Server) createMateri(c *fiber.Ctx) error {
 		return fiber.NewError(403, "not permitted")
 	}
 	uid := c.Locals("userID").(string)
-	var u User
-	if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
-		return fiber.NewError(403, "no tutor profile")
-	}
 	kelasID := c.FormValue("kelasId")
 	if kelasID == "" {
 		return fiber.NewError(400, "kelasId wajib diisi")
@@ -4824,9 +4869,22 @@ func (s *Server) listRPP(c *fiber.Ctx) error {
 
 func (s *Server) createRPP(c *fiber.Ctx) error {
 	uid := c.Locals("userID").(string)
-	tutorID, ok := s.tutorIDForUser(uid)
-	if !ok {
-		return fiber.NewError(403, "no tutor profile")
+	role := c.Locals("role").(string)
+	var tutorID string
+	if role == "admin" {
+		tutorID = strings.TrimSpace(c.FormValue("tutorId"))
+		if tutorID == "" {
+			return fiber.NewError(400, "tutorId wajib diisi saat admin mengunggah RPP")
+		}
+		if err := s.db.First(&Tutor{}, "id = ?", tutorID).Error; err != nil {
+			return fiber.NewError(400, "tutor tidak ditemukan")
+		}
+	} else {
+		var ok bool
+		tutorID, ok = s.tutorIDForUser(uid)
+		if !ok {
+			return fiber.NewError(403, "no tutor profile")
+		}
 	}
 	if !s.isRppMaker(c) {
 		return fiber.NewError(403, "hanya penyusun RPP yang ditugaskan admin yang dapat mengunggah RPP")
@@ -5297,10 +5355,6 @@ func (s *Server) createKelasVirtual(c *fiber.Ctx) error {
 		return fiber.NewError(403, "not permitted")
 	}
 	uid := c.Locals("userID").(string)
-	var u User
-	if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
-		return fiber.NewError(403, "no tutor profile")
-	}
 	var in kelasVirtualInput
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
@@ -5554,10 +5608,6 @@ func (s *Server) createUjian(c *fiber.Ctx) error {
 		return fiber.NewError(403, "not permitted")
 	}
 	uid := c.Locals("userID").(string)
-	var u User
-	if s.db.First(&u, "id = ?", uid).Error != nil || u.TutorID == nil {
-		return fiber.NewError(403, "no tutor profile")
-	}
 	var in ujianInput
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
