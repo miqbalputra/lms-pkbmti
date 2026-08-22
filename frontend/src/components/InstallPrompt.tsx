@@ -141,26 +141,36 @@ export function InstallPrompt() {
 
   return (
     <Dialog open={showPopup} onOpenChange={(open) => (open ? setShowPopup(true) : dismiss())}>
-      <DialogContent className="max-w-sm gap-5 p-6 sm:p-6">
-        <DialogHeader className="items-center space-y-2 text-center">
-          <img src="/icon-192.png" alt="PKBMTI LMS" className="h-16 w-16 rounded-2xl shadow-lg" />
-          <DialogTitle className="pr-6 text-center text-xl">Install PKBMTI LMS</DialogTitle>
-          <DialogDescription className="text-center">
-            Pasang aplikasi ini di perangkat Anda agar lebih cepat diakses seperti aplikasi biasa.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="max-w-[26rem] gap-0 overflow-hidden border-0 p-0 shadow-2xl [&>button]:right-4 [&>button]:top-4 [&>button]:z-10 [&>button]:rounded-full [&>button]:p-1.5 [&>button]:text-slate-500 [&>button]:transition-colors [&>button]:hover:bg-slate-100 [&>button]:hover:text-slate-900 dark:[&>button]:hover:bg-slate-800 dark:[&>button]:hover:text-white">
+        <div className="relative overflow-hidden px-6 pb-6 pt-8 sm:px-8 sm:pt-9">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-blue-50 to-transparent dark:from-blue-950/40" />
+          <DialogHeader className="relative items-center space-y-3 text-center">
+            <div className="rounded-[1.4rem] bg-white p-2.5 shadow-lg shadow-blue-900/10 ring-1 ring-blue-100 dark:bg-slate-950 dark:ring-blue-900/70">
+              <img src="/icon-192.png" alt="PKBMTI LMS" className="h-14 w-14 rounded-2xl" />
+            </div>
+            <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.13em] text-[#0B63CE] dark:bg-blue-950/50 dark:text-blue-200">
+              PKBM Tunas Ilmu
+            </span>
+            <DialogTitle className="pr-6 text-center text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Install PKBMTI LMS
+            </DialogTitle>
+            <DialogDescription className="max-w-[21rem] text-center text-[15px] leading-6 text-slate-500 dark:text-slate-400">
+              Akses lebih cepat langsung dari layar utama perangkat Anda.
+            </DialogDescription>
+          </DialogHeader>
 
-        {!canUseNativePrompt && (
-          <p className="rounded-xl bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900 dark:bg-blue-950/50 dark:text-blue-100">
-            {instruction}
-          </p>
-        )}
+          {!canUseNativePrompt && (
+            <p className="relative mt-5 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-left text-sm leading-6 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-100">
+              {instruction}
+            </p>
+          )}
+        </div>
 
-        <DialogFooter className="gap-3 sm:flex-row">
+        <DialogFooter className="border-t border-slate-100 bg-slate-50 px-6 py-4 sm:flex-row sm:space-x-0 sm:px-8 dark:border-slate-800 dark:bg-slate-900/70">
           <button
             type="button"
             onClick={dismiss}
-            className="rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
           >
             Nanti saja
           </button>
@@ -168,16 +178,16 @@ export function InstallPrompt() {
             <button
               type="button"
               onClick={() => void handleInstall()}
-              className="flex items-center justify-center gap-2 rounded-lg bg-[#0B63CE] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#0754B4]"
+              className="flex items-center justify-center gap-2 rounded-xl bg-[#0B63CE] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-[#0754B4] hover:shadow-blue-600/30"
             >
               <Download className="h-4 w-4" />
-              Install
+              Install sekarang
             </button>
           ) : (
             <button
               type="button"
               onClick={dismiss}
-              className="rounded-lg bg-[#0B63CE] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#0754B4]"
+              className="rounded-xl bg-[#0B63CE] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-[#0754B4] hover:shadow-blue-600/30"
             >
               Saya mengerti
             </button>

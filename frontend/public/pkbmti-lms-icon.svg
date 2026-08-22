@@ -1,13 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
   <title id="title">PKBMTI LMS</title>
-  <defs>
-    <linearGradient id="blue" x1="72" y1="44" x2="440" y2="468" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1684E8"/>
-      <stop offset="1" stop-color="#0754B4"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="112" fill="url(#blue)"/>
-  <path fill="#fff" d="M166 132h105c54 0 91 36 91 87s-37 87-91 87h-54v76h-51V132Zm51 45v84h49c28 0 45-16 45-42s-17-42-45-42h-49Z"/>
-  <path d="M136 359c37-19 74-19 111 0 37-19 74-19 111 0v31c-37-19-74-19-111 0-37-19-74-19-111 0v-31Z" fill="#BFE1FF"/>
-  <path d="M247 359v31" stroke="#fff" stroke-width="10" stroke-linecap="round"/>
+  <rect width="512" height="512" rx="128" fill="#0B63CE"/>
+  <path fill="#fff" d="M112 166c54-20 103-8 144 32v174c-42-36-91-47-144-28V166Zm288 0c-54-20-103-8-144 32v174c42-36 91-47 144-28V166Z"/>
+  <path d="M256 198v174" stroke="#0B63CE" stroke-width="16" stroke-linecap="round"/>
 </svg>
