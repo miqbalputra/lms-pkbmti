@@ -1,12 +1,12 @@
-const CACHE_NAME = 'pkbmti-lms-v2';
+const CACHE_NAME = 'pkbmti-lms-v3';
 const APP_SHELL = [
   '/',
   '/index.html',
-  '/manifest.json',
+  '/manifest.json?v=3',
   '/pkbmti-lms-icon.svg',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/icon-maskable.png',
+  '/pkbmti-lms-book-192.png',
+  '/pkbmti-lms-book-512.png',
+  '/pkbmti-lms-book-maskable.png',
 ];
 
 self.addEventListener('install', (e) => {

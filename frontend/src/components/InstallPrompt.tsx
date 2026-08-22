@@ -146,7 +146,7 @@ export function InstallPrompt() {
           <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-blue-50 to-transparent dark:from-blue-950/40" />
           <DialogHeader className="relative items-center space-y-3 text-center">
             <div className="rounded-[1.4rem] bg-white p-2.5 shadow-lg shadow-blue-900/10 ring-1 ring-blue-100 dark:bg-slate-950 dark:ring-blue-900/70">
-              <img src="/icon-192.png" alt="PKBMTI LMS" className="h-14 w-14 rounded-2xl" />
+              <img src="/pkbmti-lms-book-192.png" alt="PKBMTI LMS" className="h-14 w-14 rounded-2xl" />
             </div>
             <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.13em] text-[#0B63CE] dark:bg-blue-950/50 dark:text-blue-200">
               PKBM Tunas Ilmu

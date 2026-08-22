@@ -8,9 +8,9 @@ const publicDirectory = resolve(scriptDirectory, '..', 'public')
 const svg = await readFile(resolve(publicDirectory, 'pkbmti-lms-icon.svg'))
 
 const assets = [
-  ['icon-192.png', 192],
-  ['icon-512.png', 512],
-  ['icon-maskable.png', 512],
+  ['pkbmti-lms-book-192.png', 192],
+  ['pkbmti-lms-book-512.png', 512],
+  ['pkbmti-lms-book-maskable.png', 512],
 ]
 
 await Promise.all(
