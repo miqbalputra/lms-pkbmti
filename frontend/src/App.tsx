@@ -89,6 +89,7 @@ const UjianMonitorView = lazy(() => import('./pages/UjianMonitorView').then((m) 
 const NotifikasiView = lazy(() => import('./pages/NotifikasiView').then((m) => ({ default: m.NotifikasiView })))
 const KalenderView = lazy(() => import('./pages/KalenderView').then((m) => ({ default: m.KalenderView })))
 const AnalyticsView = lazy(() => import('./pages/AnalyticsView').then((m) => ({ default: m.AnalyticsView })))
+const KepatuhanPembelajaranView = lazy(() => import('./pages/KepatuhanPembelajaranView').then((m) => ({ default: m.KepatuhanPembelajaranView })))
 const DashboardCharts = lazy(() =>
   import('./DashboardCharts').then((m) => ({ default: m.DashboardCharts }))
 )
@@ -355,6 +356,7 @@ function Workspace({
   if (page === 'notifikasi') return <NotifikasiView token={token} />
   if (page === 'kalender') return <KalenderView token={token} readOnly={user.role === 'kepala_sekolah' || user.role === 'guru'} />
   if (page === 'analytics') return <AnalyticsView token={token} />
+  if (page === 'kepatuhan-pembelajaran') return user.role === 'admin' || user.role === 'kepala_sekolah' ? <KepatuhanPembelajaranView token={token} user={user} /> : <Restricted />
   if (page === 'portal-ortu') {
     window.open('/orangtua', '_blank')
     return <Navigate to={pathFor('dashboard')} replace />

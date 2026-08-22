@@ -114,6 +114,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'laporan', label: 'Pusat Laporan', icon: FileBarChart, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'analytics', label: 'Analytics Dashboard', icon: FileBarChart, roles: ['admin', 'kepala_sekolah'] },
+      { id: 'kepatuhan-pembelajaran', label: 'Kepatuhan Pembelajaran', icon: ClipboardCheck, roles: ['admin', 'kepala_sekolah'] },
       { id: 'import', label: 'Import Terpusat', icon: FileUp, roles: ['admin', 'guru'] },
     ],
   },

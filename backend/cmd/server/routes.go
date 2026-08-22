@@ -70,6 +70,10 @@ func (s *Server) routes(api fiber.Router) {
 	// Scope kelas dan kelengkapan data dihitung server-side agar data guru lain
 	// tidak pernah terbaca oleh browser.
 	api.Get("/dashboard/guru-reminders", s.guruDashboardReminders)
+	// Dashboard kepatuhan adalah ringkasan baca-saja untuk admin dan kepala
+	// sekolah. Handler memeriksa peran secara eksplisit agar route ini tetap
+	// terdaftar sebelum managementRead (lihat catatan Fiber di atas).
+	api.Get("/dashboard/kepatuhan-pembelajaran", s.operationalCompliance)
 
 	// Bare-api writes (guru may create/update presensi for classes they manage;
 	// canManageKelas inside each handler enforces that).

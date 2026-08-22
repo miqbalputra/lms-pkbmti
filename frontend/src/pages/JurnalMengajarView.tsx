@@ -91,19 +91,28 @@ export function JurnalMengajarView({
     setAdding(true)
   }
 
-  // Aksi dari popup pengingat membawa kelas dan tanggal melalui URL. Konsumsi
-  // sekali saja lalu bersihkan query agar refresh halaman tidak membuka form
-  // jurnal kembali setelah guru membatalkannya.
+  // Aksi pengingat guru dan dashboard kepatuhan membawa kelas/tanggal melalui
+  // URL. Admin juga menerima tutorId agar formulir tetap tercatat atas nama
+  // wali kelas terkait; kepala sekolah hanya melihat data (read-only).
+  // Parameter dikonsumsi sekali lalu dibersihkan agar refresh tidak membuka
+  // formulir kembali setelah pengguna membatalkannya.
   useEffect(() => {
     const reminderClassID = searchParams.get('kelasId') || ''
     const reminderDate = searchParams.get('tanggal') || ''
-    const key = `${reminderClassID}|${reminderDate}`
-    if (!isGuru || !reminderClassID || !/^\d{4}-\d{2}-\d{2}$/.test(reminderDate) || reminderPrefillHandled.current === key) return
+    const reminderTutorID = searchParams.get('tutorId') || ''
+    const key = `${reminderClassID}|${reminderDate}|${reminderTutorID}`
+    const canPrefill = !readOnly && (isGuru || isAdmin)
+    if (!canPrefill || !reminderClassID || !/^\d{4}-\d{2}-\d{2}$/.test(reminderDate) || reminderPrefillHandled.current === key) return
     if (!kelas.length) return
 
     reminderPrefillHandled.current = key
-    if (kelas.some((classRow) => classRow.id === reminderClassID && String(classRow.waliKelasId || '') === (user.tutorId || ''))) {
-      setForm({ ...emptyForm, kelasId: reminderClassID, tanggal: reminderDate })
+    const validClass = kelas.some((classRow) => {
+      if (classRow.id !== reminderClassID) return false
+      const waliKelasID = String(classRow.waliKelasId || '')
+      return isGuru ? waliKelasID === (user.tutorId || '') : waliKelasID === reminderTutorID
+    })
+    if (validClass) {
+      setForm({ ...emptyForm, tutorId: isAdmin ? reminderTutorID : '', kelasId: reminderClassID, tanggal: reminderDate })
       setEditing(null)
       setFoto(null)
       setAdding(true)
@@ -111,8 +120,9 @@ export function JurnalMengajarView({
     const nextParams = new URLSearchParams(searchParams)
     nextParams.delete('kelasId')
     nextParams.delete('tanggal')
+    nextParams.delete('tutorId')
     setSearchParams(nextParams, { replace: true })
-  }, [isGuru, kelas, searchParams, setSearchParams, user.tutorId])
+  }, [isAdmin, isGuru, kelas, readOnly, searchParams, setSearchParams, user.tutorId])
 
   function openEdit(r: Row) {
     setEditing(r)

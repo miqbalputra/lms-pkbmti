@@ -78,6 +78,7 @@ export const PAGE_IDS = [
   'kartu-pelajar',
   'laporan',
   'analytics',
+  'kepatuhan-pembelajaran',
   'import',
   'buku',
   'buku-kelas',
