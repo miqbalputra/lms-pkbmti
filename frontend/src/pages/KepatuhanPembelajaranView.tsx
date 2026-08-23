@@ -7,8 +7,11 @@ import { Card } from '../components/ui/card'
 import { EmptyState, PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { request } from '../lib/api'
 import { pathFor } from '../lib/router'
+import { formatWibDate } from '../lib/wib'
+import { KepatuhanDetailReports } from './KepatuhanDetailReports'
 
 type Option = { id: string; label: string }
 
@@ -77,11 +80,7 @@ const emptyData: ComplianceData = {
 }
 
 function formatDate(value: string) {
-  const date = new Date(`${value}T00:00:00+07:00`)
-  if (Number.isNaN(date.getTime())) return value || '—'
-  return new Intl.DateTimeFormat('id-ID', {
-    timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', year: 'numeric',
-  }).format(date)
+  return value ? formatWibDate(value) : '—'
 }
 
 function taskLabel(type: Task['type']) {
@@ -94,6 +93,7 @@ export function KepatuhanPembelajaranView({ token, user }: { token: string; user
   const [filters, setFilters] = useState<Filters>({ ...emptyData.filters })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [tab, setTab] = useState<'ringkasan' | 'presensi' | 'jurnal'>('ringkasan')
 
   useEffect(() => {
     const controller = new AbortController()
@@ -174,6 +174,14 @@ export function KepatuhanPembelajaranView({ token, user }: { token: string; user
         }
       />
 
+      <Tabs value={tab} onValueChange={(value) => setTab(value as 'ringkasan' | 'presensi' | 'jurnal')}>
+        <TabsList className="grid h-auto w-full grid-cols-3 sm:w-auto sm:inline-grid">
+          <TabsTrigger value="ringkasan">Ringkasan</TabsTrigger>
+          <TabsTrigger value="presensi">Detail Presensi</TabsTrigger>
+          <TabsTrigger value="jurnal">Detail Jurnal</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="ringkasan" className="space-y-6">
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs sm:p-5">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
           <Filter className="h-4 w-4 text-primary" /> Filter pemantauan
@@ -305,6 +313,26 @@ export function KepatuhanPembelajaranView({ token, user }: { token: string; user
           </TableBody>
         </Table>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="presensi" className="space-y-6">
+          <KepatuhanDetailReports
+            token={token}
+            kind="presensi"
+            active={tab === 'presensi'}
+            filters={filters}
+          />
+        </TabsContent>
+
+        <TabsContent value="jurnal" className="space-y-6">
+          <KepatuhanDetailReports
+            token={token}
+            kind="jurnal"
+            active={tab === 'jurnal'}
+            filters={filters}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

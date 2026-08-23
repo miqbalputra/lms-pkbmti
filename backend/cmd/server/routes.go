@@ -74,6 +74,9 @@ func (s *Server) routes(api fiber.Router) {
 	// sekolah. Handler memeriksa peran secara eksplisit agar route ini tetap
 	// terdaftar sebelum managementRead (lihat catatan Fiber di atas).
 	api.Get("/dashboard/kepatuhan-pembelajaran", s.operationalCompliance)
+	// Detail laporan kepatuhan tetap baca-saja dan menggunakan pemeriksaan peran
+	// eksplisit yang sama seperti ringkasannya.
+	api.Get("/dashboard/kepatuhan-pembelajaran/detail", s.operationalComplianceDetail)
 
 	// Bare-api writes (guru may create/update presensi for classes they manage;
 	// canManageKelas inside each handler enforces that).
