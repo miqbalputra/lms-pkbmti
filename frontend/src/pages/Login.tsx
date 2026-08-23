@@ -12,6 +12,7 @@ import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { TurnstileWidget } from '../components/ui/turnstile'
+import { wibYear } from '../lib/wib'
 
 interface User {
   id: string
@@ -120,7 +121,7 @@ export function LoginView({ onLogin, requestFn }: LoginProps) {
 
           {/* Footer Info */}
           <div className="text-xs text-white/70 font-medium z-10">
-            © {new Date().getFullYear()} PKBM Tunas Ilmu • Tunas Ilmu Learn
+            © {wibYear()} PKBM Tunas Ilmu • Tunas Ilmu Learn
           </div>
         </div>
 

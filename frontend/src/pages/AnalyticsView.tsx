@@ -3,6 +3,7 @@ import { BarChart3, Users, School, BookOpen, CalendarCheck, TrendingUp, Filter }
 import { Card } from '../components/ui/card'
 import { PageToolbar } from '../components/ui/page'
 import { request } from '../lib/api'
+import { wibYear } from '../lib/wib'
 import {
   BarChart,
   Bar,
@@ -33,7 +34,7 @@ export function AnalyticsView({ token }: { token: string }) {
   const [siswa, setSiswa] = useState<Record<string, unknown>[]>([])
   const [loading, setLoading] = useState(true)
   const [semester, setSemester] = useState('')
-  const [year, setYear] = useState(new Date().getFullYear())
+  const [year, setYear] = useState(wibYear())
 
   useEffect(() => {
     setLoading(true)
@@ -54,9 +55,12 @@ export function AnalyticsView({ token }: { token: string }) {
     if (!semester) return siswa
     return siswa.filter(s => {
       const created = s.createdAt ? new Date(String(s.createdAt)) : null
-      if (!created) return true
+      if (!created || Number.isNaN(created.getTime())) return true
       const sem = semester === '1' ? [7, 8, 9, 10, 11, 12] : [1, 2, 3, 4, 5, 6]
-      return created.getFullYear() === year && sem.includes(created.getMonth() + 1)
+      const createdParts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jakarta', year: 'numeric', month: 'numeric' }).formatToParts(created)
+      const createdYear = Number(createdParts.find((part) => part.type === 'year')?.value)
+      const createdMonth = Number(createdParts.find((part) => part.type === 'month')?.value)
+      return createdYear === year && sem.includes(createdMonth)
     })
   }, [siswa, semester, year])
 
@@ -109,7 +113,7 @@ export function AnalyticsView({ token }: { token: string }) {
                 onChange={(e) => setYear(Number(e.target.value))}
                 className="bg-transparent text-sm border-none outline-none text-foreground cursor-pointer"
               >
-                {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map(y => (
+                {Array.from({ length: 5 }, (_, i) => wibYear() - 2 + i).map(y => (
                   <option key={y} value={y}>{y}</option>
                 ))}
               </select>

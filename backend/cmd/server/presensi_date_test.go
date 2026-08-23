@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,5 +57,52 @@ func TestPresensiOnlyAcceptsSaturdayWIBOnCreateAndUpdate(t *testing.T) {
 	}
 	if !sameDay(persisted.Tanggal, saturday.In(wibLocation)) {
 		t.Fatalf("rejected update must preserve original Saturday, got %s", persisted.Tanggal)
+	}
+}
+
+func TestPresensiExportKeepsSaturdayCalendarDateInWIB(t *testing.T) {
+	s, app := setupE2EServer(t)
+	token, _ := getAdminToken(t, app)
+
+	kelas := Kelas{Jenjang: 1, NamaRombel: "EXPORT-WIB"}
+	if err := s.db.Create(&kelas).Error; err != nil {
+		t.Fatalf("create class: %v", err)
+	}
+	siswa := PesertaDidik{Nama: "Siswa Export WIB", NIS: "WIB-1", NISN: "WIB-1", KelasID: kelas.ID, Status: "aktif"}
+	if err := s.db.Create(&siswa).Error; err != nil {
+		t.Fatalf("create student: %v", err)
+	}
+
+	// This instant is Saturday 00:00 WIB, but is commonly returned by a
+	// database driver as Friday 17:00 UTC.
+	meeting := Presensi{
+		KelasID:         kelas.ID,
+		Tanggal:         time.Date(2026, time.August, 7, 17, 0, 0, 0, time.UTC),
+		Semester:        "Ganjil",
+		StatusPertemuan: "berlangsung",
+	}
+	if err := s.db.Create(&meeting).Error; err != nil {
+		t.Fatalf("create meeting: %v", err)
+	}
+	if err := s.db.Create(&PresensiDetail{PresensiID: meeting.ID, PesertaDidikID: siswa.ID, StatusKehadiran: "Hadir"}).Error; err != nil {
+		t.Fatalf("create attendance detail: %v", err)
+	}
+
+	res, err := makeRequest(app, http.MethodGet, "/api/presensi/export?kelasId="+kelas.ID, token, nil, "")
+	if err != nil {
+		t.Fatalf("export request: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("export returned %d", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	if !strings.Contains(string(body), "2026-08-08") {
+		t.Fatalf("export must contain Saturday WIB date, got %s", body)
+	}
+	if strings.Contains(string(body), "2026-08-07") {
+		t.Fatalf("export must not contain previous UTC calendar date, got %s", body)
 	}
 }

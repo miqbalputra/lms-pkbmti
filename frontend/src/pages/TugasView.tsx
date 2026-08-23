@@ -29,6 +29,7 @@ import {
 } from '../components/ui/dialog'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDate } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -39,8 +40,7 @@ function kelasLabel(k: Row): string {
 }
 
 function fmtDate(v: unknown): string {
-  if (!v) return ''
-  return String(v).slice(0, 10)
+  return formatWibDate(v)
 }
 
 function statusBadge(s: string) {

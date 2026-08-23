@@ -30,6 +30,7 @@ import {
 } from '../components/ui/dialog'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDateTime, wibDateTimeLocalToISO, wibDateTimeLocalValue } from '../lib/wib'
 import { useNavigate } from 'react-router-dom'
 import { pathFor } from '../lib/router'
 
@@ -42,8 +43,7 @@ function kelasLabel(k: Row): string {
 }
 
 function fmtDateTime(v: unknown): string {
-  if (!v) return ''
-  return String(v).slice(0, 16).replace('T', ' ')
+  return formatWibDateTime(v)
 }
 
 const emptyForm = {
@@ -114,8 +114,8 @@ export function UjianView({
       mapelId: String(r.mapelId || ''),
       kelasId: String(r.kelasId || ''),
       judul: String(r.judul || ''),
-      waktuMulai: String(r.waktuMulai || '').slice(0, 16),
-      waktuSelesai: String(r.waktuSelesai || '').slice(0, 16),
+      waktuMulai: wibDateTimeLocalValue(r.waktuMulai),
+      waktuSelesai: wibDateTimeLocalValue(r.waktuSelesai),
       durasiMenit: String(r.durasiMenit ?? '60'),
       gracePeriodMenit: String(r.gracePeriodMenit ?? '5'),
       batasTabSwitch: String(r.batasTabSwitch ?? '0'),
@@ -140,8 +140,8 @@ export function UjianView({
       mapelId: form.mapelId || undefined,
       kelasId: form.kelasId,
       judul: form.judul,
-      waktuMulai: form.waktuMulai ? new Date(form.waktuMulai).toISOString() : undefined,
-      waktuSelesai: form.waktuSelesai ? new Date(form.waktuSelesai).toISOString() : undefined,
+      waktuMulai: form.waktuMulai ? wibDateTimeLocalToISO(form.waktuMulai) : undefined,
+      waktuSelesai: form.waktuSelesai ? wibDateTimeLocalToISO(form.waktuSelesai) : undefined,
       durasiMenit: Number(form.durasiMenit) || 0,
       gracePeriodMenit: Number(form.gracePeriodMenit) || 0,
       batasTabSwitch: Number(form.batasTabSwitch) || 0,

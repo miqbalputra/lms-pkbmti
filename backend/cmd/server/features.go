@@ -611,9 +611,10 @@ func (s *Server) listKalenderEvent(c *fiber.Ctx) error {
 		q = q.Where("tahun_ajaran_id = ?", v)
 	}
 	if v := c.Query("bulan"); v != "" {
-		// Filter by month (YYYY-MM)
-		q = q.Where("tanggal_mulai >= ? AND tanggal_mulai < ?",
-			v+"-01", v+"-32")
+		// Filter by month (YYYY-MM) using WIB calendar boundaries.
+		if start, err := time.ParseInLocation("2006-01", v, wibLocation); err == nil {
+			q = q.Where("tanggal_mulai >= ? AND tanggal_mulai < ?", start, start.AddDate(0, 1, 0))
+		}
 	}
 	var rows []KalenderEvent
 	q.Find(&rows)
@@ -641,6 +642,11 @@ func (s *Server) createKalenderEvent(c *fiber.Ctx) error {
 	}
 	if in.Judul == "" || in.TanggalMulai.IsZero() {
 		return fiber.NewError(400, "judul dan tanggalMulai wajib diisi")
+	}
+	in.TanggalMulai = in.TanggalMulai.In(wibLocation)
+	if in.TanggalSelesai != nil {
+		value := in.TanggalSelesai.In(wibLocation)
+		in.TanggalSelesai = &value
 	}
 	ev := KalenderEvent{
 		Judul:            in.Judul,
@@ -682,6 +688,13 @@ func (s *Server) updateKalenderEvent(c *fiber.Ctx) error {
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if !in.TanggalMulai.IsZero() {
+		in.TanggalMulai = in.TanggalMulai.In(wibLocation)
+	}
+	if in.TanggalSelesai != nil {
+		value := in.TanggalSelesai.In(wibLocation)
+		in.TanggalSelesai = &value
 	}
 	if in.Judul != "" {
 		ev.Judul = in.Judul

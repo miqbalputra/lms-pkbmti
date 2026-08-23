@@ -22,6 +22,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDate, wibDateTimeLocalToISO } from '../lib/wib'
 
 type Row = Record<string, unknown> & { id: string }
 
@@ -30,8 +31,7 @@ function kelasLabel(k: Row): string {
 }
 
 function fmtDate(v: unknown): string {
-  if (!v) return ''
-  return String(v).slice(0, 10)
+  return formatWibDate(v)
 }
 
 const emptyForm = {
@@ -118,8 +118,8 @@ export function PengumumanView({
       target: form.target,
       kelasId: form.target === 'kelas' ? form.kelasId : null,
       aktif: form.aktif,
-      tanggalMulai: form.tanggalMulai ? new Date(form.tanggalMulai).toISOString() : null,
-      tanggalSelesai: form.tanggalSelesai ? new Date(form.tanggalSelesai).toISOString() : null,
+      tanggalMulai: form.tanggalMulai ? wibDateTimeLocalToISO(form.tanggalMulai) : null,
+      tanggalSelesai: form.tanggalSelesai ? wibDateTimeLocalToISO(form.tanggalSelesai) : null,
     }
     setSubmitting(true)
     try {

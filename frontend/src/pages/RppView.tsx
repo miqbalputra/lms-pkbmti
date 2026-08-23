@@ -20,6 +20,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDate, wibDateInputValue } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -124,7 +125,7 @@ export function RppView({
 
   function openEdit(r: Row) {
     setEditing(r)
-    const tgl = r.tanggal ? String(r.tanggal).slice(0, 10) : ''
+    const tgl = wibDateInputValue(r.tanggal)
     setForm({
       tutorId: String(r.tutorId || ''),
       mapelId: String(r.mapelId || ''),
@@ -402,7 +403,7 @@ export function RppView({
                   <TableCell>Kelas {String(r.jenjang ?? '-')}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{String(ta.namaTahunAjaran || '-')}</TableCell>
                   <TableCell className="text-muted-foreground">{r.pertemuanKe ? String(r.pertemuanKe) : '-'}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{r.tanggal ? String(r.tanggal).slice(0, 10) : '-'}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{r.tanggal ? formatWibDate(r.tanggal) : '-'}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <div className="flex items-center gap-1"><FileText className="h-3 w-3" />{String(r.tipe || '')} {fmtSize(Number(r.ukuran) || 0)}</div>
                   </TableCell>

@@ -197,7 +197,7 @@ func (s *Server) guruPendingPresensi(classes []Kelas, start, end time.Time) ([]g
 			if date.Weekday() != time.Saturday {
 				continue
 			}
-			dateISO := date.Format("2006-01-02")
+			dateISO := wibTimeFormat(date, "2006-01-02")
 			meeting, exists := meetingByClassDate[class.ID+"|"+dateISO]
 			if exists && strings.EqualFold(meeting.StatusPertemuan, "libur") {
 				continue
@@ -265,7 +265,7 @@ func (s *Server) guruPendingJurnal(tutorID string, classes []Kelas, today time.T
 			continue
 		}
 		reminders = append(reminders, guruReminderJurnal{
-			ClassID: class.ID, ClassLabel: kelasLabel(class), Date: today.Format("2006-01-02"),
+			ClassID: class.ID, ClassLabel: kelasLabel(class), Date: wibTimeFormat(today, "2006-01-02"),
 		})
 	}
 	sort.SliceStable(reminders, func(i, j int) bool { return reminders[i].ClassLabel < reminders[j].ClassLabel })

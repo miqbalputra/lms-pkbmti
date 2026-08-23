@@ -8,6 +8,7 @@ import { Label } from '../components/ui/label'
 import { PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { formatWibDate } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 type Row = Record<string, unknown> & { id: string }
@@ -204,7 +205,7 @@ export function RekapBuku({ token }: { token: string }) {
                     <TableCell className="font-medium">{String((p.pesertaDidik as Row)?.nama || '-')}</TableCell>
                     <TableCell>{kelasLabel(k)}</TableCell>
                     <TableCell>{String((p.buku as Row)?.judul || '-')}</TableCell>
-                    <TableCell className="text-sm">{String((p.tanggalPinjam || '').toString().slice(0, 10))}</TableCell>
+                    <TableCell className="text-sm">{formatWibDate(p.tanggalPinjam)}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{String(p.semester || '-')}</Badge>
                     </TableCell>
@@ -218,7 +219,7 @@ export function RekapBuku({ token }: { token: string }) {
                       )}
                     </TableCell>
                     <TableCell className="text-sm">
-                      {kembali ? String((kembali.tanggalKembali || '').toString().slice(0, 10)) : '—'}
+                      {kembali ? formatWibDate(kembali.tanggalKembali) : '—'}
                     </TableCell>
                     <TableCell className="text-sm">{kembali ? String(kembali.kondisiBuku || '-') : '—'}</TableCell>
                   </TableRow>

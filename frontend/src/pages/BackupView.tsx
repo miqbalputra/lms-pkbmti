@@ -9,6 +9,7 @@ import { Label } from '../components/ui/label'
 import { PageToolbar } from '../components/ui/page'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { request, apiBase } from '../lib/api'
+import { formatWibDateTime } from '../lib/wib'
 
 type Backup = {
   name: string
@@ -26,9 +27,7 @@ function formatBytes(n: number): string {
 }
 
 function formatTime(s: string): string {
-  const d = new Date(s)
-  if (isNaN(d.getTime())) return s
-  return d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
+  return formatWibDateTime(s) || s
 }
 
 // Download a binary backup file (the read endpoints accept the admin JWT).

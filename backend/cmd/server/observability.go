@@ -43,7 +43,7 @@ func unixTimeOrNil(value int64) any {
 	if value <= 0 {
 		return nil
 	}
-	return time.Unix(value, 0).UTC().Format(time.RFC3339)
+	return wibTimeFormat(time.Unix(value, 0), time.RFC3339)
 }
 
 func (s *Server) healthPayload() (fiber.Map, bool) {

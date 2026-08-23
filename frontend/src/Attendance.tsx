@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, FileText, Image
 import { useSearchParams } from 'react-router-dom'
 import { AttendanceRecap } from './AttendanceRecap'
 import { apiBase, request } from './lib/api'
-import { isSaturdayWibDate, isTodaySaturdayWib, nextSaturdayWib, wibToday } from './lib/wib'
+import { formatWibDate, isSaturdayWibDate, isTodaySaturdayWib, nextSaturdayWib, wibDateInputValue, wibToday } from './lib/wib'
 import { Alert, AlertDescription } from './components/ui/alert'
 import {
   AlertDialog,
@@ -192,7 +192,7 @@ export function AttendanceWorkspace({
     const summary = meetings.find((meeting) => meeting.id === id)
     if (!summary) return
     setClassID(String(summary.kelasId))
-    setDate(String(summary.tanggal).slice(0, 10))
+    setDate(wibDateInputValue(summary.tanggal))
     setStatus(String(summary.statusPertemuan))
     setSignature('')
     setPhotos([])
@@ -202,7 +202,7 @@ export function AttendanceWorkspace({
       const row = await request('/presensi/' + id, token)
       if (selectionVersion.current !== version) return
       setClassID(String(row.kelasId))
-      setDate(String(row.tanggal).slice(0, 10))
+      setDate(wibDateInputValue(row.tanggal))
       setStatus(String(row.statusPertemuan))
       setSignature(String(row.tandaTangan || ''))
 
@@ -479,7 +479,7 @@ export function AttendanceWorkspace({
                   <option key={m.id} value={m.id}>
                     Kelas {String((m.kelas as Row)?.jenjang)}
                     {String((m.kelas as Row)?.namaRombel)} -{' '}
-                    {new Date(String(m.tanggal)).toLocaleDateString('id-ID')}
+                    {formatWibDate(m.tanggal)}
                   </option>
                 ))}
               </Select>

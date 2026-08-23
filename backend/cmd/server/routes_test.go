@@ -109,12 +109,19 @@ func TestWIBLocationAndPresensiDateNeverUseNilLocation(t *testing.T) {
 	if wibLocation == nil {
 		t.Fatal("WIB location must never be nil")
 	}
+	if time.Local != wibLocation {
+		t.Fatalf("application local timezone must be WIB, got %v", time.Local)
+	}
 	parsed, err := parsePresensiDate("2026-08-08")
 	if err != nil {
 		t.Fatalf("expected WIB date to parse: %v", err)
 	}
 	if parsed.Weekday() != time.Saturday || parsed.Location() == nil {
 		t.Fatalf("unexpected parsed WIB date: %v", parsed)
+	}
+	dateTime, err := parseWIBDateTime("2026-08-08T08:30")
+	if err != nil || dateTime.Location() != wibLocation || dateTime.Hour() != 8 || dateTime.Minute() != 30 {
+		t.Fatalf("unexpected WIB datetime parse: %v", dateTime)
 	}
 }
 

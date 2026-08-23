@@ -10,6 +10,7 @@ import { PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
 import { Signature } from '../components/ui/Signature'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { formatWibDate, wibToday } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 type Row = Record<string, unknown> & { id: string }
@@ -126,7 +127,7 @@ function PinjamForm({
 }) {
   const [siswa, setSiswa] = useState<Row[]>([])
   const [bukuKelas, setBukuKelas] = useState<Row[]>([])
-  const [tanggal, setTanggal] = useState(() => new Date().toISOString().slice(0, 10))
+  const [tanggal, setTanggal] = useState(() => wibToday())
   const [ttd, setTtd] = useState('')
   const [saving, setSaving] = useState(false)
   // checked[pesertaDidikId][bukuId] = true
@@ -292,7 +293,7 @@ function KembaliList({ token, kelasId }: { token: string; kelasId: string }) {
               <TableRow key={r.id}>
                 <TableCell className="font-medium">{String((r.pesertaDidik as Row)?.nama || '-')}</TableCell>
                 <TableCell>{String((r.buku as Row)?.judul || '-')}</TableCell>
-                <TableCell className="text-sm">{String((r.tanggalPinjam || '').toString().slice(0, 10))}</TableCell>
+                <TableCell className="text-sm">{formatWibDate(r.tanggalPinjam)}</TableCell>
               </TableRow>
             ))}
             {!rows.length && (
@@ -323,7 +324,7 @@ function KembaliForm({
   readOnly: boolean
 }) {
   const [rows, setRows] = useState<Row[]>([])
-  const [tanggal, setTanggal] = useState(() => new Date().toISOString().slice(0, 10))
+  const [tanggal, setTanggal] = useState(() => wibToday())
   const [ttd, setTtd] = useState('')
   const [saving, setSaving] = useState(false)
   // state[peminjamanId] = { checked, kondisi, catatan }
@@ -443,7 +444,7 @@ function KembaliForm({
                     </TableCell>
                     <TableCell className="font-medium">{String((r.pesertaDidik as Row)?.nama || '-')}</TableCell>
                     <TableCell>{String((r.buku as Row)?.judul || '-')}</TableCell>
-                    <TableCell className="text-sm">{String((r.tanggalPinjam || '').toString().slice(0, 10))}</TableCell>
+                    <TableCell className="text-sm">{formatWibDate(r.tanggalPinjam)}</TableCell>
                     <TableCell>
                       <Select
                         value={st.kondisi}

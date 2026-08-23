@@ -28,6 +28,7 @@ import {
 } from '../components/ui/dialog'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDateTime, wibDateInputValue } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -99,7 +100,7 @@ export function MateriView({
 
   function openEdit(r: Row) {
     setEditing(r)
-    const tgl = r.tanggal ? String(r.tanggal).slice(0, 10) : ''
+    const tgl = wibDateInputValue(r.tanggal)
     setForm({
       mapelId: String(r.mapelId || ''),
       kelasId: String(r.kelasId || ''),
@@ -442,7 +443,7 @@ export function MateriView({
                 </Button>
               ) : null}
               {detail?.tanggal ? (
-                <span className="text-xs text-muted-foreground">Tanggal: {String(detail.tanggal).slice(0, 10)}</span>
+                <span className="text-xs text-muted-foreground">Tanggal: {formatWibDateTime(detail.tanggal)}</span>
               ) : null}
             </div>
 
@@ -479,7 +480,7 @@ export function MateriView({
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {komentar.map((k) => (
                   <div key={k.id} className="rounded-lg bg-secondary/50 px-3 py-2 text-sm">
-                    <div className="text-xs text-muted-foreground">{String(k.userId || 'staf')} · {String(k.createdAt || '').slice(0, 16).replace('T', ' ')}</div>
+                    <div className="text-xs text-muted-foreground">{String(k.userId || 'staf')} · {formatWibDateTime(k.createdAt)}</div>
                     <div>{String(k.isi || '')}</div>
                   </div>
                 ))}

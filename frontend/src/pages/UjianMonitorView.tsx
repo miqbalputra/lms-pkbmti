@@ -7,6 +7,7 @@ import { Badge } from '../components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { downloadFile, request } from '../lib/api'
 import { toast } from 'sonner'
+import { formatWibDateTime } from '../lib/wib'
 
 type Peserta = Record<string, unknown> & { id: string }
 
@@ -45,7 +46,7 @@ export function UjianMonitorView({
     }
   }
 
-  const fmt = (v: unknown) => (v ? String(v).slice(0, 16).replace('T', ' ') : '-')
+  const fmt = (v: unknown) => formatWibDateTime(v) || '-'
 
   return (
     <div className="space-y-4">

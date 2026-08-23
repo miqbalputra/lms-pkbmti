@@ -13,6 +13,7 @@ import {
   Trash2,
   UsersRound,
 } from 'lucide-react'
+import { formatWibDate, wibDateInputValue } from './lib/wib'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -299,20 +300,12 @@ async function request(path: string, token: string, method = 'GET', body?: unkno
 
 function formatDate(value: unknown): string {
   if (!value) return '-'
-  try {
-    return new Date(String(value)).toLocaleDateString('id-ID', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    })
-  } catch {
-    return String(value)
-  }
+  return formatWibDate(value) || String(value)
 }
 
 function formatDateForInput(value: unknown): string {
   if (!value) return ''
-  return String(value).slice(0, 10)
+  return wibDateInputValue(value)
 }
 
 function getRowDisplayName(row: Row | null): string {
@@ -674,13 +667,13 @@ export function MasterData({
 
     if (resource === 'tahun-ajaran') {
       body.isAktif = editingRow?.isAktif ?? false
-      body.tanggalMulai = body.tanggalMulai ? String(body.tanggalMulai).slice(0, 10) : undefined
-      body.tanggalSelesai = body.tanggalSelesai ? String(body.tanggalSelesai).slice(0, 10) : undefined
+      body.tanggalMulai = body.tanggalMulai ? wibDateInputValue(body.tanggalMulai) : undefined
+      body.tanggalSelesai = body.tanggalSelesai ? wibDateInputValue(body.tanggalSelesai) : undefined
     }
     if (resource === 'semester') {
       body.isArchived = formData.has('isArchived')
-      body.tanggalMulai = body.tanggalMulai ? String(body.tanggalMulai).slice(0, 10) : undefined
-      body.tanggalSelesai = body.tanggalSelesai ? String(body.tanggalSelesai).slice(0, 10) : undefined
+      body.tanggalMulai = body.tanggalMulai ? wibDateInputValue(body.tanggalMulai) : undefined
+      body.tanggalSelesai = body.tanggalSelesai ? wibDateInputValue(body.tanggalSelesai) : undefined
     }
     if (resource === 'mapel') {
       body.isActive = editingRow?.isActive ?? true

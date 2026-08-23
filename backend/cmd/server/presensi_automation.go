@@ -53,7 +53,7 @@ func (s *Server) presensiAutomationAuth(c *fiber.Ctx) error {
 }
 
 func presensiAutomationDate(t time.Time) string {
-	return t.In(wibLocation).Format("2006-01-02")
+	return wibTimeFormat(t, "2006-01-02")
 }
 
 func latestPresensiAutomationMeeting(a, b presensiAutomationMeeting) presensiAutomationMeeting {
@@ -85,7 +85,7 @@ func (s *Server) presensiAutomationReminders(c *fiber.Ctx) error {
 	var academicYear TahunAjaran
 	if err := s.db.Where("is_aktif = ?", true).First(&academicYear).Error; err != nil {
 		return c.JSON(fiber.Map{
-			"status": "no_active_academic_year", "through": through.Format("2006-01-02"),
+			"status": "no_active_academic_year", "through": wibTimeFormat(through, "2006-01-02"),
 			"scheduleDay": "Sabtu", "reminders": []presensiTutorReminder{},
 		})
 	}
@@ -96,7 +96,7 @@ func (s *Server) presensiAutomationReminders(c *fiber.Ctx) error {
 		academicYear.ID, false, through, through,
 	).Order("tanggal_mulai desc").First(&semester).Error; err != nil {
 		return c.JSON(fiber.Map{
-			"status": "outside_active_semester", "through": through.Format("2006-01-02"),
+			"status": "outside_active_semester", "through": wibTimeFormat(through, "2006-01-02"),
 			"scheduleDay": "Sabtu", "tahunAjaran": academicYear.NamaTahunAjaran,
 			"reminders": []presensiTutorReminder{},
 		})
@@ -123,7 +123,7 @@ func (s *Server) presensiAutomationReminders(c *fiber.Ctx) error {
 	}
 	if len(classIDs) == 0 {
 		return c.JSON(fiber.Map{
-			"status": "ok", "through": through.Format("2006-01-02"), "scheduleDay": "Sabtu",
+			"status": "ok", "through": wibTimeFormat(through, "2006-01-02"), "scheduleDay": "Sabtu",
 			"tahunAjaran": academicYear.NamaTahunAjaran, "semester": semester.NamaSemester,
 			"reminders": []presensiTutorReminder{},
 		})
@@ -215,7 +215,7 @@ func (s *Server) presensiAutomationReminders(c *fiber.Ctx) error {
 			if date.Weekday() != time.Saturday {
 				continue
 			}
-			dateISO := date.Format("2006-01-02")
+			dateISO := wibTimeFormat(date, "2006-01-02")
 			meeting, exists := meetingByClassDate[class.ID+"|"+dateISO]
 			if exists && strings.EqualFold(meeting.StatusPertemuan, "libur") {
 				continue
@@ -272,9 +272,9 @@ func (s *Server) presensiAutomationReminders(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"status": "ok", "generatedAt": time.Now().In(wibLocation).Format(time.RFC3339),
-		"through": through.Format("2006-01-02"), "scheduleDay": "Sabtu",
+		"through": wibTimeFormat(through, "2006-01-02"), "scheduleDay": "Sabtu",
 		"tahunAjaran": academicYear.NamaTahunAjaran, "semester": semester.NamaSemester,
-		"semesterStart": start.Format("2006-01-02"), "semesterEnd": semesterEnd.Format("2006-01-02"),
+		"semesterStart": wibTimeFormat(start, "2006-01-02"), "semesterEnd": wibTimeFormat(semesterEnd, "2006-01-02"),
 		"reminders": reminders,
 	})
 }

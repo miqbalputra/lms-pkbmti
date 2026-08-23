@@ -21,6 +21,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDate, wibDateInputValue, wibToday } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -31,15 +32,14 @@ function kelasLabel(k: Row): string {
 }
 
 function fmtDate(v: unknown): string {
-  if (!v) return ''
-  return String(v).slice(0, 10)
+  return formatWibDate(v)
 }
 
 const emptyForm = {
   tutorId: '',
   mapelId: '',
   kelasId: '',
-  tanggal: new Date().toISOString().slice(0, 10),
+  tanggal: wibToday(),
   materi: '',
   kegiatan: '',
 }
@@ -130,7 +130,7 @@ export function JurnalMengajarView({
       tutorId: String(r.tutorId || ''),
       mapelId: String(r.mapelId || ''),
       kelasId: String(r.kelasId || ''),
-      tanggal: fmtDate(r.tanggal),
+      tanggal: wibDateInputValue(r.tanggal),
       materi: String(r.materi || ''),
       kegiatan: String(r.kegiatan || ''),
     })

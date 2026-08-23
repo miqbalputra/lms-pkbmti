@@ -297,7 +297,7 @@ func (s *Server) dumpSQL(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(w, "-- PKBM LMS SQL backup (SQLite). Generated at "+time.Now().Format(time.RFC3339)+".")
+	fmt.Fprintln(w, "-- PKBM LMS SQL backup (SQLite). Generated at "+wibTimeFormat(time.Now(), time.RFC3339)+".")
 	fmt.Fprintln(w, "PRAGMA foreign_keys=OFF;")
 	fmt.Fprintln(w, "BEGIN TRANSACTION;")
 
@@ -458,7 +458,7 @@ func listBackupFiles() ([]backupInfo, error) {
 		out = append(out, backupInfo{
 			Name:      name,
 			Size:      info.Size(),
-			ModTime:   info.ModTime().Format(time.RFC3339),
+			ModTime:   wibTimeFormat(info.ModTime(), time.RFC3339),
 			Format:    fmt2,
 			Automatic: strings.Contains(name, "-auto-"),
 		})
@@ -508,7 +508,7 @@ func (s *Server) runScheduledBackup() {
 		return
 	}
 	format := normalizeBackupFormat(env("BACKUP_FORMAT", "full"))
-	ts := time.Now().Format("20060102-150405")
+	ts := wibTimeFormat(time.Now(), "20060102-150405")
 	name := fmt.Sprintf("pkbm-lms-%s-auto.%s", ts, format)
 	dest := filepath.Join(backupDir(), name)
 	var d string
@@ -596,7 +596,7 @@ func savePreRestoreBackup() (string, error) {
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		return "", err
 	}
-	dest := filepath.Join(backupDir(), fmt.Sprintf("pre-restore-%s.db", time.Now().Format("20060102-150405")))
+	dest := filepath.Join(backupDir(), fmt.Sprintf("pre-restore-%s.db", wibTimeFormat(time.Now(), "20060102-150405")))
 	if err := copyFile(liveDBPath, dest); err != nil {
 		return "", err
 	}
@@ -774,7 +774,7 @@ func (s *Server) listBackupsHandler(c *fiber.Ctx) error {
 // For PostgreSQL: always produces a .sql dump via pg_dump. (backupReadAuth)
 func (s *Server) downloadBackup(c *fiber.Ctx) error {
 	format := normalizeBackupFormat(c.Query("format", "full"))
-	ts := time.Now().Format("20060102-150405")
+	ts := wibTimeFormat(time.Now(), "20060102-150405")
 	fname := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
@@ -841,7 +841,7 @@ func (s *Server) createBackupNow(c *fiber.Ctx) error {
 	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
 	}
-	ts := time.Now().Format("20060102-150405")
+	ts := wibTimeFormat(time.Now(), "20060102-150405")
 	name := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
 	dest := filepath.Join(backupDir(), name)
 	if isSQLite() {
@@ -948,7 +948,7 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 		_ = os.Remove(tmpPath)
 		return fiber.NewError(500, "tidak dapat menyiapkan folder backup pengaman")
 	}
-	preRestorePath := filepath.Join(backupDir(), fmt.Sprintf("pre-restore-%s.sql", time.Now().Format("20060102-150405")))
+	preRestorePath := filepath.Join(backupDir(), fmt.Sprintf("pre-restore-%s.sql", wibTimeFormat(time.Now(), "20060102-150405")))
 	if err := pgDump(preRestorePath); err != nil {
 		_ = os.Remove(tmpPath)
 		return fiber.NewError(500, "backup pengaman sebelum restore gagal")

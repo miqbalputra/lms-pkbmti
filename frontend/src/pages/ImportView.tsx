@@ -11,6 +11,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDateTime } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -234,7 +235,7 @@ export function ImportView({ token, user }: { token: string; user: User }) {
           <TableBody>
             {logs.map((l) => (
               <TableRow key={l.id}>
-                <TableCell className="text-sm">{String(l.createdAt || '').slice(0, 16).replace('T', ' ')}</TableCell>
+                <TableCell className="text-sm">{formatWibDateTime(l.createdAt)}</TableCell>
                 <TableCell className="font-medium">{String(l.tipe || '-')}</TableCell>
                 <TableCell className="text-sm">{String(l.fileName || '-')}</TableCell>
                 <TableCell className="text-sm">{l.totalBaris}</TableCell>

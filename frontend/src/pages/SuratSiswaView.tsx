@@ -10,6 +10,7 @@ import { Label } from '../components/ui/label'
 import { Select } from '../components/ui/select'
 import { PageToolbar } from '../components/ui/page'
 import { apiBase, request } from '../lib/api'
+import { formatWibDate } from '../lib/wib'
 
 type Row = Record<string, unknown> & { id: string }
 type SuratRow = {
@@ -171,7 +172,7 @@ export function SuratSiswaView({ token }: { token: string }) {
         <CardHeader><CardTitle>Riwayat Publikasi</CardTitle><CardDescription>Surat yang sudah tersedia di portal orang tua.</CardDescription></CardHeader>
         <CardContent className="space-y-2">
           {loading && <div className="py-8 text-center text-sm text-muted-foreground">Memuat surat...</div>}
-          {!loading && documents.map((row) => <div key={row.id} className="flex flex-col gap-3 rounded-xl border border-border/70 p-3 sm:flex-row sm:items-center"><div className="flex min-w-0 flex-1 items-start gap-3"><FileText className="mt-0.5 h-5 w-5 shrink-0 text-brand-500" /><div className="min-w-0"><div className="truncate font-semibold">{row.judul}</div><div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground"><Badge variant="secondary">{scopeLabel(row)}</Badge><span>{row.fileCount} file</span><span>{new Date(row.createdAt).toLocaleDateString('id-ID')}</span></div></div></div><Button variant="outline" size="sm" onClick={() => void removeDocument(row)}><Trash2 className="h-4 w-4" />Hapus</Button></div>)}
+          {!loading && documents.map((row) => <div key={row.id} className="flex flex-col gap-3 rounded-xl border border-border/70 p-3 sm:flex-row sm:items-center"><div className="flex min-w-0 flex-1 items-start gap-3"><FileText className="mt-0.5 h-5 w-5 shrink-0 text-brand-500" /><div className="min-w-0"><div className="truncate font-semibold">{row.judul}</div><div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground"><Badge variant="secondary">{scopeLabel(row)}</Badge><span>{row.fileCount} file</span><span>{formatWibDate(row.createdAt)}</span></div></div></div><Button variant="outline" size="sm" onClick={() => void removeDocument(row)}><Trash2 className="h-4 w-4" />Hapus</Button></div>)}
           {!loading && documents.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">Belum ada surat yang dipublikasikan.</div>}
         </CardContent>
       </Card>

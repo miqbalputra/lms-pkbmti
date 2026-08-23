@@ -4,6 +4,7 @@ import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { EmptyState, PageToolbar } from '../components/ui/page'
 import { request } from '../lib/api'
+import { formatWibDate } from '../lib/wib'
 
 type Notif = Record<string, unknown> & { id: string }
 
@@ -15,7 +16,7 @@ function fmtTime(v: unknown): string {
   if (diff < 60000) return 'Baru saja'
   if (diff < 3600000) return `${Math.floor(diff / 60000)} menit lalu`
   if (diff < 86400000) return `${Math.floor(diff / 3600000)} jam lalu`
-  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+  return formatWibDate(v)
 }
 
 const tipeColor: Record<string, string> = {

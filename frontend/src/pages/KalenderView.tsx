@@ -8,6 +8,7 @@ import { Label } from '../components/ui/label'
 import { FormCard, PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
 import { request } from '../lib/api'
+import { formatWibDate, wibDateInputValue, wibMonthIndex, wibToday, wibDateTimeLocalToISO, wibYear } from '../lib/wib'
 
 type Event = Record<string, unknown> & { id: string }
 
@@ -27,8 +28,8 @@ const tipeOptions = [
   { value: 'rapat', label: 'Rapat' },
 ]
 
-function daysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDate() }
-function firstDayOfMonth(y: number, m: number) { return new Date(y, m, 1).getDay() }
+function daysInMonth(y: number, m: number) { return new Date(Date.UTC(y, m + 1, 0)).getUTCDate() }
+function firstDayOfMonth(y: number, m: number) { return new Date(Date.UTC(y, m, 1)).getUTCDay() }
 
 export function KalenderView({
   token,
@@ -38,8 +39,8 @@ export function KalenderView({
   readOnly: boolean
 }) {
   const [events, setEvents] = useState<Event[]>([])
-  const [year, setYear] = useState(new Date().getFullYear())
-  const [month, setMonth] = useState(new Date().getMonth())
+  const [year, setYear] = useState(wibYear())
+  const [month, setMonth] = useState(wibMonthIndex())
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ judul: '', deskripsi: '', tanggalMulai: '', tanggalSelesai: '', tipe: 'kegiatan', warna: '#16a34a' })
 
@@ -59,8 +60,8 @@ export function KalenderView({
     request('/kalender', token, 'POST', {
       judul: form.judul,
       deskripsi: form.deskripsi,
-      tanggalMulai: new Date(form.tanggalMulai).toISOString(),
-      tanggalSelesai: form.tanggalSelesai ? new Date(form.tanggalSelesai).toISOString() : null,
+      tanggalMulai: wibDateTimeLocalToISO(form.tanggalMulai),
+      tanggalSelesai: form.tanggalSelesai ? wibDateTimeLocalToISO(form.tanggalSelesai) : null,
       tipe: form.tipe,
       warna: form.warna || tipeWarna[form.tipe] || '#16a34a',
     })
@@ -87,12 +88,12 @@ export function KalenderView({
 
   const days = daysInMonth(year, month)
   const startDay = firstDayOfMonth(year, month)
-  const monthName = new Date(year, month).toLocaleString('id-ID', { month: 'long', year: 'numeric' })
+  const monthName = new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', month: 'long', year: 'numeric' }).format(new Date(Date.UTC(year, month, 1)))
 
   // Map events by date
   const eventsByDate: Record<string, Event[]> = {}
   events.forEach((ev) => {
-    const d = String(ev.tanggalMulai).slice(0, 10)
+    const d = wibDateInputValue(ev.tanggalMulai)
     if (!eventsByDate[d]) eventsByDate[d] = []
     eventsByDate[d].push(ev)
   })
@@ -102,7 +103,7 @@ export function KalenderView({
   for (let d = 1; d <= days; d++) {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     const dayEvents = eventsByDate[dateStr] || []
-    const isToday = new Date().toISOString().slice(0, 10) === dateStr
+    const isToday = wibToday() === dateStr
     cells.push(
       <div key={d} className={`h-20 rounded-lg border p-1.5 text-xs overflow-hidden ${isToday ? 'border-primary bg-primary/5' : 'border-border bg-card'}`}>
         <div className={`font-bold text-[11px] mb-1 ${isToday ? 'text-primary' : 'text-foreground'}`}>{d}</div>
@@ -191,7 +192,7 @@ export function KalenderView({
                   <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: String(ev.warna || tipeWarna[String(ev.tipe)]) }} />
                   <div className="flex-1 min-w-0">
                     <span className="font-medium">{String(ev.judul)}</span>
-                    <span className="text-muted-foreground ml-2 text-xs">{String(ev.tanggalMulai).slice(0, 10)}</span>
+                    <span className="text-muted-foreground ml-2 text-xs">{formatWibDate(ev.tanggalMulai)}</span>
                   </div>
                   {!readOnly && (
                     <Button variant="ghost" size="sm" onClick={() => handleDelete(ev.id)}>

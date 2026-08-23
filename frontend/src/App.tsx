@@ -18,6 +18,7 @@ import { TutorEmailPrompt } from './components/TutorEmailPrompt'
 import { GuruTaskReminder } from './components/GuruTaskReminder'
 import { refreshSession, request, setOnTokenRefreshed, setOnUnauthorized } from './lib/api'
 import { PAGE_IDS, pathFor, pathsFor } from './lib/router'
+import { formatWibDate } from './lib/wib'
 
 // Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
 // berfungsi (sumber kebenaran kini di ./lib/api, tanpa import sirkular).
@@ -502,9 +503,9 @@ function Dashboard({ token }: { token: string }) {
                     <span className="text-sm font-medium text-foreground">{evt.judul}</span>
                   </div>
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(evt.tanggal_mulai).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {formatWibDate(evt.tanggal_mulai)}
                     {evt.tanggal_selesai && evt.tanggal_selesai !== evt.tanggal_mulai && (
-                      <> — {new Date(evt.tanggal_selesai).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</>
+                      <> — {formatWibDate(evt.tanggal_selesai)}</>
                     )}
                   </span>
                 </div>

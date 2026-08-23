@@ -33,6 +33,7 @@ import { NAV_ITEMS } from './AppSidebar'
 import { useSidebar } from '../../context/SidebarContext'
 import { toast } from 'sonner'
 import { apiBase, request } from '../../lib/api'
+import { formatWibDate } from '../../lib/wib'
 import { useNavigate } from 'react-router-dom'
 import { pathFor } from '../../lib/router'
 
@@ -67,7 +68,7 @@ function fmtNotifTime(v: string): string {
   if (diff < 60000) return 'Baru saja'
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m lalu`
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}j lalu`
-  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+  return formatWibDate(v, { year: undefined })
 }
 
 const tipeIcon: Record<string, string> = {

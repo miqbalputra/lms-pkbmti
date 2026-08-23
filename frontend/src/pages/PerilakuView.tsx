@@ -10,6 +10,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDate, wibDateTimeLocalToISO } from '../lib/wib'
 
 type Row = Record<string, unknown> & { id: string }
 
@@ -18,8 +19,7 @@ function kelasLabel(k: Row): string {
 }
 
 function fmtDate(v: unknown): string {
-  if (!v) return ''
-  return String(v).slice(0, 10)
+  return formatWibDate(v)
 }
 
 const emptyForm = { pesertaDidikId: '', kelasId: '', tanggal: '', kategori: 'positif', deskripsi: '' }
@@ -75,7 +75,7 @@ export function PerilakuView({
       await request('/perilaku', token, 'POST', {
         pesertaDidikId: form.pesertaDidikId,
         kelasId: form.kelasId,
-        tanggal: form.tanggal ? new Date(form.tanggal).toISOString() : undefined,
+        tanggal: form.tanggal ? wibDateTimeLocalToISO(form.tanggal) : undefined,
         kategori: form.kategori,
         deskripsi: form.deskripsi,
       })

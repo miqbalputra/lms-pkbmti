@@ -1450,13 +1450,11 @@ func (s *Server) listAuditLogs(c *fiber.Ctx) error {
 }
 
 func parseFlexibleDate(value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	for _, layout := range []string{"2006-01-02", time.RFC3339Nano, time.RFC3339} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed, nil
-		}
+	parsed, err := parseWIBDateTime(value)
+	if err != nil {
+		return time.Time{}, errors.New("invalid date")
 	}
-	return time.Time{}, errors.New("invalid date")
+	return parsed, nil
 }
 
 func validateAcademicYearDates(row *TahunAjaran) error {
@@ -1665,14 +1663,14 @@ func (s *Server) updateSemester(c *fiber.Ctx) error {
 		return fiber.NewError(400, "invalid request body")
 	}
 	if in.TanggalMulai != nil {
-		t, e := time.Parse("2006-01-02", *in.TanggalMulai)
+		t, e := parseWIBDateTime(*in.TanggalMulai)
 		if e != nil {
 			return fiber.NewError(400, "format tanggalMulai tidak valid (YYYY-MM-DD)")
 		}
 		row.TanggalMulai = t
 	}
 	if in.TanggalSelesai != nil {
-		t, e := time.Parse("2006-01-02", *in.TanggalSelesai)
+		t, e := parseWIBDateTime(*in.TanggalSelesai)
 		if e != nil {
 			return fiber.NewError(400, "format tanggalSelesai tidak valid (YYYY-MM-DD)")
 		}
@@ -2655,7 +2653,7 @@ func formatTanggalLahir(value *time.Time) string {
 	if value == nil || value.IsZero() {
 		return "-"
 	}
-	return value.Format("02-01-2006")
+	return wibTimeFormat(*value, "02-01-2006")
 }
 
 func (s *Server) siswaProgramLabels(rows []PesertaDidik) (map[string]string, error) {
@@ -3354,13 +3352,13 @@ func (s *Server) scopedPresensiMeetings(c *fiber.Ctx) ([]Presensi, string, error
 		label = "Kelas Wali"
 	}
 	if from := strings.TrimSpace(c.Query("from")); from != "" {
-		if t, e := time.ParseInLocation("2006-01-02", from, time.Local); e == nil {
+		if t, e := time.ParseInLocation("2006-01-02", from, wibLocation); e == nil {
 			q = q.Where("tanggal >= ?", t)
 			label += " dari " + from
 		}
 	}
 	if to := strings.TrimSpace(c.Query("to")); to != "" {
-		if t, e := time.ParseInLocation("2006-01-02", to, time.Local); e == nil {
+		if t, e := time.ParseInLocation("2006-01-02", to, wibLocation); e == nil {
 			q = q.Where("tanggal < ?", t.AddDate(0, 0, 1)) // to eksklusif akhir hari
 			label += " s/d " + to
 		}
@@ -3414,7 +3412,7 @@ func (s *Server) exportPresensiRekapCSV(c *fiber.Ctx, rows []presensiRow, label 
 	defer w.Flush()
 	_ = w.Write([]string{"Tanggal", "Kelas", "Peserta Didik", "NIS", "NISN", "Status", "Catatan", "Status Pertemuan"})
 	for _, r := range rows {
-		_ = w.Write([]string{r.Tanggal.Format("2006-01-02"), r.Kelas, r.Nama, r.NIS, r.NISN, r.Status, r.Catatan, r.StatusPertemuan})
+		_ = w.Write([]string{wibTimeFormat(r.Tanggal, "2006-01-02"), r.Kelas, r.Nama, r.NIS, r.NISN, r.Status, r.Catatan, r.StatusPertemuan})
 	}
 	return nil
 }
@@ -3429,7 +3427,7 @@ func (s *Server) exportPresensiRekapXLSX(c *fiber.Ctx, rows []presensiRow, label
 	_ = xlsx.SetSheetRow(sheet, "A4", &headers)
 	for i, r := range rows {
 		_ = xlsx.SetSheetRow(sheet, "A"+strconv.Itoa(i+5), &[]interface{}{
-			r.Tanggal.Format("2006-01-02"), r.Kelas, r.Nama, r.NIS, r.NISN, r.Status, r.Catatan, r.StatusPertemuan,
+			wibTimeFormat(r.Tanggal, "2006-01-02"), r.Kelas, r.Nama, r.NIS, r.NISN, r.Status, r.Catatan, r.StatusPertemuan,
 		})
 	}
 	for i, w := range []float64{14, 20, 28, 14, 16, 18, 26, 18} {
@@ -3467,7 +3465,7 @@ func (s *Server) exportPresensiRekapPDF(c *fiber.Ctx, rows []presensiRow, label 
 			pdf.AddPage()
 			pdf.SetFont("Helvetica", "", 8)
 		}
-		vals := []string{r.Tanggal.Format("02-01-2006"), r.Kelas, r.Nama, r.NISN, r.Status, r.Catatan}
+		vals := []string{wibTimeFormat(r.Tanggal, "02-01-2006"), r.Kelas, r.Nama, r.NISN, r.Status, r.Catatan}
 		for j, v := range vals {
 			a := "C"
 			if j == 2 || j == 5 {
@@ -3586,7 +3584,7 @@ func (s *Server) exportPresensiPDF(c *fiber.Ctx) error {
 	pdf.CellFormat(42, 6, "Kelas", "", 0, "L", false, 0, "")
 	pdf.CellFormat(138, 6, ": Kelas "+strconv.Itoa(meeting.Kelas.Jenjang)+meeting.Kelas.NamaRombel, "", 1, "L", false, 0, "")
 	pdf.CellFormat(42, 6, "Tanggal", "", 0, "L", false, 0, "")
-	pdf.CellFormat(138, 6, ": "+meeting.Tanggal.Format("02-01-2006"), "", 1, "L", false, 0, "")
+	pdf.CellFormat(138, 6, ": "+wibTimeFormat(meeting.Tanggal, "02-01-2006"), "", 1, "L", false, 0, "")
 	pdf.CellFormat(42, 6, "Status Pertemuan", "", 0, "L", false, 0, "")
 	pdf.CellFormat(138, 6, ": "+meeting.StatusPertemuan, "", 1, "L", false, 0, "")
 	pdf.Ln(5)
@@ -3619,7 +3617,7 @@ func (s *Server) exportPresensiPDF(c *fiber.Ctx) error {
 	pdf.Ln(32)
 	pdf.CellFormat(180, 6, "(____________________________)", "", 1, "R", false, 0, "")
 	c.Set(fiber.HeaderContentType, "application/pdf")
-	c.Attachment("presensi-" + meeting.Tanggal.Format("20060102") + ".pdf")
+	c.Attachment("presensi-" + wibTimeFormat(meeting.Tanggal, "20060102") + ".pdf")
 	return pdf.Output(c.Response().BodyWriter())
 }
 func signatureImage(value string) ([]byte, bool) {
@@ -3876,7 +3874,7 @@ func (s *Server) createJurnal(c *fiber.Ctx) error {
 	if e := s.validateJurnalReferences(tutorID, mapelID, kelasID); e != nil {
 		return e
 	}
-	tanggal, e := time.Parse("2006-01-02", c.FormValue("tanggal"))
+	tanggal, e := parseWIBDateTime(c.FormValue("tanggal"))
 	if e != nil {
 		return fiber.NewError(400, "tanggal tidak valid (YYYY-MM-DD)")
 	}
@@ -3940,7 +3938,7 @@ func (s *Server) updateJurnal(c *fiber.Ctx) error {
 		j.KelasID = v
 	}
 	if v := c.FormValue("tanggal"); v != "" {
-		if t, e := time.Parse("2006-01-02", v); e == nil {
+		if t, e := parseWIBDateTime(v); e == nil {
 			j.Tanggal = t
 		} else {
 			return fiber.NewError(400, "tanggal tidak valid (YYYY-MM-DD)")
@@ -4054,12 +4052,11 @@ func (s *Server) waliKelasIDs(c *fiber.Ctx) ([]string, bool) {
 }
 
 func parseFormTime(v string) (time.Time, error) {
-	for _, layout := range []string{"2006-01-02", "2006-01-02T15:04", time.RFC3339} {
-		if t, e := time.Parse(layout, v); e == nil {
-			return t, nil
-		}
+	t, err := parseWIBDateTime(v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("tanggal tidak valid")
 	}
-	return time.Time{}, fmt.Errorf("tanggal tidak valid")
+	return t, nil
 }
 
 // formPtr returns a pointer to v when non-empty, else nil — for optional form/json
@@ -4091,7 +4088,7 @@ func formDatePtr(v string) *time.Time {
 	if v == "" {
 		return nil
 	}
-	t, e := time.ParseInLocation("2006-01-02", v, time.Local)
+	t, e := parseWIBDateTime(v)
 	if e != nil {
 		return nil
 	}
@@ -5367,6 +5364,8 @@ func (s *Server) createKelasVirtual(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	in.WaktuMulai = in.WaktuMulai.In(wibLocation)
+	in.WaktuSelesai = in.WaktuSelesai.In(wibLocation)
 	if in.Judul == "" || in.KelasID == "" || in.LinkMeeting == "" {
 		return fiber.NewError(400, "judul, kelasId, dan linkMeeting wajib diisi")
 	}
@@ -5403,6 +5402,12 @@ func (s *Server) updateKelasVirtual(c *fiber.Ctx) error {
 	var in kelasVirtualInput
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if !in.WaktuMulai.IsZero() {
+		in.WaktuMulai = in.WaktuMulai.In(wibLocation)
+	}
+	if !in.WaktuSelesai.IsZero() {
+		in.WaktuSelesai = in.WaktuSelesai.In(wibLocation)
 	}
 	if in.KelasID != "" && in.KelasID != kv.KelasID {
 		if e := s.canManageKelas(c, in.KelasID); e != nil {
@@ -5620,6 +5625,8 @@ func (s *Server) createUjian(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	in.WaktuMulai = in.WaktuMulai.In(wibLocation)
+	in.WaktuSelesai = in.WaktuSelesai.In(wibLocation)
 	if in.Judul == "" || in.KelasID == "" {
 		return fiber.NewError(400, "judul dan kelasId wajib diisi")
 	}
@@ -5660,6 +5667,12 @@ func (s *Server) updateUjian(c *fiber.Ctx) error {
 	var in ujianInput
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if !in.WaktuMulai.IsZero() {
+		in.WaktuMulai = in.WaktuMulai.In(wibLocation)
+	}
+	if !in.WaktuSelesai.IsZero() {
+		in.WaktuSelesai = in.WaktuSelesai.In(wibLocation)
 	}
 	if in.KelasID != "" && in.KelasID != uj.KelasID {
 		if e := s.canManageKelas(c, in.KelasID); e != nil {
@@ -5860,7 +5873,7 @@ func (s *Server) printUjian(c *fiber.Ctx) error {
 	pdf.CellFormat(40, 6, "Kelas", "", 0, "L", false, 0, "")
 	pdf.CellFormat(140, 6, ": Kelas "+strconv.Itoa(uj.Kelas.Jenjang)+uj.Kelas.NamaRombel, "", 1, "L", false, 0, "")
 	pdf.CellFormat(40, 6, "Waktu", "", 0, "L", false, 0, "")
-	pdf.CellFormat(140, 6, ": "+uj.WaktuMulai.Format("02-01-2006 15:04")+" s/d "+uj.WaktuSelesai.Format("15:04"), "", 1, "L", false, 0, "")
+	pdf.CellFormat(140, 6, ": "+wibTimeFormat(uj.WaktuMulai, "02-01-2006 15:04")+" s/d "+wibTimeFormat(uj.WaktuSelesai, "15:04"), "", 1, "L", false, 0, "")
 	if uj.DurasiMenit > 0 {
 		pdf.CellFormat(40, 6, "Durasi", "", 0, "L", false, 0, "")
 		pdf.CellFormat(140, 6, ": "+strconv.Itoa(uj.DurasiMenit)+" menit", "", 1, "L", false, 0, "")
@@ -6138,7 +6151,7 @@ func (s *Server) printSertifikat(c *fiber.Ctx) error {
 	pdf.MultiCell(170, 7, kelasStr, "", "C", false)
 	pdf.Ln(4)
 	pdf.SetFont("Helvetica", "", 11)
-	pdf.CellFormat(170, 6, "Tanggal Terbit: "+sert.TanggalTerbit.Format("02-01-2006"), "", 1, "C", false, 0, "")
+	pdf.CellFormat(170, 6, "Tanggal Terbit: "+wibTimeFormat(sert.TanggalTerbit, "02-01-2006"), "", 1, "C", false, 0, "")
 	pdf.Ln(10)
 
 	// QR menuju endpoint verify publik
@@ -6177,7 +6190,7 @@ func (s *Server) verifySertifikat(c *fiber.Ctx) error {
 		"program":       sert.Program.Nama,
 		"kodeProgram":   sert.Program.Kode,
 		"status":        sert.Status,
-		"tanggalTerbit": sert.TanggalTerbit.Format("02-01-2006"),
+		"tanggalTerbit": wibTimeFormat(sert.TanggalTerbit, "02-01-2006"),
 	})
 }
 
@@ -6749,7 +6762,7 @@ func (s *Server) printRapor(c *fiber.Ctx) error {
 			if p.Kategori == "negatif" {
 				label = "[-]"
 			}
-			pdf.MultiCell(180, 5, fmt.Sprintf("%s %s: %s", p.Tanggal.Format("02-01-2006"), label, p.Deskripsi), "", "L", false)
+			pdf.MultiCell(180, 5, fmt.Sprintf("%s %s: %s", wibTimeFormat(p.Tanggal, "02-01-2006"), label, p.Deskripsi), "", "L", false)
 		}
 	}
 	pdf.Ln(3)
@@ -8259,7 +8272,18 @@ func loadWIBLocation() *time.Location {
 
 var wibLocation = loadWIBLocation()
 
-func parsePresensiDate(value string) (time.Time, error) {
+// The application uses WIB as its calendar and display timezone. Keeping
+// time.Local aligned also protects older code paths that construct dates with
+// time.Local or format time.Now() directly.
+func init() {
+	time.Local = wibLocation
+}
+
+func wibTimeFormat(t time.Time, layout string) string {
+	return t.In(wibLocation).Format(layout)
+}
+
+func parseWIBDateTime(value string) (time.Time, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return time.Time{}, errors.New("tanggal wajib diisi")
@@ -8267,12 +8291,21 @@ func parsePresensiDate(value string) (time.Time, error) {
 	if t, err := time.ParseInLocation("2006-01-02", value, wibLocation); err == nil {
 		return t, nil
 	}
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05"} {
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05"} {
 		if t, err := time.ParseInLocation(layout, value, wibLocation); err == nil {
 			return t, nil
 		}
 	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t.In(wibLocation), nil
+		}
+	}
 	return time.Time{}, errors.New("tanggal tidak valid")
+}
+
+func parsePresensiDate(value string) (time.Time, error) {
+	return parseWIBDateTime(value)
 }
 
 func validPresensiSaturday(t time.Time) bool {
@@ -8414,14 +8447,14 @@ func (s *Server) createPresensi(c *fiber.Ctx) error {
 			return fiber.NewError(400, err.Error())
 		}
 		uid := c.Locals("userID").(string)
-		s.audit(&uid, "update", "presensi", existing.KelasID+" @ "+existing.Tanggal.Format("2006-01-02"))
+		s.audit(&uid, "update", "presensi", existing.KelasID+" @ "+wibTimeFormat(existing.Tanggal, "2006-01-02"))
 		return c.JSON(presensiWriteResponse(existing))
 	}
 	if e := s.db.Create(&p).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}
 	uid := c.Locals("userID").(string)
-	s.audit(&uid, "create", "presensi", p.KelasID+" @ "+p.Tanggal.Format("2006-01-02"))
+	s.audit(&uid, "create", "presensi", p.KelasID+" @ "+wibTimeFormat(p.Tanggal, "2006-01-02"))
 	return c.Status(201).JSON(presensiWriteResponse(p))
 }
 func (s *Server) updatePresensi(c *fiber.Ctx) error {
@@ -8524,7 +8557,7 @@ func (s *Server) deletePresensi(c *fiber.Ctx) error {
 		return err
 	}
 	uid := c.Locals("userID").(string)
-	s.audit(&uid, "delete", "presensi", meeting.KelasID+" @ "+meeting.Tanggal.Format("2006-01-02"))
+	s.audit(&uid, "delete", "presensi", meeting.KelasID+" @ "+wibTimeFormat(meeting.Tanggal, "2006-01-02"))
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -8617,7 +8650,9 @@ func (s *Server) semester(t time.Time) string {
 	}
 	return "Genap"
 }
-func sameDay(a, b time.Time) bool { return a.Format("2006-01-02") == b.Format("2006-01-02") }
+func sameDay(a, b time.Time) bool {
+	return wibTimeFormat(a, "2006-01-02") == wibTimeFormat(b, "2006-01-02")
+}
 func (s *Server) startScheduler() {
 	loc, e := time.LoadLocation("Asia/Jakarta")
 	if e != nil {
@@ -10129,10 +10164,7 @@ func parseDate(s string) time.Time {
 	if s == "" {
 		return time.Now()
 	}
-	if t, e := time.Parse("2006-01-02", s); e == nil {
-		return t
-	}
-	if t, e := time.Parse(time.RFC3339, s); e == nil {
+	if t, e := parseWIBDateTime(s); e == nil {
 		return t
 	}
 	return time.Now()
@@ -10188,17 +10220,17 @@ func (s *Server) exportBukuXLSX(c *fiber.Ctx, pinjam []Peminjaman, kembali map[s
 		return xlsx.SetSheetRow(sheet, cell, &vals)
 	}
 	_ = writeRow([]interface{}{"Rekap Peminjaman Buku PKBM Tunas Ilmu"})
-	_ = writeRow([]interface{}{"Tanggal unduh: " + time.Now().Format("2006-01-02 15:04")})
+	_ = writeRow([]interface{}{"Tanggal unduh: " + wibTimeFormat(time.Now(), "2006-01-02 15:04")})
 	rowIdx++
 	_ = writeRow([]interface{}{"No", "Siswa", "Kelas", "Buku", "Semester", "Tgl Pinjam", "Status", "Tgl Kembali", "Kondisi", "Catatan"})
 	for i, p := range pinjam {
 		k, ok := kembali[p.ID]
 		row := []interface{}{
 			i + 1, p.PesertaDidik.Nama, kelasLabel(p.Kelas), p.Buku.Judul, p.Semester,
-			p.TanggalPinjam.Format("2006-01-02"), p.Status,
+			wibTimeFormat(p.TanggalPinjam, "2006-01-02"), p.Status,
 		}
 		if ok {
-			row = append(row, k.TanggalKembali.Format("2006-01-02"), k.KondisiBuku, k.Catatan)
+			row = append(row, wibTimeFormat(k.TanggalKembali, "2006-01-02"), k.KondisiBuku, k.Catatan)
 		} else {
 			row = append(row, "", "", "")
 		}
@@ -10216,7 +10248,7 @@ func (s *Server) exportBukuPDF(c *fiber.Ctx, pinjam []Peminjaman, kembali map[st
 	pdf.SetFont("Helvetica", "B", 15)
 	pdf.CellFormat(186, 8, "Rekap Peminjaman Buku PKBM Tunas Ilmu", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 10)
-	pdf.CellFormat(186, 6, "Tanggal unduh: "+time.Now().Format("2006-01-02 15:04"), "", 1, "C", false, 0, "")
+	pdf.CellFormat(186, 6, "Tanggal unduh: "+wibTimeFormat(time.Now(), "2006-01-02 15:04"), "", 1, "C", false, 0, "")
 	pdf.Ln(3)
 	pdf.SetFont("Helvetica", "B", 8)
 	pdf.SetFillColor(230, 230, 230)
@@ -10234,7 +10266,7 @@ func (s *Server) exportBukuPDF(c *fiber.Ctx, pinjam []Peminjaman, kembali map[st
 		pdf.CellFormat(30, 6, kelasLabel(p.Kelas), "1", 0, "L", false, 0, "")
 		pdf.CellFormat(50, 6, p.Buku.Judul, "1", 0, "L", false, 0, "")
 		pdf.CellFormat(18, 6, p.Semester, "1", 0, "C", false, 0, "")
-		pdf.CellFormat(20, 6, p.TanggalPinjam.Format("2006-01-02"), "1", 0, "C", false, 0, "")
+		pdf.CellFormat(20, 6, wibTimeFormat(p.TanggalPinjam, "2006-01-02"), "1", 0, "C", false, 0, "")
 		pdf.CellFormat(25, 6, p.Status, "1", 1, "C", false, 0, "")
 	}
 	c.Set(fiber.HeaderContentType, "application/pdf")
@@ -10278,7 +10310,7 @@ func (s *Server) reminderBuku(loc *time.Location) {
 	}
 	items := make([]item, 0, len(rows))
 	for _, p := range rows {
-		items = append(items, item{Siswa: p.PesertaDidik.Nama, Kelas: kelasLabel(p.Kelas), Buku: p.Buku.Judul, Tgl: p.TanggalPinjam.Format("2006-01-02")})
+		items = append(items, item{Siswa: p.PesertaDidik.Nama, Kelas: kelasLabel(p.Kelas), Buku: p.Buku.Judul, Tgl: wibTimeFormat(p.TanggalPinjam, "2006-01-02")})
 	}
 	body, _ := json.Marshal(items)
 	_, _ = http.Post(webhook, "application/json", strings.NewReader(string(body)))

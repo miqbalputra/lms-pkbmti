@@ -10,14 +10,14 @@ import { EmptyState, FormCard, PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { request } from '../lib/api'
+import { formatWibDate } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
 type Row = Record<string, unknown> & { id: string }
 
 function fmtDate(v: unknown): string {
-  if (!v) return ''
-  return String(v).slice(0, 10)
+  return formatWibDate(v)
 }
 
 export function SertifikatView({

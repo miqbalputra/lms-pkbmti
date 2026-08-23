@@ -20,6 +20,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { formatWibDateTime, wibDateTimeLocalToISO, wibDateTimeLocalValue } from '../lib/wib'
 
 type Row = Record<string, unknown> & { id: string }
 
@@ -28,9 +29,7 @@ function kelasLabel(k: Row): string {
 }
 
 function fmtDateTime(v: unknown): string {
-  if (!v) return ''
-  const s = String(v)
-  return s.slice(0, 16).replace('T', ' ')
+  return formatWibDateTime(v)
 }
 
 const emptyForm = {
@@ -91,8 +90,8 @@ export function KelasVirtualView({
       judul: String(r.judul || ''),
       deskripsi: String(r.deskripsi || ''),
       linkMeeting: String(r.linkMeeting || ''),
-      waktuMulai: String(r.waktuMulai || '').slice(0, 16),
-      waktuSelesai: String(r.waktuSelesai || '').slice(0, 16),
+      waktuMulai: wibDateTimeLocalValue(r.waktuMulai),
+      waktuSelesai: wibDateTimeLocalValue(r.waktuSelesai),
     })
     setAdding(true)
   }
@@ -114,8 +113,8 @@ export function KelasVirtualView({
       judul: form.judul,
       deskripsi: form.deskripsi,
       linkMeeting: form.linkMeeting,
-      waktuMulai: form.waktuMulai ? new Date(form.waktuMulai).toISOString() : undefined,
-      waktuSelesai: form.waktuSelesai ? new Date(form.waktuSelesai).toISOString() : undefined,
+      waktuMulai: form.waktuMulai ? wibDateTimeLocalToISO(form.waktuMulai) : undefined,
+      waktuSelesai: form.waktuSelesai ? wibDateTimeLocalToISO(form.waktuSelesai) : undefined,
     }
     setSubmitting(true)
     try {
