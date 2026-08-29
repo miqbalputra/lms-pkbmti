@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jung-kurt/gofpdf"
 	"gorm.io/gorm"
 )
 
@@ -868,26 +870,27 @@ func uniqueOperationalStrings(values []string) []string {
 	return result
 }
 
-// operationalComplianceDetail powers the two supervisory detail tabs. It
-// deliberately omits attendance signatures, Base64 images, and student rows;
-// the existing scoped detail endpoints are fetched only when a row is opened.
-func (s *Server) operationalComplianceDetail(c *fiber.Ctx) error {
+// operationalComplianceDetailData powers both the supervisory detail tabs and
+// the downloadable attendance follow-up report. Keeping the query and
+// kelengkapan rules in one place prevents the on-screen report and PDF from
+// drifting apart.
+func (s *Server) operationalComplianceDetailData(c *fiber.Ctx) (operationalComplianceDetailResponse, error) {
 	role, _ := c.Locals("role").(string)
 	if role != "admin" && role != "kepala_sekolah" {
-		return fiber.NewError(fiber.StatusForbidden, "laporan detail kepatuhan hanya tersedia untuk admin dan kepala sekolah")
+		return operationalComplianceDetailResponse{}, fiber.NewError(fiber.StatusForbidden, "laporan detail kepatuhan hanya tersedia untuk admin dan kepala sekolah")
 	}
 	kind := strings.TrimSpace(c.Query("jenis"))
 	if kind != "presensi" && kind != "jurnal" {
-		return fiber.NewError(fiber.StatusBadRequest, "jenis harus presensi atau jurnal")
+		return operationalComplianceDetailResponse{}, fiber.NewError(fiber.StatusBadRequest, "jenis harus presensi atau jurnal")
 	}
 	scope, err := s.operationalComplianceDetailScope(c)
 	if err != nil {
-		return err
+		return operationalComplianceDetailResponse{}, err
 	}
 	response := emptyOperationalComplianceDetailResponse(scope.Now, kind)
 	response.Filters = scope.Filters
 	if scope.AcademicYear.ID == "" || scope.Semester.ID == "" || !scope.HasPeriod {
-		return c.JSON(response)
+		return response, nil
 	}
 	response.TahunAjaran = operationalCompliancePeriod{ID: scope.AcademicYear.ID, Label: scope.AcademicYear.NamaTahunAjaran}
 	response.Semester = operationalCompliancePeriod{ID: scope.Semester.ID, Label: scope.Semester.NamaSemester}
@@ -896,16 +899,207 @@ func (s *Server) operationalComplianceDetail(c *fiber.Ctx) error {
 	if kind == "presensi" {
 		rows, err := s.operationalComplianceAttendanceDetail(scope.Classes, scope.Start, scope.End, &response.Summary)
 		if err != nil {
-			return err
+			return operationalComplianceDetailResponse{}, err
 		}
 		response.Presensi = rows
 	} else {
 		rows, warnings, err := s.operationalComplianceJournalDetail(scope.Classes, scope.Start, scope.End, &response.Summary)
 		if err != nil {
-			return err
+			return operationalComplianceDetailResponse{}, err
 		}
 		response.Jurnal = rows
 		response.Warnings = warnings
 	}
+	return response, nil
+}
+
+// operationalComplianceDetail powers the two supervisory detail tabs. It
+// deliberately omits attendance signatures, Base64 images, and student rows;
+// the existing scoped detail endpoints are fetched only when a row is opened.
+func (s *Server) operationalComplianceDetail(c *fiber.Ctx) error {
+	response, err := s.operationalComplianceDetailData(c)
+	if err != nil {
+		return err
+	}
 	return c.JSON(response)
+}
+
+type operationalAttendanceFollowUpRow struct {
+	ClassLabel  string
+	TutorName   string
+	PlannedDate string
+	ActualDate  string
+	Status      string
+	FollowUp    string
+}
+
+func operationalAttendanceFollowUpRows(response operationalComplianceDetailResponse) []operationalAttendanceFollowUpRow {
+	rows := []operationalAttendanceFollowUpRow{}
+	for _, classRow := range response.Presensi {
+		for _, meeting := range classRow.Meetings {
+			if meeting.Status != "belum_dibuat" && meeting.Status != "belum_lengkap" {
+				continue
+			}
+
+			issues := make([]string, 0, len(meeting.Issues)+1)
+			if meeting.Status == "belum_dibuat" {
+				issues = append(issues, "Presensi belum dibuat")
+			}
+			for _, issue := range meeting.Issues {
+				if issue == "Kehadiran siswa belum lengkap" && meeting.TotalStudents > 0 {
+					issue = fmt.Sprintf("Kehadiran siswa %d/%d sudah diisi", meeting.FilledStudents, meeting.TotalStudents)
+				}
+				if issue != "Belum ada data presensi" && issue != "Presensi belum dibuat" {
+					issues = append(issues, issue)
+				}
+			}
+			if meeting.ActualDate != "" {
+				issues = append(issues, "Dilaksanakan "+formatOperationalDate(meeting.ActualDate))
+			}
+			if len(issues) == 0 {
+				issues = append(issues, "Perlu dilengkapi")
+			}
+
+			status := "Belum lengkap"
+			if meeting.Status == "belum_dibuat" {
+				status = "Belum dibuat"
+			}
+			rows = append(rows, operationalAttendanceFollowUpRow{
+				ClassLabel:  classRow.ClassLabel,
+				TutorName:   classRow.TutorName,
+				PlannedDate: formatOperationalDate(meeting.PlannedDate),
+				ActualDate:  meeting.ActualDate,
+				Status:      status,
+				FollowUp:    strings.Join(issues, "; "),
+			})
+		}
+	}
+	return rows
+}
+
+func formatOperationalDate(value string) string {
+	parsed, err := time.ParseInLocation("2006-01-02", value, wibLocation)
+	if err != nil {
+		return value
+	}
+	return parsed.Format("02-01-2006")
+}
+
+func formatOperationalGeneratedAt(value string) string {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+	return parsed.In(wibLocation).Format("02-01-2006 15:04")
+}
+
+// operationalComplianceExport returns a compact, share-ready report of only
+// pending attendance rows. JPG is intentionally rendered by the browser from
+// the same detail response; the server owns the canonical PDF export.
+func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
+	if strings.TrimSpace(c.Query("jenis")) != "presensi" {
+		return fiber.NewError(fiber.StatusBadRequest, "jenis ekspor harus presensi")
+	}
+	if strings.TrimSpace(c.Query("format")) != "pdf" {
+		return fiber.NewError(fiber.StatusBadRequest, "format ekspor harus pdf")
+	}
+	response, err := s.operationalComplianceDetailData(c)
+	if err != nil {
+		return err
+	}
+	rows := operationalAttendanceFollowUpRows(response)
+
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(12, 12, 12)
+	pdf.SetAutoPageBreak(false, 14)
+	pdf.SetFooterFunc(func() {
+		pdf.SetY(-10)
+		pdf.SetFont("Helvetica", "", 8)
+		pdf.SetTextColor(120, 120, 120)
+		pdf.CellFormat(186, 5, fmt.Sprintf("PKBM Tunas Ilmu · Halaman %d", pdf.PageNo()), "", 0, "R", false, 0, "")
+	})
+	pdf.AddPage()
+
+	pdf.SetFont("Helvetica", "B", 16)
+	pdf.SetTextColor(28, 87, 64)
+	pdf.CellFormat(186, 8, "Laporan Tindak Lanjut Presensi", "", 1, "C", false, 0, "")
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.SetTextColor(0, 0, 0)
+	period := []string{response.TahunAjaran.Label, response.Semester.Label}
+	period = compactOperationalLabels(period)
+	periodLabel := strings.Join(period, " · ")
+	if periodLabel == "" {
+		periodLabel = "Periode belum tersedia"
+	}
+	pdf.CellFormat(186, 6, periodLabel, "", 1, "C", false, 0, "")
+	pdf.CellFormat(186, 6, fmt.Sprintf("Dibuat %s WIB · %d item perlu ditindaklanjuti", formatOperationalGeneratedAt(response.GeneratedAt), len(rows)), "", 1, "C", false, 0, "")
+	pdf.Ln(5)
+
+	widths := []float64{10, 35, 48, 26, 67}
+	headers := []string{"No", "Rombel", "Tutor", "Tanggal", "Status / tindak lanjut"}
+	drawHeader := func() {
+		pdf.SetFillColor(28, 87, 64)
+		pdf.SetTextColor(255, 255, 255)
+		pdf.SetFont("Helvetica", "B", 8.5)
+		for index, header := range headers {
+			pdf.CellFormat(widths[index], 8, header, "1", 0, "C", true, 0, "")
+		}
+		pdf.Ln(-1)
+		pdf.SetTextColor(0, 0, 0)
+		pdf.SetFont("Helvetica", "", 8.5)
+	}
+	drawHeader()
+
+	if len(rows) == 0 {
+		pdf.CellFormat(186, 12, "Tidak ada presensi yang perlu ditindaklanjuti.", "1", 1, "C", false, 0, "")
+	} else {
+		for index, row := range rows {
+			values := []string{
+				fmt.Sprintf("%d", index+1),
+				row.ClassLabel,
+				row.TutorName,
+				row.PlannedDate,
+				row.Status + ": " + row.FollowUp,
+			}
+			lineCounts := make([]int, len(values))
+			maxLines := 1
+			for column, value := range values {
+				lineCounts[column] = len(pdf.SplitLines([]byte(value), widths[column]-4))
+				if lineCounts[column] > maxLines {
+					maxLines = lineCounts[column]
+				}
+			}
+			rowHeight := float64(maxLines)*4.8 + 3
+			if pdf.GetY()+rowHeight > 280 {
+				pdf.AddPage()
+				drawHeader()
+			}
+			x, y := 12.0, pdf.GetY()
+			for column, value := range values {
+				pdf.Rect(x, y, widths[column], rowHeight, "D")
+				pdf.SetXY(x+2, y+1.5)
+				align := "L"
+				if column == 0 || column == 3 {
+					align = "C"
+				}
+				pdf.MultiCell(widths[column]-4, 4.8, value, "", align, false)
+				x += widths[column]
+			}
+			pdf.SetXY(12, y+rowHeight)
+		}
+	}
+
+	c.Set(fiber.HeaderContentType, "application/pdf")
+	c.Attachment("laporan-tindak-lanjut-presensi-" + time.Now().In(wibLocation).Format("20060102-150405") + ".pdf")
+	return pdf.Output(c.Response().BodyWriter())
+}
+
+func compactOperationalLabels(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }

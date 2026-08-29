@@ -77,6 +77,9 @@ func (s *Server) routes(api fiber.Router) {
 	// Detail laporan kepatuhan tetap baca-saja dan menggunakan pemeriksaan peran
 	// eksplisit yang sama seperti ringkasannya.
 	api.Get("/dashboard/kepatuhan-pembelajaran/detail", s.operationalComplianceDetail)
+	// Ekspor tindak lanjut presensi memakai sumber data detail yang sama dan
+	// hanya dapat diakses oleh admin/kepala sekolah.
+	api.Get("/dashboard/kepatuhan-pembelajaran/export", s.operationalComplianceExport)
 
 	// Bare-api writes (guru may create/update presensi for classes they manage;
 	// canManageKelas inside each handler enforces that).

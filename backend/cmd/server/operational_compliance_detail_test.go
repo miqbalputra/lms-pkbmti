@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -188,6 +191,15 @@ func TestOperationalComplianceDetailReports(t *testing.T) {
 	if row := attendanceByClass[classes[3].ID]; row.Status != "libur" {
 		t.Fatalf("holiday attendance row invalid: %+v", row)
 	}
+	followUps := operationalAttendanceFollowUpRows(presensi)
+	if len(followUps) != 2 {
+		t.Fatalf("follow-up export must contain only missing and incomplete attendance: %+v", followUps)
+	}
+	for _, followUp := range followUps {
+		if followUp.ClassLabel == kelasLabel(classes[2]) || followUp.ClassLabel == kelasLabel(classes[3]) {
+			t.Fatalf("complete/holiday attendance leaked into follow-up export: %+v", followUps)
+		}
+	}
 
 	jurnalPath := "/api/dashboard/kepatuhan-pembelajaran/detail?jenis=jurnal&tahunAjaranId=" + year.ID + "&semesterId=" + semester.ID + "&from=" + date + "&to=" + date
 	jurnal := getOperationalComplianceDetail(t, app, adminToken, jurnalPath)
@@ -217,6 +229,39 @@ func TestOperationalComplianceDetailReports(t *testing.T) {
 	}
 	if head := getOperationalComplianceDetail(t, app, headToken, presensiPath); head.Summary != presensi.Summary {
 		t.Fatalf("kepala sekolah detail mismatch: %+v", head.Summary)
+	}
+
+	exportPath := "/api/dashboard/kepatuhan-pembelajaran/export?jenis=presensi&format=pdf&tahunAjaranId=" + year.ID + "&semesterId=" + semester.ID + "&from=" + date + "&to=" + date
+	exportResponse, err := makeRequest(app, http.MethodGet, exportPath, adminToken, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportBody, readErr := io.ReadAll(exportResponse.Body)
+	exportResponse.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if exportResponse.StatusCode != http.StatusOK {
+		t.Fatalf("attendance follow-up export: want 200, got %d", exportResponse.StatusCode)
+	}
+	if !strings.HasPrefix(exportResponse.Header.Get("Content-Type"), "application/pdf") {
+		t.Fatalf("attendance follow-up export content type: %q", exportResponse.Header.Get("Content-Type"))
+	}
+	contentDisposition := exportResponse.Header.Get("Content-Disposition")
+	if !strings.Contains(contentDisposition, "laporan-tindak-lanjut-presensi-") || !strings.Contains(contentDisposition, ".pdf") {
+		t.Fatalf("attendance follow-up export filename: %q", contentDisposition)
+	}
+	if !bytes.HasPrefix(exportBody, []byte("%PDF")) {
+		t.Fatalf("attendance follow-up export is not a PDF")
+	}
+
+	guruExport, err := makeRequest(app, http.MethodGet, exportPath, guruToken, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guruExport.Body.Close()
+	if guruExport.StatusCode != http.StatusForbidden {
+		t.Fatalf("guru export access: want 403, got %d", guruExport.StatusCode)
 	}
 
 	guruResponse, err := makeRequest(app, http.MethodGet, presensiPath, guruToken, nil, "")
