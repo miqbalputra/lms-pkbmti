@@ -122,6 +122,13 @@ type AttendanceFollowUpRow = {
   followUp: string
 }
 
+type MissingAttendanceRow = {
+  classId: string
+  classLabel: string
+  tutorName: string
+  plannedDate: string
+}
+
 function dateLabel(value?: string) {
   return value ? formatWibDate(value) : '—'
 }
@@ -151,6 +158,19 @@ function pendingAttendanceRows(data: DetailResponse): AttendanceFollowUpRow[] {
         actualDate: meeting.actualDate,
         status: meeting.status as AttendanceFollowUpRow['status'],
         followUp: attendanceFollowUpText(meeting),
+      }))
+  )
+}
+
+function missingAttendanceRows(data: DetailResponse): MissingAttendanceRow[] {
+  return data.presensi.flatMap((classRow) =>
+    classRow.meetings
+      .filter((meeting) => meeting.status === 'belum_dibuat')
+      .map((meeting) => ({
+        classId: classRow.classId,
+        classLabel: classRow.classLabel,
+        tutorName: classRow.tutorName,
+        plannedDate: meeting.plannedDate,
       }))
   )
 }
@@ -462,6 +482,7 @@ export function KepatuhanDetailReports({
   const description = kind === 'presensi'
     ? 'Pantau urutan pertemuan, kelengkapan siswa, tanda tangan, dan foto bukti KBM.'
     : 'Mapel dianggap belum diisi bila tidak memiliki jurnal sama sekali pada periode terpilih.'
+  const missingRows = kind === 'presensi' ? missingAttendanceRows(data) : []
 
   return (
     <div className="space-y-4">
@@ -514,6 +535,44 @@ export function KepatuhanDetailReports({
 
       {kind === 'presensi' ? (
         <div className="space-y-4">
+          <Card className="overflow-hidden rounded-2xl border border-border bg-card shadow-2xs">
+            <div className="flex flex-col gap-1 border-b border-border/70 px-5 py-4 sm:px-6">
+              <h4 className="font-bold text-foreground">Ringkasan Presensi Belum Diisi</h4>
+              <p className="text-xs text-muted-foreground">Daftar kelas dan tanggal jadwal yang belum memiliki presensi.</p>
+            </div>
+            {loading ? (
+              <div className="space-y-3 p-5">
+                {Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-4 w-full animate-pulse rounded bg-muted" />)}
+              </div>
+            ) : missingRows.length === 0 ? (
+              <EmptyState
+                colSpan={3}
+                title="Tidak ada presensi belum diisi"
+                description="Semua presensi pada filter ini sudah dibuat."
+                icon={<CalendarCheck className="h-8 w-8 text-emerald-600" />}
+              />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Kelas</TableHead>
+                    <TableHead>Nama Tutor</TableHead>
+                    <TableHead>Tanggal belum presensi kelas</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {missingRows.map((row) => (
+                    <TableRow key={`${row.classId}-${row.plannedDate}`}>
+                      <TableCell className="font-semibold text-foreground">{row.classLabel}</TableCell>
+                      <TableCell>{row.tutorName}</TableCell>
+                      <TableCell>{dateLabel(row.plannedDate)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+
           {loading ? <ReportTableSkeleton columns={6} /> : data.presensi.length === 0 ? (
           <EmptyState title="Tidak ada kelas atau pertemuan" description="Ubah filter atau rentang tanggal untuk melihat laporan presensi." />
           ) : data.presensi.map((classRow) => (
