@@ -341,6 +341,15 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Post("/backup", s.createBackupNow)
 	admin.Post("/backup/restore", s.stageRestore)
 	admin.Delete("/backup/:name", s.deleteBackupFile)
+	// Full R2 backups are separate from the legacy database-file endpoints.
+	// They are deliberately admin-session only: an automation key cannot start
+	// a destructive restore or obtain cloud archive metadata.
+	admin.Get("/backup/r2/status", s.r2Status)
+	admin.Post("/backup/r2/test", s.testR2)
+	admin.Get("/backup/r2/archives", s.listR2Archives)
+	admin.Get("/backup/r2/jobs", s.listR2Jobs)
+	admin.Post("/backup/r2", s.createR2BackupHandler)
+	admin.Post("/backup/r2/restore", s.restoreR2ArchiveHandler)
 	admin.Post("/surat-siswa", s.uploadSuratSiswa)
 	admin.Delete("/surat-siswa/:id", s.deleteSuratSiswa)
 }
@@ -8696,6 +8705,10 @@ func (s *Server) startScheduler() {
 			fmt.Printf("scheduled backup job registered (id=%d, cron=%q)\n", id, sched)
 		}
 	}
+	// R2 uses a daily evaluator rather than */3 day-of-month cron syntax, which
+	// resets at month boundaries. The evaluator runs only after 72 successful
+	// hours and therefore preserves the requested three-day cadence.
+	_, _ = cr.AddFunc("0 2 * * *", s.enqueueScheduledR2Backup)
 	cr.Start()
 	// Auto-finish expired ujian online sessions every 30 seconds.
 	go func() {

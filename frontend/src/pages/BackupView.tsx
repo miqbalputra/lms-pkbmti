@@ -18,6 +18,9 @@ type Backup = {
   format: 'db' | 'sql'
   automatic: boolean
 }
+type R2Archive = { key: string; createdAt: string; size: number; automatic: boolean }
+type R2Job = { id: string; kind: string; status: string; sourceKey?: string; objectKey?: string; error?: string; finishedAt?: string }
+type R2Status = { enabled: boolean; configured?: boolean; bucket?: string; prefix: string; retentionDays: number; schedule: string; maintenance: boolean }
 
 function formatBytes(n: number): string {
   if (n < 1024) return n + ' B'
@@ -59,6 +62,9 @@ export function BackupView({ token }: { token: string }) {
   const [busy, setBusy] = useState<string | null>(null) // 'db' | 'sql' | 'restore' | null
   const [restoreMsg, setRestoreMsg] = useState('')
   const [showGuide, setShowGuide] = useState(true)
+  const [r2Status, setR2Status] = useState<R2Status | null>(null)
+  const [r2Archives, setR2Archives] = useState<R2Archive[]>([])
+  const [r2Jobs, setR2Jobs] = useState<R2Job[]>([])
   const fileRef = useRef<HTMLInputElement | null>(null)
 
   const isPG = dialect === 'postgresql'
@@ -73,10 +79,18 @@ export function BackupView({ token }: { token: string }) {
   async function load() {
     setLoading(true)
     try {
-      const r = (await request('/backup', token)) as { dir: string; backups: Backup[]; dialect: string }
+      const [r, status, archives, jobs] = await Promise.all([
+        request('/backup', token) as Promise<{ dir: string; backups: Backup[]; dialect: string }>,
+        request('/backup/r2/status', token) as Promise<R2Status>,
+        request('/backup/r2/archives', token) as Promise<{ archives: R2Archive[] }>,
+        request('/backup/r2/jobs', token) as Promise<{ jobs: R2Job[] }>,
+      ])
       setDir(r.dir || 'backups')
       setBackups(r.backups || [])
       setDialect(r.dialect || 'sqlite')
+      setR2Status(status)
+      setR2Archives(archives.archives || [])
+      setR2Jobs(jobs.jobs || [])
     } catch (e: unknown) {
       toast.error(String((e as Error).message || 'Gagal memuat daftar backup'))
     } finally {
@@ -84,9 +98,35 @@ export function BackupView({ token }: { token: string }) {
     }
   }
 
+  async function runR2Backup() {
+    setBusy('r2-backup')
+    try {
+      await request('/backup/r2', token, 'POST')
+      toast.success('Backup penuh R2 dimasukkan ke antrean.')
+      window.setTimeout(() => void load(), 700)
+    } catch (e: unknown) { toast.error(String((e as Error).message || 'Backup R2 gagal dimulai')) } finally { setBusy(null) }
+  }
+
+  async function testR2() {
+    setBusy('r2-test')
+    try { await request('/backup/r2/test', token, 'POST'); toast.success('Koneksi Cloudflare R2 berhasil.') } catch (e: unknown) { toast.error(String((e as Error).message || 'Koneksi R2 gagal')) } finally { setBusy(null) }
+  }
+
+  async function restoreR2(key: string) {
+    if (!confirm(`Restore penuh akan mengganti database dan seluruh lampiran dari backup ini:\n${key}\n\nAplikasi akan masuk mode pemeliharaan. Lanjutkan?`)) return
+    setBusy('r2-restore')
+    try { await request('/backup/r2/restore', token, 'POST', { key, confirmation: key }); toast.success('Restore R2 dimasukkan ke antrean. Pantau status di bawah.') ; window.setTimeout(() => void load(), 700) } catch (e: unknown) { toast.error(String((e as Error).message || 'Restore R2 gagal dimulai')) } finally { setBusy(null) }
+  }
+
   useEffect(() => {
     void load()
   }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!r2Jobs.some((job) => job.status === 'queued' || job.status === 'running')) return
+    const timer = window.setInterval(() => void load(), 3000)
+    return () => window.clearInterval(timer)
+  }, [r2Jobs]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function createBackup(format: 'db' | 'sql') {
     const actualFormat = isPG ? 'sql' : format
@@ -197,12 +237,26 @@ export function BackupView({ token }: { token: string }) {
   return (
     <div className="space-y-4">
       <PageToolbar
-        title="Backup & Restore Database"
-        description={isPG
-          ? "Unduh database PostgreSQL penuh via pg_dump (.sql) atau restore cukup dengan upload file."
-          : "Unduh database SQLite penuh (.db) sekali klik, lalu restore cukup dengan upload file backup."
-        }
+        title="Backup & Restore"
+        description="Backup penuh Cloudflare R2 mencakup database dan seluruh lampiran aplikasi."
       />
+
+      <Card className="rounded-2xl border border-primary/30 bg-primary/5 p-4 shadow-2xs space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">Backup Penuh Cloudflare R2</h2>
+            <p className="text-xs text-muted-foreground">Database + foto, tugas, materi, RPP, surat, dan dokumen tutor dalam satu arsip terenkripsi.</p>
+            {r2Status && <p className="mt-1 text-xs text-muted-foreground">{r2Status.enabled && r2Status.configured ? <>Bucket privat <code>{r2Status.bucket}</code> · Retensi {r2Status.retentionDays} hari · {r2Status.schedule}</> : <>R2 belum dikonfigurasi di secret server.</>}</p>}
+          </div>
+          <div className="flex gap-2"><Button variant="outline" size="sm" onClick={testR2} disabled={!r2Status?.configured || busy === 'r2-test'}>{busy === 'r2-test' ? 'Menguji...' : 'Uji Koneksi'}</Button><Button size="sm" onClick={runR2Backup} disabled={!r2Status?.configured || busy === 'r2-backup'}><Database className="h-4 w-4" /> {busy === 'r2-backup' ? 'Mengantrikan...' : 'Backup Sekarang'}</Button></div>
+        </div>
+        {r2Status?.maintenance && <Alert><AlertDescription>Restore sedang berlangsung. Perubahan data sementara ditolak.</AlertDescription></Alert>}
+        <div className="overflow-x-auto rounded-lg border border-border bg-card"><Table><TableHeader><TableRow><TableHead>Arsip R2</TableHead><TableHead>Ukuran</TableHead><TableHead>Waktu</TableHead><TableHead>Jenis</TableHead><TableHead className="text-right">Aksi</TableHead></TableRow></TableHeader><TableBody>
+          {r2Archives.map((a) => <TableRow key={a.key}><TableCell className="max-w-[360px] truncate font-mono text-xs" title={a.key}>{a.key}</TableCell><TableCell>{formatBytes(a.size)}</TableCell><TableCell className="text-xs">{formatTime(a.createdAt)}</TableCell><TableCell><Badge variant={a.automatic ? 'default' : 'outline'}>{a.automatic ? 'otomatis' : 'manual'}</Badge></TableCell><TableCell className="text-right"><Button size="sm" variant="destructive" onClick={() => restoreR2(a.key)} disabled={busy === 'r2-restore'}>Restore</Button></TableCell></TableRow>)}
+          {!r2Archives.length && <TableRow><TableCell colSpan={5} className="py-5 text-center text-sm text-muted-foreground">Belum ada arsip cloud.</TableCell></TableRow>}
+        </TableBody></Table></div>
+        {!!r2Jobs.length && <div className="text-xs text-muted-foreground">Job terbaru: {r2Jobs.slice(0, 3).map((j) => <span key={j.id} className="mr-3"><strong>{j.kind}</strong> · {j.status}{j.error ? ` (${j.error})` : ''}</span>)}</div>}
+      </Card>
 
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs space-y-3">
         <div className="flex items-center justify-between gap-3">

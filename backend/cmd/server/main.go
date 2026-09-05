@@ -770,6 +770,7 @@ type Server struct {
 	cfg       Config
 	startedAt time.Time
 	metrics   backupMetrics
+	r2        r2Coordinator
 }
 
 func env(k, d string) string {
@@ -815,6 +816,14 @@ func main() {
 	app.Use(helmet.New())
 	app.Use(compress.New())
 	app.Use(cors.New(cors.Config{AllowOrigins: env("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), AllowHeaders: "Origin, Content-Type, Accept, Authorization", AllowCredentials: true}))
+	// Block writes while a composite restore is being applied. Read-only status
+	// routes remain available so the administrator can observe completion.
+	app.Use(func(c *fiber.Ctx) error {
+		if s.r2.maintenance.Load() && c.Method() != fiber.MethodGet && c.Method() != fiber.MethodHead {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Aplikasi sedang dalam mode pemeliharaan untuk restore backup."})
+		}
+		return c.Next()
+	})
 	health := func(c *fiber.Ctx) error {
 		payload, healthy := s.healthPayload()
 		if !healthy {
@@ -907,6 +916,7 @@ func main() {
 		app.Get("/*", func(c *fiber.Ctx) error { return c.SendFile("./public/index.html") })
 	}
 	s.startScheduler()
+	go s.enqueueScheduledR2Backup()
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- app.Listen(":" + env("PORT", "8080")) }()
 	signalCh := make(chan os.Signal, 1)
@@ -959,6 +969,11 @@ func validateConfig(cfg Config) error {
 	}
 	if strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")) == "" || strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")) == "" {
 		return errors.New("production requires TURNSTILE_SECRET_KEY and TURNSTILE_SITE_KEY")
+	}
+	if r2Enabled() {
+		if err := r2ConfigError(); err != nil {
+			return fmt.Errorf("invalid R2 backup configuration: %w", err)
+		}
 	}
 	if offsiteURL := strings.TrimSpace(os.Getenv("BACKUP_OFFSITE_URL")); offsiteURL != "" {
 		u, err := url.Parse(offsiteURL)
@@ -1099,7 +1114,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {

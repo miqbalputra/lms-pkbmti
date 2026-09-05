@@ -50,11 +50,12 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	liveDBPath       = "pkbm-lms.db"
-	pendingDBPath    = "pkbm-lms.db.restore-pending"     // binary restore staging
-	pendingSQLPath   = "pkbm-lms.db.restore-pending.sql" // sql restore staging
-	defaultBackupDir = "backups"
-	backupGlob       = "pkbm-lms-*.db"
+	liveDBPath         = "pkbm-lms.db"
+	pendingDBPath      = "pkbm-lms.db.restore-pending"     // binary restore staging
+	pendingSQLPath     = "pkbm-lms.db.restore-pending.sql" // sql restore staging
+	pendingUploadsPath = "uploads.restore-pending"         // full R2 restore staging
+	defaultBackupDir   = "backups"
+	backupGlob         = "pkbm-lms-*.db"
 )
 
 // pendingRestoreApplied is set true when applyPendingRestore applied a staged
@@ -616,6 +617,9 @@ func applyBinaryRestore() error {
 		return fmt.Errorf("swap pending db failed: %w", err)
 	}
 	pendingRestoreApplied = true
+	if err := applyPendingUploads(); err != nil {
+		return fmt.Errorf("restore database berhasil tetapi restore uploads gagal: %w", err)
+	}
 	fmt.Printf("RESTORE applied (binary). Pre-restore safety backup: %s\n", safety)
 	return nil
 }
@@ -650,7 +654,29 @@ func applySQLRestore() error {
 	}
 	_ = os.Remove(pendingSQLPath)
 	pendingRestoreApplied = true
+	if err := applyPendingUploads(); err != nil {
+		return fmt.Errorf("restore database berhasil tetapi restore uploads gagal: %w", err)
+	}
 	fmt.Printf("RESTORE applied (sql). Pre-restore safety backup: %s\n", safety)
+	return nil
+}
+
+// applyPendingUploads is only present for a composite R2 restore. Legacy
+// database-only restores leave current uploads untouched.
+func applyPendingUploads() error {
+	if _, err := os.Stat(pendingUploadsPath); os.IsNotExist(err) {
+		return nil
+	}
+	old := uploadsDir() + ".pre-restore"
+	_ = os.RemoveAll(old)
+	if err := os.Rename(uploadsDir(), old); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(pendingUploadsPath, uploadsDir()); err != nil {
+		_ = os.Rename(old, uploadsDir())
+		return err
+	}
+	_ = os.RemoveAll(old)
 	return nil
 }
 
