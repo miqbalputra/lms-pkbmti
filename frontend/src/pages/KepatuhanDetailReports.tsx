@@ -13,6 +13,7 @@ import { toast } from 'sonner'
 type SharedFilters = {
   tahunAjaranId: string
   semesterId: string
+  pokjarId: string
   tutorId: string
   kelasId: string
 }
@@ -34,6 +35,7 @@ type AttendanceMeeting = {
 type AttendanceClass = {
   classId: string
   classLabel: string
+  pokjarName: string
   tutorName: string
   meetings: AttendanceMeeting[]
 }
@@ -59,6 +61,7 @@ type JournalSubject = {
 type JournalClass = {
   classId: string
   classLabel: string
+  pokjarName: string
   tutorName: string
   subjects: JournalSubject[]
 }
@@ -113,53 +116,16 @@ const emptySummary: DetailSummary = {
 
 const emptyDetail: DetailResponse = { summary: emptySummary, presensi: [], jurnal: [], warnings: [] }
 
-type AttendanceFollowUpRow = {
-  classLabel: string
-  tutorName: string
-  plannedDate: string
-  actualDate?: string
-  status: 'belum_dibuat' | 'belum_lengkap'
-  followUp: string
-}
-
 type MissingAttendanceRow = {
   classId: string
   classLabel: string
+  pokjarName: string
   tutorName: string
   plannedDate: string
 }
 
 function dateLabel(value?: string) {
   return value ? formatWibDate(value) : '—'
-}
-
-function attendanceFollowUpText(meeting: AttendanceMeeting) {
-  const issues: string[] = []
-  if (meeting.status === 'belum_dibuat') issues.push('Presensi belum dibuat')
-  for (const rawIssue of meeting.issues) {
-    let issue = rawIssue
-    if (issue === 'Kehadiran siswa belum lengkap' && meeting.totalStudents > 0) {
-      issue = `Kehadiran siswa ${meeting.filledStudents}/${meeting.totalStudents} sudah diisi`
-    }
-    if (issue !== 'Belum ada data presensi' && issue !== 'Presensi belum dibuat') issues.push(issue)
-  }
-  if (meeting.actualDate) issues.push(`Dilaksanakan ${dateLabel(meeting.actualDate)}`)
-  return issues.length > 0 ? issues.join('; ') : 'Perlu dilengkapi'
-}
-
-function pendingAttendanceRows(data: DetailResponse): AttendanceFollowUpRow[] {
-  return data.presensi.flatMap((classRow) =>
-    classRow.meetings
-      .filter((meeting) => meeting.status === 'belum_dibuat' || meeting.status === 'belum_lengkap')
-      .map((meeting) => ({
-        classLabel: classRow.classLabel,
-        tutorName: classRow.tutorName,
-        plannedDate: dateLabel(meeting.plannedDate),
-        actualDate: meeting.actualDate,
-        status: meeting.status as AttendanceFollowUpRow['status'],
-        followUp: attendanceFollowUpText(meeting),
-      }))
-  )
 }
 
 function missingAttendanceRows(data: DetailResponse): MissingAttendanceRow[] {
@@ -169,6 +135,7 @@ function missingAttendanceRows(data: DetailResponse): MissingAttendanceRow[] {
       .map((meeting) => ({
         classId: classRow.classId,
         classLabel: classRow.classLabel,
+        pokjarName: classRow.pokjarName,
         tutorName: classRow.tutorName,
         plannedDate: meeting.plannedDate,
       }))
@@ -209,12 +176,12 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 async function downloadAttendanceJpg(data: DetailResponse) {
-  const rows = pendingAttendanceRows(data)
+  const rows = missingAttendanceRows(data)
   const width = 1400
   const padding = 56
   const tableWidth = width - padding * 2
-  const columnWidths = [70, 240, 300, 190, 488]
-  const title = 'Laporan Tindak Lanjut Presensi'
+  const columnWidths = [300, 260, 360, 368]
+  const title = 'Laporan Presensi Belum Diisi'
   const period = [data.tahunAjaran?.label, data.semester?.label].filter(Boolean).join(' · ') || 'Periode belum tersedia'
   const generatedAt = data.generatedAt ? formatWibDateTime(data.generatedAt) : formatWibDateTime(new Date())
   const bodyFontSize = 18
@@ -222,11 +189,10 @@ async function downloadAttendanceJpg(data: DetailResponse) {
   const headerHeight = 58
   const rowLayouts = rows.map((row) => {
     const values = [
-      String(rows.indexOf(row) + 1),
+      row.pokjarName,
       row.classLabel,
       row.tutorName,
-      row.plannedDate,
-      `${row.status === 'belum_dibuat' ? 'Belum dibuat' : 'Belum lengkap'}: ${row.followUp}`,
+      dateLabel(row.plannedDate),
     ]
     const lines = values.map((value, index) => wrapReportText(value, Math.max(8, Math.floor((columnWidths[index] - 26) / 9))))
     return { values, lines, height: Math.max(72, Math.max(...lines.map((value) => value.length)) * lineHeight + 26) }
@@ -248,27 +214,27 @@ async function downloadAttendanceJpg(data: DetailResponse) {
   text(title, width / 2, 64, 34, '#1c5740', 'middle', 700)
   text('PKBM Tunas Ilmu', width / 2, 98, 20, '#17211b', 'middle', 600)
   text(period, width / 2, 130, 18, '#526158', 'middle')
-  text(`Dibuat ${generatedAt} WIB · ${rows.length} item perlu ditindaklanjuti`, width / 2, 158, 17, '#526158', 'middle')
+  text(`Dibuat ${generatedAt} WIB · ${rows.length} presensi belum dibuat`, width / 2, 158, 17, '#526158', 'middle')
 
   let y = 190
   let x = padding
   columnWidths.forEach((columnWidth, index) => {
     svg.push(`<rect x="${x}" y="${y}" width="${columnWidth}" height="${headerHeight}" fill="#1c5740" stroke="#ffffff" stroke-width="2"/>`)
-    text(['No', 'Rombel', 'Tutor', 'Tanggal', 'Status / tindak lanjut'][index], x + columnWidth / 2, y + 36, 17, '#ffffff', 'middle', 700)
+    text(['Pokjar', 'Rombel', 'Tutor', 'Tanggal belum presensi'][index], x + columnWidth / 2, y + 36, 17, '#ffffff', 'middle', 700)
     x += columnWidth
   })
   y += headerHeight
 
   if (rows.length === 0) {
     svg.push(`<rect x="${padding}" y="${y}" width="${tableWidth}" height="${emptyHeight}" fill="#ffffff" stroke="#d6dfd9" stroke-width="2"/>`)
-    text('Tidak ada presensi yang perlu ditindaklanjuti.', width / 2, y + 50, bodyFontSize, '#526158', 'middle', 600)
+    text('Tidak ada presensi yang belum dibuat.', width / 2, y + 50, bodyFontSize, '#526158', 'middle', 600)
   } else {
     rowLayouts.forEach((layout, rowIndex) => {
       x = padding
       const fill = rowIndex % 2 === 0 ? '#f7faf8' : '#ffffff'
       layout.lines.forEach((lines, columnIndex) => {
         svg.push(`<rect x="${x}" y="${y}" width="${columnWidths[columnIndex]}" height="${layout.height}" fill="${fill}" stroke="#d6dfd9" stroke-width="2"/>`)
-        multiline(lines, x + (columnIndex === 0 || columnIndex === 3 ? 0 : 14), y + 32, columnWidths[columnIndex] - (columnIndex === 0 || columnIndex === 3 ? 0 : 28), columnIndex === 0 || columnIndex === 3 ? 'middle' : 'start', columnIndex === 4 ? '#8a4b00' : '#17211b', columnIndex === 4 ? 600 : 400)
+        multiline(lines, x + (columnIndex === 3 ? 0 : 14), y + 32, columnWidths[columnIndex] - (columnIndex === 3 ? 0 : 28), columnIndex === 3 ? 'middle' : 'start')
         x += columnWidths[columnIndex]
       })
       y += layout.height
@@ -296,7 +262,7 @@ async function downloadAttendanceJpg(data: DetailResponse) {
     const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((value) => value ? resolve(value) : reject(new Error('JPG gagal dibuat.')), 'image/jpeg', 0.92)
     })
-    downloadBlob(blob, `laporan-tindak-lanjut-presensi-${new Date().toISOString().slice(0, 10)}.jpg`)
+    downloadBlob(blob, `laporan-presensi-belum-diisi-${new Date().toISOString().slice(0, 10)}.jpg`)
   } finally {
     URL.revokeObjectURL(sourceUrl)
   }
@@ -398,6 +364,7 @@ export function KepatuhanDetailReports({
     const params = new URLSearchParams({ jenis: kind })
     if (filters.tahunAjaranId) params.set('tahunAjaranId', filters.tahunAjaranId)
     if (filters.semesterId) params.set('semesterId', filters.semesterId)
+    if (filters.pokjarId) params.set('pokjarId', filters.pokjarId)
     if (filters.tutorId) params.set('tutorId', filters.tutorId)
     if (filters.kelasId) params.set('kelasId', filters.kelasId)
     if (from) params.set('from', from)
@@ -418,7 +385,7 @@ export function KepatuhanDetailReports({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [active, filters.kelasId, filters.semesterId, filters.tahunAjaranId, filters.tutorId, from, kind, to, token])
+  }, [active, filters.kelasId, filters.pokjarId, filters.semesterId, filters.tahunAjaranId, filters.tutorId, from, kind, to, token])
 
   async function toggleMeeting(meetingID: string) {
     if (expandedMeeting === meetingID) {
@@ -443,6 +410,7 @@ export function KepatuhanDetailReports({
     const params = new URLSearchParams({ jenis: 'presensi', format })
     if (filters.tahunAjaranId) params.set('tahunAjaranId', filters.tahunAjaranId)
     if (filters.semesterId) params.set('semesterId', filters.semesterId)
+    if (filters.pokjarId) params.set('pokjarId', filters.pokjarId)
     if (filters.tutorId) params.set('tutorId', filters.tutorId)
     if (filters.kelasId) params.set('kelasId', filters.kelasId)
     if (from) params.set('from', from)
@@ -456,7 +424,7 @@ export function KepatuhanDetailReports({
       await downloadFile(
         `/dashboard/kepatuhan-pembelajaran/export?${exportQuery('pdf')}`,
         token,
-        'laporan-tindak-lanjut-presensi.pdf',
+        'laporan-presensi-belum-diisi.pdf',
       )
       toast.success('Laporan PDF diunduh.')
     } catch (reason: unknown) {

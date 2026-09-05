@@ -18,6 +18,7 @@ type Option = { id: string; label: string }
 type Filters = {
   tahunAjaranId: string
   semesterId: string
+  pokjarId: string
   tutorId: string
   kelasId: string
   status: string
@@ -64,6 +65,7 @@ type ComplianceData = {
   options: {
     tahunAjaran: Option[]
     semester: Option[]
+    pokjar: Option[]
     tutor: Option[]
     kelas: Option[]
   }
@@ -72,11 +74,11 @@ type ComplianceData = {
 const emptyData: ComplianceData = {
   tahunAjaran: { id: '', label: '' },
   semester: { id: '', label: '' },
-  filters: { tahunAjaranId: '', semesterId: '', tutorId: '', kelasId: '', status: 'all' },
+  filters: { tahunAjaranId: '', semesterId: '', pokjarId: '', tutorId: '', kelasId: '', status: 'all' },
   summary: { presensiTertunda: 0, jurnalTertunda: 0, totalTertunda: 0, tutorDenganTugas: 0, kelasDenganTugas: 0 },
   ringkasanKelas: [],
   tasks: [],
-  options: { tahunAjaran: [], semester: [], tutor: [], kelas: [] },
+  options: { tahunAjaran: [], semester: [], pokjar: [], tutor: [], kelas: [] },
 }
 
 function formatDate(value: string) {
@@ -100,6 +102,7 @@ export function KepatuhanPembelajaranView({ token, user }: { token: string; user
     const params = new URLSearchParams()
     if (filters.tahunAjaranId) params.set('tahunAjaranId', filters.tahunAjaranId)
     if (filters.semesterId) params.set('semesterId', filters.semesterId)
+    if (filters.pokjarId) params.set('pokjarId', filters.pokjarId)
     if (filters.tutorId) params.set('tutorId', filters.tutorId)
     if (filters.kelasId) params.set('kelasId', filters.kelasId)
     if (filters.status !== 'all') params.set('status', filters.status)
@@ -121,10 +124,14 @@ export function KepatuhanPembelajaranView({ token, user }: { token: string; user
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [filters.kelasId, filters.semesterId, filters.status, filters.tahunAjaranId, filters.tutorId, token])
+  }, [filters.kelasId, filters.pokjarId, filters.semesterId, filters.status, filters.tahunAjaranId, filters.tutorId, token])
 
   function updateYear(tahunAjaranId: string) {
-    setFilters((current) => ({ ...current, tahunAjaranId, semesterId: '', tutorId: '', kelasId: '' }))
+    setFilters((current) => ({ ...current, tahunAjaranId, semesterId: '', pokjarId: '', tutorId: '', kelasId: '' }))
+  }
+
+  function updatePokjar(pokjarId: string) {
+    setFilters((current) => ({ ...current, pokjarId, kelasId: '' }))
   }
 
   function updateTutor(tutorId: string) {
@@ -181,36 +188,42 @@ export function KepatuhanPembelajaranView({ token, user }: { token: string; user
           <TabsTrigger value="jurnal">Detail Jurnal</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="ringkasan" className="space-y-6">
-      <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs sm:p-5">
-        <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Filter className="h-4 w-4 text-primary" /> Filter pemantauan
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <Select aria-label="Tahun ajaran" value={filters.tahunAjaranId} onChange={(event) => updateYear(event.target.value)}>
-            <option value="">Tahun ajaran aktif</option>
-            {data.options.tahunAjaran.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </Select>
-          <Select aria-label="Semester" value={filters.semesterId} onChange={(event) => setFilters((current) => ({ ...current, semesterId: event.target.value }))}>
-            <option value="">Semester aktif</option>
-            {data.options.semester.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </Select>
-          <Select aria-label="Wali kelas" value={filters.tutorId} onChange={(event) => updateTutor(event.target.value)}>
-            <option value="">Semua wali kelas</option>
-            {data.options.tutor.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </Select>
-          <Select aria-label="Kelas" value={filters.kelasId} onChange={(event) => setFilters((current) => ({ ...current, kelasId: event.target.value }))}>
-            <option value="">Semua kelas</option>
-            {data.options.kelas.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </Select>
-          <Select aria-label="Status tugas" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}>
-            <option value="all">Semua tugas</option>
-            <option value="presensi">Presensi Kelas</option>
-            <option value="jurnal">Jurnal Kelas</option>
-          </Select>
-        </div>
-      </Card>
+        <Card className="mt-6 rounded-2xl border border-border bg-card p-4 shadow-2xs sm:p-5">
+          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Filter className="h-4 w-4 text-primary" /> Filter pemantauan
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <Select aria-label="Tahun ajaran" value={filters.tahunAjaranId} onChange={(event) => updateYear(event.target.value)}>
+              <option value="">Tahun ajaran aktif</option>
+              {data.options.tahunAjaran.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </Select>
+            <Select aria-label="Semester" value={filters.semesterId} onChange={(event) => setFilters((current) => ({ ...current, semesterId: event.target.value }))}>
+              <option value="">Semester aktif</option>
+              {data.options.semester.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </Select>
+            <Select aria-label="Pokjar" value={filters.pokjarId} onChange={(event) => updatePokjar(event.target.value)}>
+              <option value="">Semua pokjar</option>
+              {data.options.pokjar.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </Select>
+            <Select aria-label="Wali kelas" value={filters.tutorId} onChange={(event) => updateTutor(event.target.value)}>
+              <option value="">Semua wali kelas</option>
+              {data.options.tutor.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </Select>
+            <Select aria-label="Rombel" value={filters.kelasId} onChange={(event) => setFilters((current) => ({ ...current, kelasId: event.target.value }))}>
+              <option value="">Semua rombel</option>
+              {data.options.kelas.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </Select>
+            {tab === 'ringkasan' && (
+              <Select aria-label="Status tugas" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}>
+                <option value="all">Semua tugas</option>
+                <option value="presensi">Presensi Kelas</option>
+                <option value="jurnal">Jurnal Kelas</option>
+              </Select>
+            )}
+          </div>
+        </Card>
 
+        <TabsContent value="ringkasan" className="space-y-6">
       {error && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}

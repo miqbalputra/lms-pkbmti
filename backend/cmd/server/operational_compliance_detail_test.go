@@ -191,14 +191,16 @@ func TestOperationalComplianceDetailReports(t *testing.T) {
 	if row := attendanceByClass[classes[3].ID]; row.Status != "libur" {
 		t.Fatalf("holiday attendance row invalid: %+v", row)
 	}
-	followUps := operationalAttendanceFollowUpRows(presensi)
-	if len(followUps) != 2 {
-		t.Fatalf("follow-up export must contain only missing and incomplete attendance: %+v", followUps)
+	rombelFiltered := getOperationalComplianceDetail(t, app, adminToken, presensiPath+"&kelasId="+classes[0].ID)
+	if len(rombelFiltered.Presensi) != 1 || rombelFiltered.Presensi[0].ClassID != classes[0].ID {
+		t.Fatalf("rombel filter leaked attendance data: %+v", rombelFiltered.Presensi)
 	}
-	for _, followUp := range followUps {
-		if followUp.ClassLabel == kelasLabel(classes[2]) || followUp.ClassLabel == kelasLabel(classes[3]) {
-			t.Fatalf("complete/holiday attendance leaked into follow-up export: %+v", followUps)
-		}
+	missingRows := operationalMissingAttendanceRows(presensi)
+	if len(missingRows) != 1 || missingRows[0].ClassLabel != kelasLabel(classes[0]) {
+		t.Fatalf("missing attendance export must contain only uncreated attendance: %+v", missingRows)
+	}
+	if missingRows[0].PokjarName != pokjar.NamaPokjar {
+		t.Fatalf("missing attendance export must include pokjar name: %+v", missingRows[0])
 	}
 
 	jurnalPath := "/api/dashboard/kepatuhan-pembelajaran/detail?jenis=jurnal&tahunAjaranId=" + year.ID + "&semesterId=" + semester.ID + "&from=" + date + "&to=" + date
@@ -230,6 +232,26 @@ func TestOperationalComplianceDetailReports(t *testing.T) {
 	if head := getOperationalComplianceDetail(t, app, headToken, presensiPath); head.Summary != presensi.Summary {
 		t.Fatalf("kepala sekolah detail mismatch: %+v", head.Summary)
 	}
+	otherPokjar := Pokjar{NamaPokjar: "Pokjar Detail Lain", Tipe: "binaan"}
+	if err := s.db.Create(&otherPokjar).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherClass := Kelas{Jenjang: 25, NamaRombel: "DTE", PokjarID: otherPokjar.ID, TahunAjaranID: year.ID, WaliKelasID: &tutor.ID}
+	if err := s.db.Create(&otherClass).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherStudent := PesertaDidik{Nama: "Siswa Pokjar Lain", JenisKelamin: "L", NIS: "DETAIL-LAIN", NISN: "DETAIL-LAIN", KelasID: otherClass.ID, PokjarID: otherPokjar.ID, Status: "aktif"}
+	if err := s.db.Create(&otherStudent).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	pokjarFiltered := getOperationalComplianceDetail(t, app, adminToken, presensiPath+"&pokjarId="+otherPokjar.ID)
+	if len(pokjarFiltered.Presensi) != 1 || pokjarFiltered.Presensi[0].ClassID != otherClass.ID || pokjarFiltered.Presensi[0].PokjarName != otherPokjar.NamaPokjar {
+		t.Fatalf("pokjar filter leaked attendance data: %+v", pokjarFiltered.Presensi)
+	}
+	if rows := operationalMissingAttendanceRows(pokjarFiltered); len(rows) != 1 || rows[0].ClassLabel != kelasLabel(otherClass) {
+		t.Fatalf("pokjar filter did not scope missing attendance report: %+v", rows)
+	}
 
 	exportPath := "/api/dashboard/kepatuhan-pembelajaran/export?jenis=presensi&format=pdf&tahunAjaranId=" + year.ID + "&semesterId=" + semester.ID + "&from=" + date + "&to=" + date
 	exportResponse, err := makeRequest(app, http.MethodGet, exportPath, adminToken, nil, "")
@@ -248,11 +270,19 @@ func TestOperationalComplianceDetailReports(t *testing.T) {
 		t.Fatalf("attendance follow-up export content type: %q", exportResponse.Header.Get("Content-Type"))
 	}
 	contentDisposition := exportResponse.Header.Get("Content-Disposition")
-	if !strings.Contains(contentDisposition, "laporan-tindak-lanjut-presensi-") || !strings.Contains(contentDisposition, ".pdf") {
+	if !strings.Contains(contentDisposition, "laporan-presensi-belum-diisi-") || !strings.Contains(contentDisposition, ".pdf") {
 		t.Fatalf("attendance follow-up export filename: %q", contentDisposition)
 	}
 	if !bytes.HasPrefix(exportBody, []byte("%PDF")) {
 		t.Fatalf("attendance follow-up export is not a PDF")
+	}
+	pokjarExport, err := makeRequest(app, http.MethodGet, exportPath+"&pokjarId="+otherPokjar.ID, adminToken, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pokjarExport.Body.Close()
+	if pokjarExport.StatusCode != http.StatusOK || !strings.HasPrefix(pokjarExport.Header.Get("Content-Type"), "application/pdf") {
+		t.Fatalf("pokjar-filtered attendance export failed: status=%d contentType=%q", pokjarExport.StatusCode, pokjarExport.Header.Get("Content-Type"))
 	}
 
 	guruExport, err := makeRequest(app, http.MethodGet, exportPath, guruToken, nil, "")

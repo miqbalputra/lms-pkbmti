@@ -133,6 +133,16 @@ func TestOperationalComplianceDashboard(t *testing.T) {
 	if len(result.RingkasanKelas) != 5 {
 		t.Fatalf("want all five class summaries, got %+v", result.RingkasanKelas)
 	}
+	pokjarOptionFound := false
+	for _, option := range result.Options.Pokjar {
+		if option.ID == pokjar.ID && option.Label == pokjar.NamaPokjar {
+			pokjarOptionFound = true
+			break
+		}
+	}
+	if !pokjarOptionFound {
+		t.Fatalf("active year pokjar option missing: %+v", result.Options.Pokjar)
+	}
 
 	tasksByClass := map[string][]operationalComplianceTask{}
 	for _, task := range result.Tasks {
@@ -189,6 +199,24 @@ func TestOperationalComplianceDashboard(t *testing.T) {
 	// Kepala sekolah has the same read-only monitoring access; guru does not.
 	if headResult := getOperationalCompliance(t, app, headToken, "/api/dashboard/kepatuhan-pembelajaran"); headResult.Summary.TotalTertunda != 7 {
 		t.Fatalf("kepala sekolah view mismatch: %+v", headResult.Summary)
+	}
+	otherPokjar := Pokjar{NamaPokjar: "Pokjar Kepatuhan Lain", Tipe: "binaan"}
+	if err := s.db.Create(&otherPokjar).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherClass := Kelas{Jenjang: 16, NamaRombel: "KPF", PokjarID: otherPokjar.ID, TahunAjaranID: year.ID, WaliKelasID: &tutorB.ID}
+	if err := s.db.Create(&otherClass).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&PesertaDidik{Nama: "Siswa Pokjar Lain", JenisKelamin: "L", NIS: "COMPLIANCE-LAIN", NISN: "COMPLIANCE-LAIN", KelasID: otherClass.ID, PokjarID: otherPokjar.ID, Status: "aktif"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	forPokjar := getOperationalCompliance(t, app, adminToken, "/api/dashboard/kepatuhan-pembelajaran?pokjarId="+otherPokjar.ID)
+	if len(forPokjar.RingkasanKelas) != 1 || forPokjar.RingkasanKelas[0].ClassID != otherClass.ID {
+		t.Fatalf("pokjar filter leaked another class: %+v", forPokjar.RingkasanKelas)
+	}
+	if len(forPokjar.Options.Kelas) != 1 || forPokjar.Options.Kelas[0].ID != otherClass.ID {
+		t.Fatalf("pokjar filter did not narrow rombel options: %+v", forPokjar.Options.Kelas)
 	}
 	guruResponse, err := makeRequest(app, http.MethodGet, "/api/dashboard/kepatuhan-pembelajaran", guruToken, nil, "")
 	if err != nil {

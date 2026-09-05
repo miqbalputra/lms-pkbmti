@@ -27,6 +27,7 @@ type operationalCompliancePeriod struct {
 type operationalComplianceFilters struct {
 	TahunAjaranID string `json:"tahunAjaranId"`
 	SemesterID    string `json:"semesterId"`
+	PokjarID      string `json:"pokjarId"`
 	TutorID       string `json:"tutorId"`
 	KelasID       string `json:"kelasId"`
 	Status        string `json:"status"`
@@ -69,6 +70,7 @@ type operationalComplianceTask struct {
 type operationalComplianceOptions struct {
 	TahunAjaran []operationalComplianceOption `json:"tahunAjaran"`
 	Semester    []operationalComplianceOption `json:"semester"`
+	Pokjar      []operationalComplianceOption `json:"pokjar"`
 	Tutor       []operationalComplianceOption `json:"tutor"`
 	Kelas       []operationalComplianceOption `json:"kelas"`
 }
@@ -92,6 +94,7 @@ func emptyOperationalComplianceResponse(now time.Time) operationalComplianceResp
 		Options: operationalComplianceOptions{
 			TahunAjaran: []operationalComplianceOption{},
 			Semester:    []operationalComplianceOption{},
+			Pokjar:      []operationalComplianceOption{},
 			Tutor:       []operationalComplianceOption{},
 			Kelas:       []operationalComplianceOption{},
 		},
@@ -115,6 +118,13 @@ func complianceTutorName(class Kelas) string {
 	return class.WaliKelas.Nama
 }
 
+func compliancePokjarName(class Kelas) string {
+	if strings.TrimSpace(class.Pokjar.NamaPokjar) == "" {
+		return "Pokjar belum ditetapkan"
+	}
+	return class.Pokjar.NamaPokjar
+}
+
 // operationalCompliance is the supervisory, read-only view of the exact
 // attendance and journal rules shown in the guru reminder. It is intentionally
 // available only to admin and kepala sekolah; guru already receive a private,
@@ -131,6 +141,7 @@ func (s *Server) operationalCompliance(c *fiber.Ctx) error {
 	filters := operationalComplianceFilters{
 		TahunAjaranID: strings.TrimSpace(c.Query("tahunAjaranId")),
 		SemesterID:    strings.TrimSpace(c.Query("semesterId")),
+		PokjarID:      strings.TrimSpace(c.Query("pokjarId")),
 		TutorID:       strings.TrimSpace(c.Query("tutorId")),
 		KelasID:       strings.TrimSpace(c.Query("kelasId")),
 		Status:        strings.TrimSpace(c.Query("status")),
@@ -210,16 +221,27 @@ func (s *Server) operationalCompliance(c *fiber.Ctx) error {
 	// configuration gap instead of silently excluding the class. Tutor choices
 	// still only contain classes that actually have a wali kelas.
 	var allOptionClasses []Kelas
-	if err := s.db.Preload("WaliKelas").
+	if err := s.db.Preload("Pokjar").Preload("WaliKelas").
 		Where("tahun_ajaran_id = ?", academicYear.ID).
 		Order("jenjang, nama_rombel").Find(&allOptionClasses).Error; err != nil {
 		return err
 	}
 	optionClasses := make([]Kelas, 0, len(allOptionClasses))
 	for _, class := range allOptionClasses {
-		if filters.TutorID == "" || (class.WaliKelasID != nil && *class.WaliKelasID == filters.TutorID) {
+		if (filters.PokjarID == "" || class.PokjarID == filters.PokjarID) &&
+			(filters.TutorID == "" || (class.WaliKelasID != nil && *class.WaliKelasID == filters.TutorID)) {
 			optionClasses = append(optionClasses, class)
 		}
+	}
+	pokjarSeen := map[string]bool{}
+	for _, class := range allOptionClasses {
+		if class.PokjarID == "" || pokjarSeen[class.PokjarID] {
+			continue
+		}
+		pokjarSeen[class.PokjarID] = true
+		response.Options.Pokjar = append(response.Options.Pokjar, operationalComplianceOption{
+			ID: class.PokjarID, Label: compliancePokjarName(class),
+		})
 	}
 	tutorSeen := map[string]bool{}
 	for _, class := range allOptionClasses {
@@ -236,6 +258,9 @@ func (s *Server) operationalCompliance(c *fiber.Ctx) error {
 	}
 	sort.SliceStable(response.Options.Tutor, func(i, j int) bool {
 		return response.Options.Tutor[i].Label < response.Options.Tutor[j].Label
+	})
+	sort.SliceStable(response.Options.Pokjar, func(i, j int) bool {
+		return response.Options.Pokjar[i].Label < response.Options.Pokjar[j].Label
 	})
 
 	classes := make([]Kelas, 0, len(optionClasses))
@@ -364,6 +389,7 @@ func (s *Server) operationalCompliance(c *fiber.Ctx) error {
 type operationalComplianceDetailFilters struct {
 	TahunAjaranID string `json:"tahunAjaranId"`
 	SemesterID    string `json:"semesterId"`
+	PokjarID      string `json:"pokjarId"`
 	TutorID       string `json:"tutorId"`
 	KelasID       string `json:"kelasId"`
 	From          string `json:"from"`
@@ -407,6 +433,8 @@ type operationalAttendanceMeetingDetail struct {
 type operationalAttendanceClassDetail struct {
 	ClassID    string                               `json:"classId"`
 	ClassLabel string                               `json:"classLabel"`
+	PokjarID   string                               `json:"pokjarId"`
+	PokjarName string                               `json:"pokjarName"`
 	TutorID    string                               `json:"tutorId,omitempty"`
 	TutorName  string                               `json:"tutorName"`
 	Meetings   []operationalAttendanceMeetingDetail `json:"meetings"`
@@ -433,6 +461,8 @@ type operationalJournalSubjectDetail struct {
 type operationalJournalClassDetail struct {
 	ClassID    string                            `json:"classId"`
 	ClassLabel string                            `json:"classLabel"`
+	PokjarID   string                            `json:"pokjarId"`
+	PokjarName string                            `json:"pokjarName"`
 	TutorID    string                            `json:"tutorId,omitempty"`
 	TutorName  string                            `json:"tutorName"`
 	Subjects   []operationalJournalSubjectDetail `json:"subjects"`
@@ -488,6 +518,7 @@ func (s *Server) operationalComplianceDetailScope(c *fiber.Ctx) (operationalComp
 		Filters: operationalComplianceDetailFilters{
 			TahunAjaranID: strings.TrimSpace(c.Query("tahunAjaranId")),
 			SemesterID:    strings.TrimSpace(c.Query("semesterId")),
+			PokjarID:      strings.TrimSpace(c.Query("pokjarId")),
 			TutorID:       strings.TrimSpace(c.Query("tutorId")),
 			KelasID:       strings.TrimSpace(c.Query("kelasId")),
 			From:          strings.TrimSpace(c.Query("from")),
@@ -566,7 +597,10 @@ func (s *Server) operationalComplianceDetailScope(c *fiber.Ctx) (operationalComp
 	scope.Filters.To = wibTimeFormat(scope.End, "2006-01-02")
 	scope.HasPeriod = true
 
-	q := s.db.Preload("WaliKelas").Where("tahun_ajaran_id = ?", scope.AcademicYear.ID).Order("jenjang, nama_rombel")
+	q := s.db.Preload("Pokjar").Preload("WaliKelas").Where("tahun_ajaran_id = ?", scope.AcademicYear.ID).Order("jenjang, nama_rombel")
+	if scope.Filters.PokjarID != "" {
+		q = q.Where("pokjar_id = ?", scope.Filters.PokjarID)
+	}
 	if scope.Filters.TutorID != "" {
 		q = q.Where("wali_kelas_id = ?", scope.Filters.TutorID)
 	}
@@ -686,7 +720,7 @@ func (s *Server) operationalComplianceAttendanceDetail(classes []Kelas, start, e
 			tutorID = *class.WaliKelasID
 		}
 		classRow := operationalAttendanceClassDetail{
-			ClassID: class.ID, ClassLabel: kelasLabel(class), TutorID: tutorID,
+			ClassID: class.ID, ClassLabel: kelasLabel(class), PokjarID: class.PokjarID, PokjarName: compliancePokjarName(class), TutorID: tutorID,
 			TutorName: complianceTutorName(class), Meetings: []operationalAttendanceMeetingDetail{},
 		}
 		sequence := 0
@@ -808,7 +842,7 @@ func (s *Server) operationalComplianceJournalDetail(classes []Kelas, start, end 
 			tutorID = *class.WaliKelasID
 		}
 		classRow := operationalJournalClassDetail{
-			ClassID: class.ID, ClassLabel: kelasLabel(class), TutorID: tutorID,
+			ClassID: class.ID, ClassLabel: kelasLabel(class), PokjarID: class.PokjarID, PokjarName: compliancePokjarName(class), TutorID: tutorID,
 			TutorName: complianceTutorName(class), Subjects: []operationalJournalSubjectDetail{},
 		}
 		mappings := mapelByClass[class.ID]
@@ -924,53 +958,25 @@ func (s *Server) operationalComplianceDetail(c *fiber.Ctx) error {
 	return c.JSON(response)
 }
 
-type operationalAttendanceFollowUpRow struct {
+type operationalMissingAttendanceRow struct {
+	PokjarName  string
 	ClassLabel  string
 	TutorName   string
 	PlannedDate string
-	ActualDate  string
-	Status      string
-	FollowUp    string
 }
 
-func operationalAttendanceFollowUpRows(response operationalComplianceDetailResponse) []operationalAttendanceFollowUpRow {
-	rows := []operationalAttendanceFollowUpRow{}
+func operationalMissingAttendanceRows(response operationalComplianceDetailResponse) []operationalMissingAttendanceRow {
+	rows := []operationalMissingAttendanceRow{}
 	for _, classRow := range response.Presensi {
 		for _, meeting := range classRow.Meetings {
-			if meeting.Status != "belum_dibuat" && meeting.Status != "belum_lengkap" {
+			if meeting.Status != "belum_dibuat" {
 				continue
 			}
-
-			issues := make([]string, 0, len(meeting.Issues)+1)
-			if meeting.Status == "belum_dibuat" {
-				issues = append(issues, "Presensi belum dibuat")
-			}
-			for _, issue := range meeting.Issues {
-				if issue == "Kehadiran siswa belum lengkap" && meeting.TotalStudents > 0 {
-					issue = fmt.Sprintf("Kehadiran siswa %d/%d sudah diisi", meeting.FilledStudents, meeting.TotalStudents)
-				}
-				if issue != "Belum ada data presensi" && issue != "Presensi belum dibuat" {
-					issues = append(issues, issue)
-				}
-			}
-			if meeting.ActualDate != "" {
-				issues = append(issues, "Dilaksanakan "+formatOperationalDate(meeting.ActualDate))
-			}
-			if len(issues) == 0 {
-				issues = append(issues, "Perlu dilengkapi")
-			}
-
-			status := "Belum lengkap"
-			if meeting.Status == "belum_dibuat" {
-				status = "Belum dibuat"
-			}
-			rows = append(rows, operationalAttendanceFollowUpRow{
+			rows = append(rows, operationalMissingAttendanceRow{
+				PokjarName:  classRow.PokjarName,
 				ClassLabel:  classRow.ClassLabel,
 				TutorName:   classRow.TutorName,
 				PlannedDate: formatOperationalDate(meeting.PlannedDate),
-				ActualDate:  meeting.ActualDate,
-				Status:      status,
-				FollowUp:    strings.Join(issues, "; "),
 			})
 		}
 	}
@@ -994,7 +1000,7 @@ func formatOperationalGeneratedAt(value string) string {
 }
 
 // operationalComplianceExport returns a compact, share-ready report of only
-// pending attendance rows. JPG is intentionally rendered by the browser from
+// attendance rows that have not been created. JPG is intentionally rendered by the browser from
 // the same detail response; the server owns the canonical PDF export.
 func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 	if strings.TrimSpace(c.Query("jenis")) != "presensi" {
@@ -1007,7 +1013,7 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	rows := operationalAttendanceFollowUpRows(response)
+	rows := operationalMissingAttendanceRows(response)
 
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(12, 12, 12)
@@ -1022,7 +1028,7 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 
 	pdf.SetFont("Helvetica", "B", 16)
 	pdf.SetTextColor(28, 87, 64)
-	pdf.CellFormat(186, 8, "Laporan Tindak Lanjut Presensi", "", 1, "C", false, 0, "")
+	pdf.CellFormat(186, 8, "Laporan Presensi Belum Diisi", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 10)
 	pdf.SetTextColor(0, 0, 0)
 	period := []string{response.TahunAjaran.Label, response.Semester.Label}
@@ -1032,15 +1038,15 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 		periodLabel = "Periode belum tersedia"
 	}
 	pdf.CellFormat(186, 6, periodLabel, "", 1, "C", false, 0, "")
-	pdf.CellFormat(186, 6, fmt.Sprintf("Dibuat %s WIB · %d item perlu ditindaklanjuti", formatOperationalGeneratedAt(response.GeneratedAt), len(rows)), "", 1, "C", false, 0, "")
+	pdf.CellFormat(186, 6, fmt.Sprintf("Dibuat %s WIB · %d presensi belum dibuat", formatOperationalGeneratedAt(response.GeneratedAt), len(rows)), "", 1, "C", false, 0, "")
 	pdf.Ln(5)
 
-	widths := []float64{10, 35, 48, 26, 67}
-	headers := []string{"No", "Rombel", "Tutor", "Tanggal", "Status / tindak lanjut"}
+	widths := []float64{43, 43, 55, 45}
+	headers := []string{"Pokjar", "Rombel", "Tutor", "Tanggal belum presensi"}
 	drawHeader := func() {
 		pdf.SetFillColor(28, 87, 64)
 		pdf.SetTextColor(255, 255, 255)
-		pdf.SetFont("Helvetica", "B", 8.5)
+		pdf.SetFont("Helvetica", "B", 7.5)
 		for index, header := range headers {
 			pdf.CellFormat(widths[index], 8, header, "1", 0, "C", true, 0, "")
 		}
@@ -1051,15 +1057,14 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 	drawHeader()
 
 	if len(rows) == 0 {
-		pdf.CellFormat(186, 12, "Tidak ada presensi yang perlu ditindaklanjuti.", "1", 1, "C", false, 0, "")
+		pdf.CellFormat(186, 12, "Tidak ada presensi yang belum dibuat.", "1", 1, "C", false, 0, "")
 	} else {
-		for index, row := range rows {
+		for _, row := range rows {
 			values := []string{
-				fmt.Sprintf("%d", index+1),
+				row.PokjarName,
 				row.ClassLabel,
 				row.TutorName,
 				row.PlannedDate,
-				row.Status + ": " + row.FollowUp,
 			}
 			lineCounts := make([]int, len(values))
 			maxLines := 1
@@ -1079,7 +1084,7 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 				pdf.Rect(x, y, widths[column], rowHeight, "D")
 				pdf.SetXY(x+2, y+1.5)
 				align := "L"
-				if column == 0 || column == 3 {
+				if column == 3 {
 					align = "C"
 				}
 				pdf.MultiCell(widths[column]-4, 4.8, value, "", align, false)
@@ -1090,7 +1095,7 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 	}
 
 	c.Set(fiber.HeaderContentType, "application/pdf")
-	c.Attachment("laporan-tindak-lanjut-presensi-" + time.Now().In(wibLocation).Format("20060102-150405") + ".pdf")
+	c.Attachment("laporan-presensi-belum-diisi-" + time.Now().In(wibLocation).Format("20060102-150405") + ".pdf")
 	return pdf.Output(c.Response().BodyWriter())
 }
 
