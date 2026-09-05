@@ -54,19 +54,33 @@ func (s *Server) healthPayload() (fiber.Map, bool) {
 	if err := sqlDB.Ping(); err != nil {
 		return fiber.Map{"status": "unhealthy", "database": dialect()}, false
 	}
+	backup := fiber.Map{
+		"lastSuccessAt":          unixTimeOrNil(s.metrics.lastSuccessUnix.Load()),
+		"lastFailureAt":          unixTimeOrNil(s.metrics.lastFailureUnix.Load()),
+		"lastOffsiteAt":          unixTimeOrNil(s.metrics.lastOffsiteUnix.Load()),
+		"lastRestoreDrillAt":     unixTimeOrNil(s.metrics.lastDrillUnix.Load()),
+		"totalSuccess":           s.metrics.totalSuccess.Load(),
+		"totalFailure":           s.metrics.totalFailure.Load(),
+		"offsiteConfigured":      strings.TrimSpace(os.Getenv("BACKUP_OFFSITE_URL")) != "",
+		"restoreDrillConfigured": strings.TrimSpace(os.Getenv("BACKUP_DRILL_DATABASE_URL")) != "",
+		"r2Configured":           !r2Enabled() || r2ConfigError() == nil,
+		"maintenance":            s.r2.maintenance.Load(),
+	}
+	if r2Enabled() {
+		var last R2BackupJob
+		if s.db.Where("kind = ? AND status = ?", "scheduled", "succeeded").Order("finished_at desc").First(&last).Error == nil && last.FinishedAt != nil {
+			age := time.Since(*last.FinishedAt)
+			backup["lastR2AutomaticAt"] = wibTimeFormat(*last.FinishedAt, time.RFC3339)
+			backup["r2AgeHours"] = int64(age.Hours())
+			backup["r2Healthy"] = age <= backupAlertMaxAge()
+		} else {
+			backup["r2Healthy"] = false
+		}
+	}
 	return fiber.Map{
 		"status":        "ok",
 		"database":      dialect(),
 		"uptimeSeconds": int64(time.Since(s.startedAt).Seconds()),
-		"backup": fiber.Map{
-			"lastSuccessAt":          unixTimeOrNil(s.metrics.lastSuccessUnix.Load()),
-			"lastFailureAt":          unixTimeOrNil(s.metrics.lastFailureUnix.Load()),
-			"lastOffsiteAt":          unixTimeOrNil(s.metrics.lastOffsiteUnix.Load()),
-			"lastRestoreDrillAt":     unixTimeOrNil(s.metrics.lastDrillUnix.Load()),
-			"totalSuccess":           s.metrics.totalSuccess.Load(),
-			"totalFailure":           s.metrics.totalFailure.Load(),
-			"offsiteConfigured":      strings.TrimSpace(os.Getenv("BACKUP_OFFSITE_URL")) != "",
-			"restoreDrillConfigured": strings.TrimSpace(os.Getenv("BACKUP_DRILL_DATABASE_URL")) != "",
-		},
+		"backup":        backup,
 	}, true
 }

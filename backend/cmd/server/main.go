@@ -771,6 +771,7 @@ type Server struct {
 	startedAt time.Time
 	metrics   backupMetrics
 	r2        r2Coordinator
+	notifier  operationNotifier
 }
 
 func env(k, d string) string {
@@ -788,6 +789,9 @@ func main() {
 	// file to a pending location; it is applied here (with an automatic safety
 	// backup of the current DB) so the live file is never overwritten while open.
 	// See backup.go. Returns nil if no restore is pending.
+	if e := recoverPendingR2Restore(); e != nil {
+		panic(fmt.Errorf("restore recovery requires attention before startup: %w", e))
+	}
 	if e := applyPendingRestore(); e != nil {
 		fmt.Printf("applyPendingRestore FAILED (ignored, continuing with current DB): %v\n", e)
 	}
@@ -795,7 +799,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	s := &Server{db: db, cfg: cfg, startedAt: time.Now()}
+	s := &Server{db: db, cfg: cfg, startedAt: time.Now(), notifier: operationNotifier{last: make(map[string]time.Time)}}
 	if err = s.migrate(); err != nil {
 		panic(err)
 	}
@@ -839,7 +843,7 @@ func main() {
 	app.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api := app.Group("/api")
 	loginLimiterMax := 30
-	if cfg.Env == "production" {
+	if cfg.Env == "production" || strings.EqualFold(env("SERVE_STATIC", "false"), "true") {
 		loginLimiterMax = 5
 	}
 	api.Post("/auth/login", limiter.New(limiter.Config{
@@ -916,6 +920,8 @@ func main() {
 		app.Get("/*", func(c *fiber.Ctx) error { return c.SendFile("./public/index.html") })
 	}
 	s.startScheduler()
+	s.reconcileR2Operations()
+	go s.monitorBackupHealth()
 	go s.enqueueScheduledR2Backup()
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- app.Listen(":" + env("PORT", "8080")) }()
@@ -973,6 +979,15 @@ func validateConfig(cfg Config) error {
 	if r2Enabled() {
 		if err := r2ConfigError(); err != nil {
 			return fmt.Errorf("invalid R2 backup configuration: %w", err)
+		}
+	}
+	if webhook := operationWebhookURL(); webhook != "" {
+		u, err := url.Parse(webhook)
+		if err != nil || u.Host == "" || u.Scheme != "https" {
+			return errors.New("production OPERATIONS_WEBHOOK_URL must be a valid HTTPS endpoint")
+		}
+		if operationWebhookTimeout() <= 0 || backupAlertMaxAge() < 72*time.Hour {
+			return errors.New("invalid operational alert configuration")
 		}
 	}
 	if offsiteURL := strings.TrimSpace(os.Getenv("BACKUP_OFFSITE_URL")); offsiteURL != "" {
@@ -1114,7 +1129,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {

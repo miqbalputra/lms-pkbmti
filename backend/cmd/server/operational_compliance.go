@@ -999,6 +999,31 @@ func formatOperationalGeneratedAt(value string) string {
 	return parsed.In(wibLocation).Format("02-01-2006 15:04")
 }
 
+// Resolve IDs to labels so the printed report states exactly which data was
+// selected, including when a filter produces no result rows.
+func (s *Server) operationalComplianceExportFilterLabels(response operationalComplianceDetailResponse) (pokjar, tutor, kelas string) {
+	pokjar, tutor, kelas = "Semua pokjar", "Semua tutor", "Semua rombel"
+	if id := response.Filters.PokjarID; id != "" {
+		var value Pokjar
+		if s.db.Select("nama_pokjar").First(&value, "id = ?", id).Error == nil && strings.TrimSpace(value.NamaPokjar) != "" {
+			pokjar = value.NamaPokjar
+		}
+	}
+	if id := response.Filters.TutorID; id != "" {
+		var value Tutor
+		if s.db.Select("nama").First(&value, "id = ?", id).Error == nil && strings.TrimSpace(value.Nama) != "" {
+			tutor = value.Nama
+		}
+	}
+	if id := response.Filters.KelasID; id != "" {
+		var value Kelas
+		if s.db.Select("id", "jenjang", "nama_rombel").First(&value, "id = ?", id).Error == nil {
+			kelas = kelasLabel(value)
+		}
+	}
+	return pokjar, tutor, kelas
+}
+
 // operationalComplianceExport returns a compact, share-ready report of only
 // attendance rows that have not been created. JPG is intentionally rendered by the browser from
 // the same detail response; the server owns the canonical PDF export.
@@ -1014,6 +1039,7 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 		return err
 	}
 	rows := operationalMissingAttendanceRows(response)
+	pokjarLabel, tutorLabel, kelasFilterLabel := s.operationalComplianceExportFilterLabels(response)
 
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(12, 12, 12)
@@ -1022,10 +1048,15 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 		pdf.SetY(-10)
 		pdf.SetFont("Helvetica", "", 8)
 		pdf.SetTextColor(120, 120, 120)
-		pdf.CellFormat(186, 5, fmt.Sprintf("PKBM Tunas Ilmu · Halaman %d", pdf.PageNo()), "", 0, "R", false, 0, "")
+		pdf.CellFormat(186, 5, fmt.Sprintf("PKBM Tunas Ilmu - Halaman %d", pdf.PageNo()), "", 0, "R", false, 0, "")
 	})
 	pdf.AddPage()
 
+	// Hindari pemisah Unicode karena font PDF bawaan dapat menampilkannya sebagai
+	// karakter rusak (misalnya A- atau AÂ) pada sebagian pembaca PDF.
+	pdf.SetFont("Helvetica", "B", 11)
+	pdf.SetTextColor(28, 87, 64)
+	pdf.CellFormat(186, 5, "PKBM TUNAS ILMU", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "B", 16)
 	pdf.SetTextColor(28, 87, 64)
 	pdf.CellFormat(186, 8, "Laporan Presensi Belum Diisi", "", 1, "C", false, 0, "")
@@ -1033,13 +1064,37 @@ func (s *Server) operationalComplianceExport(c *fiber.Ctx) error {
 	pdf.SetTextColor(0, 0, 0)
 	period := []string{response.TahunAjaran.Label, response.Semester.Label}
 	period = compactOperationalLabels(period)
-	periodLabel := strings.Join(period, " · ")
+	periodLabel := strings.Join(period, " - ")
 	if periodLabel == "" {
 		periodLabel = "Periode belum tersedia"
 	}
 	pdf.CellFormat(186, 6, periodLabel, "", 1, "C", false, 0, "")
-	pdf.CellFormat(186, 6, fmt.Sprintf("Dibuat %s WIB · %d presensi belum dibuat", formatOperationalGeneratedAt(response.GeneratedAt), len(rows)), "", 1, "C", false, 0, "")
-	pdf.Ln(5)
+	pdf.CellFormat(186, 6, fmt.Sprintf("Dibuat %s WIB - %d presensi belum dibuat", formatOperationalGeneratedAt(response.GeneratedAt), len(rows)), "", 1, "C", false, 0, "")
+	pdf.Ln(3)
+
+	// Ringkasan filter ditampilkan sebelum tabel supaya penerima PDF tahu
+	// persis tahun ajaran, periode, dan lingkup data yang diekspor.
+	pdf.SetFillColor(242, 247, 244)
+	pdf.SetDrawColor(184, 204, 191)
+	pdf.Rect(12, pdf.GetY(), 186, 31, "DF")
+	pdf.SetXY(15, pdf.GetY()+2)
+	pdf.SetFont("Helvetica", "B", 8.5)
+	pdf.SetTextColor(28, 87, 64)
+	pdf.CellFormat(180, 4, "FILTER DAN HASIL DATA", "", 1, "L", false, 0, "")
+	pdf.SetFont("Helvetica", "", 8)
+	pdf.SetTextColor(0, 0, 0)
+	filterRows := [][2]string{
+		{"Tahun ajaran: " + response.TahunAjaran.Label, "Semester: " + response.Semester.Label},
+		{"Rentang data: " + formatOperationalDate(response.PeriodStart) + " s.d. " + formatOperationalDate(response.PeriodEnd), "Pokjar: " + pokjarLabel},
+		{"Tutor: " + tutorLabel, "Rombel: " + kelasFilterLabel},
+	}
+	for _, values := range filterRows {
+		pdf.CellFormat(90, 4.5, values[0], "", 0, "L", false, 0, "")
+		pdf.CellFormat(90, 4.5, values[1], "", 1, "L", false, 0, "")
+	}
+	pdf.SetFont("Helvetica", "B", 8)
+	pdf.CellFormat(180, 4.5, fmt.Sprintf("Hasil filter: %d kelas dipantau | %d data presensi belum dibuat", len(response.Presensi), len(rows)), "", 1, "L", false, 0, "")
+	pdf.SetY(pdf.GetY() + 4)
 
 	widths := []float64{43, 43, 55, 45}
 	headers := []string{"Pokjar", "Rombel", "Tutor", "Tanggal belum presensi"}

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,16 +36,19 @@ const r2ArchiveVersion = 1
 
 type R2BackupJob struct {
 	Base
-	Kind       string     `gorm:"index;not null" json:"kind"`   // manual, scheduled, restore
-	Status     string     `gorm:"index;not null" json:"status"` // queued, running, succeeded, failed
-	ObjectKey  string     `gorm:"index" json:"objectKey,omitempty"`
-	SourceKey  string     `json:"sourceKey,omitempty"`
-	Size       int64      `json:"size"`
-	FileCount  int        `json:"fileCount"`
-	Checksum   string     `json:"checksum,omitempty"`
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
-	Error      string     `json:"error,omitempty"`
+	Kind            string     `gorm:"index;not null" json:"kind"`   // manual, scheduled, restore
+	Status          string     `gorm:"index;not null" json:"status"` // queued, running, succeeded, failed
+	ObjectKey       string     `gorm:"index" json:"objectKey,omitempty"`
+	SourceKey       string     `json:"sourceKey,omitempty"`
+	Size            int64      `json:"size"`
+	FileCount       int        `json:"fileCount"`
+	Checksum        string     `json:"checksum,omitempty"`
+	Phase           string     `json:"phase,omitempty"`
+	SafetyObjectKey string     `json:"safetyObjectKey,omitempty"`
+	RecoveredAt     *time.Time `json:"recoveredAt,omitempty"`
+	StartedAt       *time.Time `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+	Error           string     `json:"error,omitempty"`
 }
 
 type r2Coordinator struct {
@@ -75,6 +79,18 @@ type r2ArchiveInfo struct {
 }
 
 func r2Enabled() bool { return strings.TrimSpace(os.Getenv("BACKUP_R2_BUCKET")) != "" }
+
+func r2Endpoint() string {
+	// A custom endpoint is intentionally test/development-only, so a production
+	// deployment always talks to the account-bound Cloudflare R2 endpoint.
+	if env("APP_ENV", "development") != "production" {
+		if endpoint := strings.TrimRight(strings.TrimSpace(os.Getenv("BACKUP_R2_ENDPOINT")), "/"); endpoint != "" {
+			return endpoint
+		}
+	}
+	return "https://" + strings.TrimSpace(os.Getenv("BACKUP_R2_ACCOUNT_ID")) + ".r2.cloudflarestorage.com"
+}
+
 func r2Prefix() string {
 	p := strings.Trim(strings.TrimSpace(env("BACKUP_R2_PREFIX", "pkbm-lms")), "/")
 	if p == "" {
@@ -105,13 +121,22 @@ func r2ConfigError() error {
 	return err
 }
 
+func r2Timeout() time.Duration {
+	v, err := time.ParseDuration(env("BACKUP_R2_TIMEOUT", "2m"))
+	if err != nil || v <= 0 || v > 15*time.Minute {
+		return 2 * time.Minute
+	}
+	return v
+}
+
 func r2Client(ctx context.Context) (*s3.Client, error) {
 	if err := r2ConfigError(); err != nil {
 		return nil, err
 	}
-	endpoint := "https://" + strings.TrimSpace(os.Getenv("BACKUP_R2_ACCOUNT_ID")) + ".r2.cloudflarestorage.com"
+	endpoint := r2Endpoint()
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion("auto"),
+		awsconfig.WithHTTPClient(&http.Client{Timeout: r2Timeout()}),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			strings.TrimSpace(os.Getenv("BACKUP_R2_ACCESS_KEY_ID")), strings.TrimSpace(os.Getenv("BACKUP_R2_SECRET_ACCESS_KEY")), "")),
 	)
@@ -289,6 +314,11 @@ func (s *Server) updateR2Job(job *R2BackupJob, fields map[string]interface{}) {
 	_ = s.db.Model(job).Updates(fields).Error
 }
 
+func (s *Server) updateR2Phase(job *R2BackupJob, phase string) {
+	job.Phase = phase
+	s.updateR2Job(job, map[string]interface{}{"phase": phase})
+}
+
 func (s *Server) startR2Backup(kind string, sourceKey string) (*R2BackupJob, error) {
 	if err := r2ConfigError(); err != nil {
 		return nil, fiber.NewError(503, "R2 belum siap: "+err.Error())
@@ -309,7 +339,8 @@ func (s *Server) startR2Backup(kind string, sourceKey string) (*R2BackupJob, err
 
 func (s *Server) runR2Backup(job *R2BackupJob) {
 	now := time.Now()
-	s.updateR2Job(job, map[string]interface{}{"status": "running", "started_at": &now, "error": ""})
+	job.Status = "running"
+	s.updateR2Job(job, map[string]interface{}{"status": "running", "phase": "archiving", "started_at": &now, "error": ""})
 	work, err := os.MkdirTemp(backupDir(), "r2-backup-*")
 	if err == nil {
 		defer os.RemoveAll(work)
@@ -320,6 +351,7 @@ func (s *Server) runR2Backup(job *R2BackupJob) {
 	}
 	enc, manifest, checksum, size, err := s.createR2Archive(work)
 	if err == nil {
+		s.updateR2Phase(job, "uploading")
 		var key string
 		key, err = s.uploadR2Archive(context.Background(), enc, job.Kind)
 		if err == nil {
@@ -332,15 +364,23 @@ func (s *Server) runR2Backup(job *R2BackupJob) {
 		return
 	}
 	finished := time.Now()
-	s.updateR2Job(job, map[string]interface{}{"status": "succeeded", "finished_at": &finished})
+	job.Status, job.Phase = "succeeded", "completed"
+	s.updateR2Job(job, map[string]interface{}{"status": "succeeded", "phase": "completed", "finished_at": &finished})
 	s.metrics.recordSuccess(true, true)
 	s.audit(nil, "backup_r2", "backup", job.ObjectKey)
 }
 
 func (s *Server) finishR2Job(job *R2BackupJob, err error) {
 	finished := time.Now()
-	s.updateR2Job(job, map[string]interface{}{"status": "failed", "finished_at": &finished, "error": safeBackupError(err)})
+	job.Status, job.Phase = "failed", "failed"
+	s.updateR2Job(job, map[string]interface{}{"status": "failed", "phase": "failed", "finished_at": &finished, "error": safeOperationError(err)})
 	s.metrics.recordFailure()
+	event := "backup_failed"
+	if job.Kind == "restore" {
+		event = "restore_failed"
+	}
+	s.notifyOperation(event, event+":"+job.Kind, "Backup atau restore R2 gagal. Periksa dashboard backup.", job)
+	operationLog("r2_job_failed", map[string]any{"kind": job.Kind, "jobId": job.ID})
 }
 func safeBackupError(err error) string {
 	if err == nil {
@@ -370,6 +410,15 @@ func (s *Server) listR2Archives(c *fiber.Ctx) error {
 
 func (s *Server) r2Status(c *fiber.Ctx) error {
 	status := fiber.Map{"enabled": r2Enabled(), "prefix": r2Prefix(), "retentionDays": r2RetentionDays(), "schedule": "02:00 WIB, setiap 72 jam", "maintenance": s.r2.maintenance.Load()}
+	var last R2BackupJob
+	if s.db.Where("kind = ? AND status = ?", "scheduled", "succeeded").Order("finished_at desc").First(&last).Error == nil && last.FinishedAt != nil {
+		age := time.Since(*last.FinishedAt)
+		status["lastAutomaticBackupAt"] = wibTimeFormat(*last.FinishedAt, time.RFC3339)
+		status["backupAgeHours"] = int64(age.Hours())
+		status["backupHealthy"] = age <= backupAlertMaxAge()
+	} else if r2Enabled() {
+		status["backupHealthy"] = false
+	}
 	if r2Enabled() {
 		status["bucket"] = os.Getenv("BACKUP_R2_BUCKET")
 		status["configured"] = r2ConfigError() == nil
@@ -586,38 +635,28 @@ func copyDirectory(src, dst string) error {
 	})
 }
 
-func replaceUploads(staged string) error {
-	if _, err := os.Stat(staged); os.IsNotExist(err) {
-		return os.MkdirAll(uploadsDir(), 0o700)
-	}
-	old := uploadsDir() + ".pre-restore"
-	_ = os.RemoveAll(old)
-	if err := os.Rename(uploadsDir(), old); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.Rename(staged, uploadsDir()); err != nil {
-		_ = os.Rename(old, uploadsDir())
-		return err
-	}
-	_ = os.RemoveAll(old)
-	return nil
-}
-
 func (s *Server) runR2Restore(job *R2BackupJob) {
 	now := time.Now()
-	s.updateR2Job(job, map[string]interface{}{"status": "running", "started_at": &now, "error": ""})
+	job.Status = "running"
+	s.updateR2Job(job, map[string]interface{}{"status": "running", "phase": "downloading", "started_at": &now, "error": ""})
 	s.r2.maintenance.Store(true)
-	defer s.r2.maintenance.Store(false)
-	work, err := os.MkdirTemp(backupDir(), "r2-restore-*")
-	if err != nil {
+	releaseMaintenance := true
+	defer func() {
+		if releaseMaintenance {
+			s.r2.maintenance.Store(false)
+		}
+	}()
+	work := filepath.Join(backupDir(), "r2-restore-"+job.ID)
+	if err := os.MkdirAll(work, 0o700); err != nil {
 		s.finishR2Job(job, err)
 		return
 	}
-	defer os.RemoveAll(work)
 	enc := filepath.Join(work, "remote.tar.gz.enc")
 	plain := filepath.Join(work, "remote.tar.gz")
 	extracted := filepath.Join(work, "extracted")
-	if err = s.downloadR2Object(context.Background(), job.SourceKey, enc); err == nil {
+	err := s.downloadR2Object(context.Background(), job.SourceKey, enc)
+	if err == nil {
+		s.updateR2Phase(job, "validating")
 		err = decryptBackupFile(enc, plain, os.Getenv("BACKUP_ENCRYPTION_KEY"))
 	}
 	var manifest r2Manifest
@@ -631,45 +670,108 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 		s.finishR2Job(job, err)
 		return
 	}
-	// A full safety snapshot is sent to R2 before any live data is touched.
+	// Keep the encrypted safety snapshot on the persistent backup volume until
+	// every database and uploads step has completed. R2 is a second copy, not
+	// the only rollback source should the network be unavailable after a crash.
 	safetyDir := filepath.Join(work, "safety")
-	var safetyEnc string
-	var safetyChecksum string
-	var safetySize int64
-	if safetyEnc, _, safetyChecksum, safetySize, err = s.createR2Archive(safetyDir); err == nil {
-		_, err = s.uploadR2Archive(context.Background(), safetyEnc, "pre-restore")
+	var safetyEnc, safetyKey string
+	if safetyEnc, _, _, _, err = s.createR2Archive(safetyDir); err == nil {
+		safetyKey, err = s.uploadR2Archive(context.Background(), safetyEnc, "pre-restore")
 	}
 	if err != nil {
 		s.finishR2Job(job, fmt.Errorf("backup pengaman gagal: %w", err))
 		return
 	}
-	_ = safetyChecksum
-	_ = safetySize
+	journal := &r2RestoreJournal{JobID: job.ID, SourceKey: job.SourceKey, SafetyObjectKey: safetyKey, SafetyArchive: safetyEnc, WorkDir: work, Dialect: dialect(), Phase: "safety-created"}
+	if err = writeR2RestoreJournal(journal); err != nil {
+		s.finishR2Job(job, err)
+		return
+	}
+	job.SafetyObjectKey = safetyKey
+	s.updateR2Job(job, map[string]interface{}{"safety_object_key": safetyKey, "phase": "safety-created"})
 	if isSQLite() {
-		if err = copyFile(filepath.Join(extracted, manifest.Database), pendingDBPath); err == nil {
-			_ = os.RemoveAll("uploads.restore-pending")
-			err = os.MkdirAll("uploads.restore-pending", 0o700)
-			if _, e := os.Stat(filepath.Join(extracted, "uploads")); e == nil {
-				err = copyDirectory(filepath.Join(extracted, "uploads"), "uploads.restore-pending")
+		err = copyFile(filepath.Join(extracted, manifest.Database), journalDBNew(journal))
+		if err == nil {
+			err = os.MkdirAll(journalUploadsNew(journal), 0o700)
+		}
+		if err == nil && exists(filepath.Join(extracted, "uploads")) {
+			err = copyDirectory(filepath.Join(extracted, "uploads"), journalUploadsNew(journal))
+		}
+		if err == nil {
+			err = updateR2RestorePhase(journal, "sqlite-staged", nil)
+			s.updateR2Phase(job, "sqlite-staged")
+		}
+		if err == nil && scheduleRestoreRestart() {
+			releaseMaintenance = false
+		}
+	} else {
+		err = updateR2RestorePhase(journal, "postgres-restoring", nil)
+		s.updateR2Phase(job, "postgres-restoring")
+		if err == nil {
+			err = pgRestore(filepath.Join(extracted, manifest.Database))
+		}
+		if err == nil {
+			err = updateR2RestorePhase(journal, "postgres-db-restored", nil)
+		}
+		if err == nil {
+			if exists(filepath.Join(extracted, "uploads")) {
+				err = copyDirectory(filepath.Join(extracted, "uploads"), journalUploadsNew(journal))
+			} else {
+				err = os.MkdirAll(journalUploadsNew(journal), 0o700)
 			}
 		}
 		if err == nil {
-			scheduleRestoreRestart()
+			err = updateR2RestorePhase(journal, "postgres-uploads-swapping", nil)
+			s.updateR2Phase(job, "postgres-uploads-swapping")
 		}
-	} else {
-		err = pgRestore(filepath.Join(extracted, manifest.Database))
 		if err == nil {
-			err = replaceUploads(filepath.Join(extracted, "uploads"))
+			err = swapDirectoryKeepingOld(journalUploadsNew(journal), uploadsDir(), journalUploadsOld(journal))
+		}
+		if err == nil {
+			err = updateR2RestorePhase(journal, "postgres-uploads-swapped", nil)
 		}
 		if err == nil {
 			err = s.migrateSchema()
 		}
+		if err == nil {
+			err = updateR2RestorePhase(journal, "postgres-migrated", nil)
+		}
 	}
 	if err != nil {
+		if isSQLite() {
+			// Nothing has been swapped until the next controlled restart; discard
+			// the journal so a failed staging operation cannot block a later one.
+			_ = updateR2RestorePhase(journal, "rolled-back", err)
+			removeR2RestoreJournal(journal)
+		}
+		if !isSQLite() {
+			if rollbackErr := restorePostgresSafety(journal); rollbackErr == nil {
+				if exists(journalUploadsOld(journal)) {
+					_ = os.RemoveAll(uploadsDir())
+					_ = os.Rename(journalUploadsOld(journal), uploadsDir())
+				}
+				_ = updateR2RestorePhase(journal, "rolled-back", nil)
+			} else {
+				_ = updateR2RestorePhase(journal, "rollback-failed", rollbackErr)
+			}
+		}
 		s.finishR2Job(job, err)
 		return
 	}
+	if isSQLite() {
+		// The job is finalized by reconcileR2Operations after the supervisor
+		// restarts this process and applies the journal before opening SQLite.
+		return
+	}
+	_ = os.RemoveAll(journalUploadsOld(journal))
+	if err = updateR2RestorePhase(journal, "completed", nil); err != nil {
+		s.finishR2Job(job, err)
+		return
+	}
+	removeR2RestoreJournal(journal)
 	finished := time.Now()
-	s.updateR2Job(job, map[string]interface{}{"status": "succeeded", "finished_at": &finished})
+	job.Status, job.Phase = "succeeded", "completed"
+	s.updateR2Job(job, map[string]interface{}{"status": "succeeded", "phase": "completed", "finished_at": &finished})
 	s.audit(nil, "restore_r2", "backup", job.SourceKey)
+	s.notifyOperation("restore_succeeded", "restore_succeeded:"+job.ID, "Restore R2 selesai dengan backup pengaman tersedia di R2.", job)
 }

@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: backend/go.sum
+      - run: go vet ./...
+      - run: go test -coverprofile=coverage.out ./...
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.out
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  minio-r2-integration:
+    needs: backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      RUN_R2_INTEGRATION: '1'
+      APP_ENV: development
+      BACKUP_R2_ENDPOINT: http://127.0.0.1:9000
+      BACKUP_R2_ACCOUNT_ID: minio
+      BACKUP_R2_BUCKET: pkbm-lms-ci
+      BACKUP_R2_ACCESS_KEY_ID: minioadmin
+      BACKUP_R2_SECRET_ACCESS_KEY: minioadmin-ci-password
+      BACKUP_R2_PREFIX: pkbm-lms-ci
+      BACKUP_R2_TIMEOUT: 20s
+      BACKUP_ENCRYPTION_KEY: ci-r2-encryption-key-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: backend/go.sum
+      - run: docker run --detach --rm --name pkbm-minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin-ci-password minio/minio server /data
+      - run: until curl --fail --silent http://127.0.0.1:9000/minio/health/live; do sleep 1; done
+      - run: go test -run TestR2S3CompatibleIntegration -v ./cmd/server
+
+  docker-smoke:
+    needs: [backend, frontend, minio-r2-integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and start production-like stack
+        run: |
+          docker compose --env-file .github/ci.env config --quiet
+          docker compose --env-file .github/ci.env up --build -d
+          for i in {1..30}; do
+            APP_PORT=$(docker compose --env-file .github/ci.env port app 8080 | sed 's/.*://')
+            if curl --fail --silent "http://127.0.0.1:${APP_PORT}/api/health"; then break; fi
+            sleep 2
+          done
+          test -n "${APP_PORT:-}"
+          curl --fail --silent "http://127.0.0.1:${APP_PORT}/health"
+          echo "E2E_BASE_URL=http://127.0.0.1:${APP_PORT}" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Run browser smoke test
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - name: Save diagnostics
+        if: always()
+        run: docker compose --env-file .github/ci.env logs --no-color > docker-compose.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-and-playwright-report
+          path: |
+            docker-compose.log
+            frontend/playwright-report
+            frontend/test-results

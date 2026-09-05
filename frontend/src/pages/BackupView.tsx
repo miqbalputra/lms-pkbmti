@@ -19,8 +19,8 @@ type Backup = {
   automatic: boolean
 }
 type R2Archive = { key: string; createdAt: string; size: number; automatic: boolean }
-type R2Job = { id: string; kind: string; status: string; sourceKey?: string; objectKey?: string; error?: string; finishedAt?: string }
-type R2Status = { enabled: boolean; configured?: boolean; bucket?: string; prefix: string; retentionDays: number; schedule: string; maintenance: boolean }
+type R2Job = { id: string; kind: string; status: string; phase?: string; sourceKey?: string; objectKey?: string; safetyObjectKey?: string; error?: string; finishedAt?: string; recoveredAt?: string }
+type R2Status = { enabled: boolean; configured?: boolean; bucket?: string; prefix: string; retentionDays: number; schedule: string; maintenance: boolean; lastAutomaticBackupAt?: string; backupAgeHours?: number; backupHealthy?: boolean }
 
 function formatBytes(n: number): string {
   if (n < 1024) return n + ' B'
@@ -247,6 +247,7 @@ export function BackupView({ token }: { token: string }) {
             <h2 className="text-sm font-semibold">Backup Penuh Cloudflare R2</h2>
             <p className="text-xs text-muted-foreground">Database + foto, tugas, materi, RPP, surat, dan dokumen tutor dalam satu arsip terenkripsi.</p>
             {r2Status && <p className="mt-1 text-xs text-muted-foreground">{r2Status.enabled && r2Status.configured ? <>Bucket privat <code>{r2Status.bucket}</code> · Retensi {r2Status.retentionDays} hari · {r2Status.schedule}</> : <>R2 belum dikonfigurasi di secret server.</>}</p>}
+			{r2Status?.configured && <p className={`mt-1 text-xs ${r2Status.backupHealthy === false ? 'text-destructive' : 'text-muted-foreground'}`}>{r2Status.lastAutomaticBackupAt ? <>Backup otomatis terakhir: {formatTime(r2Status.lastAutomaticBackupAt)} ({r2Status.backupAgeHours ?? 0} jam lalu).</> : <>Belum ada backup otomatis yang sukses.</>} {r2Status.backupHealthy === false && 'Periksa koneksi dan job R2.'}</p>}
           </div>
           <div className="flex gap-2"><Button variant="outline" size="sm" onClick={testR2} disabled={!r2Status?.configured || busy === 'r2-test'}>{busy === 'r2-test' ? 'Menguji...' : 'Uji Koneksi'}</Button><Button size="sm" onClick={runR2Backup} disabled={!r2Status?.configured || busy === 'r2-backup'}><Database className="h-4 w-4" /> {busy === 'r2-backup' ? 'Mengantrikan...' : 'Backup Sekarang'}</Button></div>
         </div>
@@ -255,7 +256,7 @@ export function BackupView({ token }: { token: string }) {
           {r2Archives.map((a) => <TableRow key={a.key}><TableCell className="max-w-[360px] truncate font-mono text-xs" title={a.key}>{a.key}</TableCell><TableCell>{formatBytes(a.size)}</TableCell><TableCell className="text-xs">{formatTime(a.createdAt)}</TableCell><TableCell><Badge variant={a.automatic ? 'default' : 'outline'}>{a.automatic ? 'otomatis' : 'manual'}</Badge></TableCell><TableCell className="text-right"><Button size="sm" variant="destructive" onClick={() => restoreR2(a.key)} disabled={busy === 'r2-restore'}>Restore</Button></TableCell></TableRow>)}
           {!r2Archives.length && <TableRow><TableCell colSpan={5} className="py-5 text-center text-sm text-muted-foreground">Belum ada arsip cloud.</TableCell></TableRow>}
         </TableBody></Table></div>
-        {!!r2Jobs.length && <div className="text-xs text-muted-foreground">Job terbaru: {r2Jobs.slice(0, 3).map((j) => <span key={j.id} className="mr-3"><strong>{j.kind}</strong> · {j.status}{j.error ? ` (${j.error})` : ''}</span>)}</div>}
+        {!!r2Jobs.length && <div className="text-xs text-muted-foreground">Job terbaru: {r2Jobs.slice(0, 3).map((j) => <span key={j.id} className="mr-3"><strong>{j.kind}</strong> · {j.status}{j.phase ? ` (${j.phase})` : ''}{j.recoveredAt ? ' · dipulihkan setelah restart' : ''}{j.error ? ` (${j.error})` : ''}</span>)}</div>}
       </Card>
 
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs space-y-3">
@@ -452,11 +453,11 @@ export function BackupView({ token }: { token: string }) {
                 sepenuhnya andalkan n8n (tidak ada penjadwalan internal).
               </p>
               <CodeBlock copy={copyCode} code={'# Contoh .env / variabel server\nBACKUP_CRON="0 2 * * *"      # tiap 02:00 WIB\nBACKUP_FORMAT="full"      # full | db | sql\nBACKUP_RETENTION="14"     # simpan 14 backup otomatis terbaru\nBACKUP_DIR="backups"'} />
-              <p className="text-xs text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 Contoh cron lain: <code>0 2 * * 0</code> (Minggu 02:00), <code>0 */6 * * *</code> (tiap 6 jam). File
                 otomatis diberi label <Badge variant="default">otomatis</Badge> dan di-prune sesuai retensi; file
                 manual &amp; pre-restore pengaman tidak pernah dihapus otomatis.
-              </p>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Untuk arsip offsite, isi <code>BACKUP_OFFSITE_URL</code> dan <code>BACKUP_ENCRYPTION_KEY</code>.
                 Sistem mengenkripsi backup sebelum mengirimnya ke presigned S3, gateway n8n, atau endpoint internal.
