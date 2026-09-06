@@ -21,12 +21,13 @@ type guruReminderPresensi struct {
 	MeetingID  string `json:"meetingId,omitempty"`
 }
 
-// guruReminderJurnal is intentionally per class (rather than per subject):
-// the journal module has no subject timetable, so the reliable task is one
-// journal entry for each wali kelas' class on the current WIB calendar day.
+// guruReminderJurnal is per tutor/class/subject. A tutor can now have multiple
+// assignments in a class, and completing one subject must not hide another.
 type guruReminderJurnal struct {
 	ClassID    string `json:"classId"`
 	ClassLabel string `json:"classLabel"`
+	MapelID    string `json:"mapelId"`
+	MapelNama  string `json:"mapelNama"`
 	Date       string `json:"date"`
 }
 
@@ -80,10 +81,6 @@ func (s *Server) guruDashboardReminders(c *fiber.Ctx) error {
 		Order("jenjang, nama_rombel").Find(&classes).Error; err != nil {
 		return err
 	}
-	if len(classes) == 0 {
-		return c.JSON(response)
-	}
-
 	semesterStart := semester.TanggalMulai.In(wibLocation)
 	start := time.Date(semesterStart.Year(), semesterStart.Month(), semesterStart.Day(), 0, 0, 0, 0, wibLocation)
 	semesterFinish := semester.TanggalSelesai.In(wibLocation)
@@ -99,7 +96,7 @@ func (s *Server) guruDashboardReminders(c *fiber.Ctx) error {
 		response.Presensi = presensi
 	}
 
-	jurnal, err := s.guruPendingJurnal(*user.TutorID, classes, today)
+	jurnal, err := s.guruPendingJurnal(*user.TutorID, academicYear.ID, semester, now)
 	if err != nil {
 		return err
 	}
@@ -242,32 +239,61 @@ func (s *Server) guruPendingPresensi(classes []Kelas, start, end time.Time) ([]g
 	return reminders, nil
 }
 
-func (s *Server) guruPendingJurnal(tutorID string, classes []Kelas, today time.Time) ([]guruReminderJurnal, error) {
-	classIDs := make([]string, 0, len(classes))
-	for _, class := range classes {
-		classIDs = append(classIDs, class.ID)
-	}
-	nextDay := today.AddDate(0, 0, 1)
-	var completedClassIDs []string
-	if err := s.db.Model(&JurnalMengajar{}).
-		Where("tutor_id = ? AND kelas_id IN ? AND tanggal >= ? AND tanggal < ?", tutorID, classIDs, today, nextDay).
-		Distinct("kelas_id").Pluck("kelas_id", &completedClassIDs).Error; err != nil {
+func (s *Server) guruPendingJurnal(tutorID, academicYearID string, semester Semester, now time.Time) ([]guruReminderJurnal, error) {
+	var assignments []PenugasanGuruMapel
+	if err := s.db.Preload("Kelas").Preload("Mapel").Where("tutor_id = ?", tutorID).Find(&assignments).Error; err != nil {
 		return nil, err
 	}
-	completed := make(map[string]bool, len(completedClassIDs))
-	for _, classID := range completedClassIDs {
-		completed[classID] = true
+	today := journalDateAtMidnight(now)
+	end := today
+	// The current Saturday becomes due after noon WIB; all earlier Saturdays are
+	// immediately included so a tutor sees genuine backlog on their next login.
+	if today.Weekday() != time.Saturday || now.In(wibLocation).Hour() < 12 {
+		end = end.AddDate(0, 0, -1)
+	}
+	semesterStart := journalDateAtMidnight(semester.TanggalMulai)
+	semesterEnd := journalDateAtMidnight(semester.TanggalSelesai)
+	if end.After(semesterEnd) {
+		end = semesterEnd
+	}
+	if end.Before(semesterStart) {
+		return []guruReminderJurnal{}, nil
 	}
 
-	reminders := make([]guruReminderJurnal, 0, len(classes))
-	for _, class := range classes {
-		if completed[class.ID] {
+	reminders := []guruReminderJurnal{}
+	for _, assignment := range assignments {
+		if assignment.Kelas == nil || assignment.Mapel == nil || assignment.Kelas.TahunAjaranID != academicYearID || !assignment.Mapel.IsActive {
 			continue
 		}
-		reminders = append(reminders, guruReminderJurnal{
-			ClassID: class.ID, ClassLabel: kelasLabel(class), Date: wibTimeFormat(today, "2006-01-02"),
-		})
+		start := semesterStart
+		assignedAt := journalDateAtMidnight(assignment.CreatedAt)
+		if assignedAt.After(start) {
+			start = assignedAt
+		}
+		for date := firstSaturdayOnOrAfter(start); !date.After(end); date = date.AddDate(0, 0, 7) {
+			var count int64
+			if err := s.db.Model(&JurnalMengajar{}).Where("tutor_id = ? AND kelas_id = ? AND mapel_id = ? AND tanggal = ?", tutorID, assignment.KelasID, assignment.MapelID, date).Count(&count).Error; err != nil {
+				return nil, err
+			}
+			if count == 0 {
+				reminders = append(reminders, guruReminderJurnal{ClassID: assignment.KelasID, ClassLabel: kelasLabel(*assignment.Kelas), MapelID: assignment.MapelID, MapelNama: assignment.Mapel.NamaMapel, Date: wibTimeFormat(date, "2006-01-02")})
+			}
+		}
 	}
-	sort.SliceStable(reminders, func(i, j int) bool { return reminders[i].ClassLabel < reminders[j].ClassLabel })
+	sort.SliceStable(reminders, func(i, j int) bool {
+		if reminders[i].Date != reminders[j].Date {
+			return reminders[i].Date < reminders[j].Date
+		}
+		if reminders[i].ClassLabel != reminders[j].ClassLabel {
+			return reminders[i].ClassLabel < reminders[j].ClassLabel
+		}
+		return reminders[i].MapelNama < reminders[j].MapelNama
+	})
 	return reminders, nil
+}
+
+func firstSaturdayOnOrAfter(day time.Time) time.Time {
+	day = journalDateAtMidnight(day)
+	delta := (int(time.Saturday) - int(day.Weekday()) + 7) % 7
+	return day.AddDate(0, 0, delta)
 }

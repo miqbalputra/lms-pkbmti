@@ -73,10 +73,14 @@ func TestGuruDashboardRemindersScopeAndCompleteness(t *testing.T) {
 	}
 	tutor := Tutor{Nama: "Guru Pengingat", JenisKelamin: "P"}
 	otherTutor := Tutor{Nama: "Guru Lain", JenisKelamin: "L"}
+	mapel := MataPelajaran{NamaMapel: "Mapel Pengingat", KodeMapel: "REM", IsActive: true}
 	if err := s.db.Create(&tutor).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.Create(&otherTutor).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&mapel).Error; err != nil {
 		t.Fatal(err)
 	}
 	guruToken := loginRole(t, app, adminToken, "guru-pengingat", "guru", &tutor.ID)
@@ -105,6 +109,13 @@ func TestGuruDashboardRemindersScopeAndCompleteness(t *testing.T) {
 			PokjarID: pokjar.ID, Status: "aktif",
 		}
 		if err := s.db.Create(&student).Error; err != nil {
+			t.Fatal(err)
+		}
+		owner := tutor.ID
+		if index == len(classes)-1 {
+			owner = otherTutor.ID
+		}
+		if err := s.db.Create(&PenugasanGuruMapel{Base: Base{CreatedAt: meetingDay.Add(-time.Hour)}, TutorID: owner, KelasID: classes[index].ID, MapelID: mapel.ID}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,7 +149,7 @@ func TestGuruDashboardRemindersScopeAndCompleteness(t *testing.T) {
 	}
 
 	// A journal for the complete class suppresses only that class' journal task.
-	journal := JurnalMengajar{TutorID: tutor.ID, KelasID: classes[2].ID, Tanggal: today, Materi: "Sudah dicatat", Status: "disetujui"}
+	journal := JurnalMengajar{TutorID: tutor.ID, KelasID: classes[2].ID, MapelID: mapel.ID, Tanggal: meetingDay, Materi: "Sudah dicatat", Status: "disetujui"}
 	if err := s.db.Create(&journal).Error; err != nil {
 		t.Fatal(err)
 	}

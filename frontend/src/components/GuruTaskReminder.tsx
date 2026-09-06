@@ -21,6 +21,8 @@ type AttendanceReminder = {
 type JournalReminder = {
   classId: string
   classLabel: string
+  mapelId: string
+  mapelNama: string
   date: string
 }
 
@@ -134,7 +136,7 @@ export function GuruTaskReminder({ token, user }: { token: string; user: User })
 
   function completeJournal(reminder: JournalReminder) {
     dismiss()
-    const params = new URLSearchParams({ kelasId: reminder.classId, tanggal: reminder.date })
+    const params = new URLSearchParams({ kelasId: reminder.classId, tanggal: reminder.date, mapelId: reminder.mapelId })
     navigate(`${pathFor('jurnal-mengajar')}?${params.toString()}`)
   }
 
@@ -180,9 +182,9 @@ export function GuruTaskReminder({ token, user }: { token: string; user: User })
             </h3>
             <div className="space-y-2">
               {journals.map((reminder) => (
-                <div key={`${reminder.classId}-${reminder.date}`} className="rounded-xl border border-border bg-muted/30 p-3">
+                <div key={`${reminder.classId}-${reminder.mapelId}-${reminder.date}`} className="rounded-xl border border-border bg-muted/30 p-3">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-sm font-medium text-foreground">{reminder.classLabel} · {formatDate(reminder.date)}</p>
+                    <p className="text-sm font-medium text-foreground">{reminder.classLabel} · {reminder.mapelNama} · {formatDate(reminder.date)}</p>
                     <Button size="sm" onClick={() => completeJournal(reminder)}>Lengkapi di sini</Button>
                   </div>
                 </div>

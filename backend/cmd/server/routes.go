@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"image/png"
 	"io"
 	"math"
 	"math/rand"
@@ -107,9 +108,11 @@ func (s *Server) routes(api fiber.Router) {
 	// approve/reject role-checked inside handler (admin||kepala_sekolah, NOT
 	// canManageKelas which rejects kepala).
 	api.Get("/jurnal", s.listJurnal)
-	api.Post("/jurnal", s.createJurnal)
-	api.Put("/jurnal/:id", s.updateJurnal)
-	api.Delete("/jurnal/:id", s.deleteJurnal)
+	api.Get("/jurnal/sheet", s.getJournalSheet)
+	api.Get("/jurnal/export", s.exportJournal)
+	api.Post("/jurnal/batches", s.createJournalBatch)
+	api.Put("/jurnal/batches/:id", s.updateJournalBatch)
+	api.Delete("/jurnal/batches/:id", s.deleteJournalBatch)
 	api.Get("/jurnal/:id/foto", s.jurnalFoto)
 
 	// Modul C — Tugas Siswa (prd_fitur_simpkbm.md). Tutor membuat tugas per mapel+kelas
@@ -3647,7 +3650,11 @@ func validSignature(value string) bool {
 		return false
 	}
 	data, ok := signatureImage(value)
-	return ok && len(data) >= 8 && bytes.Equal(data[:8], []byte{137, 80, 78, 71, 13, 10, 26, 10})
+	if !ok || len(data) < 8 || !bytes.Equal(data[:8], []byte{137, 80, 78, 71, 13, 10, 26, 10}) {
+		return false
+	}
+	_, err := png.DecodeConfig(bytes.NewReader(data))
+	return err == nil
 }
 func (s *Server) canManageKelas(c *fiber.Ctx, kelasID string) error {
 	if c.Locals("role") == "admin" {
@@ -4028,7 +4035,7 @@ func (s *Server) validateJurnalReferences(tutorID, mapelID, kelasID string) erro
 
 func (s *Server) jurnalFoto(c *fiber.Ctx) error {
 	var j JurnalMengajar
-	if e := s.db.First(&j, "id = ?", id(c)).Error; e != nil {
+	if e := s.db.Preload("Batch").First(&j, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
 	}
 	role := c.Locals("role").(string)
@@ -4038,10 +4045,14 @@ func (s *Server) jurnalFoto(c *fiber.Ctx) error {
 			return fiber.NewError(403, "not permitted")
 		}
 	}
-	if j.FotoPath == nil {
+	photoPath := j.FotoPath
+	if j.Batch != nil && j.Batch.FotoPath != nil {
+		photoPath = j.Batch.FotoPath
+	}
+	if photoPath == nil {
 		return fiber.NewError(404, "jurnal tidak memiliki foto")
 	}
-	return s.sendUpload(c, *j.FotoPath)
+	return s.sendUpload(c, *photoPath)
 }
 
 // ---------------------------------------------------------------------------

@@ -337,8 +337,8 @@ func (s *Server) operationalCompliance(c *fiber.Ctx) error {
 				classesByTutor[*class.WaliKelasID] = append(classesByTutor[*class.WaliKelasID], class)
 			}
 		}
-		for tutorID, tutorClasses := range classesByTutor {
-			jurnal, err := s.guruPendingJurnal(tutorID, tutorClasses, today)
+		for tutorID := range classesByTutor {
+			jurnal, err := s.guruPendingJurnal(tutorID, academicYear.ID, semester, now)
 			if err != nil {
 				return err
 			}
@@ -347,7 +347,7 @@ func (s *Server) operationalCompliance(c *fiber.Ctx) error {
 				appendTask(operationalComplianceTask{
 					Type: "jurnal", ClassID: reminder.ClassID, ClassLabel: reminder.ClassLabel,
 					TutorID: tutorID, TutorName: complianceTutorName(class), Date: reminder.Date,
-					Reason: "belum ada jurnal kelas hari ini",
+					Reason: "belum ada jurnal " + reminder.MapelNama,
 				})
 			}
 		}

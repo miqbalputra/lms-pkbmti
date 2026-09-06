@@ -390,10 +390,26 @@ type Pengumuman struct {
 	Kelas            Kelas      `json:"kelas"`
 }
 
-// Modul K — Jurnal Mengajar. Tutor mencatat kegiatan harian (foto bukti opsional).
-// Jurnal LANGSUNG final (status=disetujui) saat dicatat — tanpa alur approve/reject.
+// JurnalBatch is one tutor's signed submission on a class journal sheet. The
+// sheet may include submissions from several subject tutors.
+type JurnalBatch struct {
+	Base
+	TutorID     string           `gorm:"index" json:"tutorId"`
+	KelasID     string           `gorm:"index" json:"kelasId"`
+	Tanggal     time.Time        `gorm:"index" json:"tanggal"`
+	TandaTangan string           `gorm:"type:text" json:"tandaTangan"`
+	FotoPath    *string          `json:"fotoPath"`
+	Tutor       Tutor            `json:"tutor"`
+	Kelas       Kelas            `json:"kelas"`
+	Lines       []JurnalMengajar `gorm:"foreignKey:BatchID" json:"lines"`
+}
+
+// JurnalMengajar is one line on the daily journal sheet. Existing fields are
+// retained for legacy compatibility; BatchID/JamKe provide the new structure.
 type JurnalMengajar struct {
 	Base
+	BatchID         *string       `gorm:"index" json:"batchId"`
+	JamKe           int           `gorm:"default:1" json:"jamKe"`
 	TutorID         string        `gorm:"index" json:"tutorId"`
 	MapelID         string        `gorm:"index" json:"mapelId"`
 	KelasID         string        `gorm:"index" json:"kelasId"`
@@ -408,6 +424,7 @@ type JurnalMengajar struct {
 	Tutor           Tutor         `json:"tutor"`
 	Mapel           MataPelajaran `json:"mapel"`
 	Kelas           Kelas         `json:"kelas"`
+	Batch           *JurnalBatch  `gorm:"foreignKey:BatchID" json:"batch,omitempty"`
 }
 
 // Modul C — Tugas Siswa (prd_fitur_simpkbm.md). Tutor membuat tugas per mapel+kelas
@@ -1129,7 +1146,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {
@@ -1144,6 +1161,15 @@ func (s *Server) migrateSchema() error {
 	// Modul K — alur approve/reject jurnal dihapus; jurnal langsung final. Sekali
 	// jalan: jurnal lama berstatus "pending" dianggap disetujui agar tidak macet.
 	s.db.Model(&JurnalMengajar{}).Where("status = ?", "pending").Update("status", "disetujui")
+	if e := s.backfillJurnalBatches(); e != nil {
+		return e
+	}
+	// The application-level transaction produces a clear conflict response.
+	// This final database constraint closes the race window between two
+	// concurrent submissions for the same period on one journal sheet.
+	if e := s.db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_jurnal_kelas_tanggal_jam_ke ON jurnal_mengajars (kelas_id, tanggal, jam_ke)").Error; e != nil {
+		return e
+	}
 	var n int64
 	s.db.Model(&Pokjar{}).Count(&n)
 	if n == 0 {

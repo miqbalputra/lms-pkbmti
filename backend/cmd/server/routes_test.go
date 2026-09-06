@@ -100,8 +100,11 @@ func TestValidSignatureAcceptsOnlyPNGBase64(t *testing.T) {
 	if validSignature("data:image/png;base64,aW52YWxpZA==") {
 		t.Fatal("invalid PNG bytes must be rejected")
 	}
-	if !validSignature("data:image/png;base64,iVBORw0KGgo=") {
-		t.Fatal("PNG signature header must be accepted")
+	if validSignature("data:image/png;base64,iVBORw0KGgo=") {
+		t.Fatal("incomplete PNG signature must be rejected")
+	}
+	if !validSignature("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==") {
+		t.Fatal("readable PNG signature must be accepted")
 	}
 }
 

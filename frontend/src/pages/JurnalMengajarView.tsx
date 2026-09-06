@@ -1,404 +1,211 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ImageIcon, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { FileImage, FileText, FileType2, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '../components/ui/alert-dialog'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { EmptyState, FormCard, PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
+import { Signature } from '../components/ui/Signature'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
-import { formatWibDate, wibDateInputValue, wibToday } from '../lib/wib'
+import { formatWibDate, wibToday } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
 type Row = Record<string, unknown> & { id: string }
+type Assignment = Row & { tutorId: string; kelasId: string; mapelId: string; tutor?: Row; kelas?: Row; mapel?: Row }
+type JournalLine = { jamKe: number; mapelId: string; materi: string }
+type SheetLine = { id: string; batchId: string; jamKe: number; tutorId: string; tutorNama: string; mapelId: string; mapelNama: string; materi: string; kegiatan?: string; tandaTangan?: string; fotoPath?: string; canEdit: boolean }
+type AbsentStudent = { pesertaDidikId: string; nama: string; statusKehadiran: string }
+type Sheet = { kelasId: string; kelasLabel: string; tanggal: string; attendanceStatus: 'belum_ada' | 'sebagian' | 'terisi'; absentStudents: AbsentStudent[]; lines: SheetLine[] }
 
-function kelasLabel(k: Row): string {
-  return `Kelas ${String(k.jenjang ?? '')}${String(k.namaRombel ?? '')}`
+function latestSaturday(): string {
+  const date = new Date(`${wibToday()}T12:00:00+07:00`)
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 1) % 7))
+  return date.toISOString().slice(0, 10)
 }
 
-function fmtDate(v: unknown): string {
-  return formatWibDate(v)
+function isAllowedSaturday(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || value > wibToday()) return false
+  return new Date(`${value}T12:00:00+07:00`).getUTCDay() === 6
 }
 
-const emptyForm = {
-  tutorId: '',
-  mapelId: '',
-  kelasId: '',
-  tanggal: wibToday(),
-  materi: '',
-  kegiatan: '',
+function absenceText(absences: AbsentStudent[]): string {
+  return absences.length ? absences.map((student) => `${student.nama} (${student.statusKehadiran})`).join(', ') : '—'
 }
 
-export function JurnalMengajarView({
-  token,
-  user,
-  readOnly,
-}: {
-  token: string
-  user: User
-  readOnly: boolean
-}) {
+function defaultLine(mapelId = ''): JournalLine { return { jamKe: 1, mapelId, materi: '' } }
+function assignmentClassLabel(assignment: Assignment): string { return `Kelas ${String(assignment.kelas?.jenjang || '')}${String(assignment.kelas?.namaRombel || '')}` }
+function assignmentMapelLabel(assignment: Assignment): string { return String(assignment.mapel?.namaMapel || '-') }
+
+export function JurnalMengajarView({ token, user, readOnly }: { token: string; user: User; readOnly: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [rows, setRows] = useState<Row[]>([])
+  const [assignments, setAssignments] = useState<Assignment[]>([])
   const [tutors, setTutors] = useState<Row[]>([])
-  const [mapel, setMapel] = useState<Row[]>([])
-  const [kelas, setKelas] = useState<Row[]>([])
-  const [adding, setAdding] = useState(false)
-  const [editing, setEditing] = useState<Row | null>(null)
-  const [deletingRow, setDeletingRow] = useState<Row | null>(null)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [form, setForm] = useState({ ...emptyForm })
-  const [foto, setFoto] = useState<File | null>(null)
+  const [selectedTutorID, setSelectedTutorID] = useState(user.tutorId || '')
+  const [classID, setClassID] = useState(searchParams.get('kelasId') || '')
+  const [date, setDate] = useState(searchParams.get('tanggal') || latestSaturday())
+  const [prefillMapelID, setPrefillMapelID] = useState(searchParams.get('mapelId') || '')
+  const [sheet, setSheet] = useState<Sheet | null>(null)
+  const [loadingSheet, setLoadingSheet] = useState(false)
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingBatchID, setEditingBatchID] = useState('')
+  const [lines, setLines] = useState<JournalLine[]>([defaultLine()])
+  const [signature, setSignature] = useState('')
+  const [photo, setPhoto] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
-  const reminderPrefillHandled = useRef('')
+  const loadVersion = useRef(0)
 
-  const isGuru = user.role === 'guru'
   const isAdmin = user.role === 'admin'
-  const kelasOptions = isGuru
-    ? kelas.filter((k) => String(k.waliKelasId || '') === (user.tutorId || ''))
-    : kelas
+  const activeTutorID = isAdmin ? selectedTutorID : user.tutorId || ''
+  const tutorAssignments = useMemo(
+    () => assignments.filter((assignment) => assignment.tutorId === activeTutorID && assignment.mapel?.isActive !== false),
+    [assignments, activeTutorID],
+  )
+  const classAssignments = useMemo(() => tutorAssignments.filter((assignment) => assignment.kelasId === classID), [tutorAssignments, classID])
+  const classOptions = useMemo(() => {
+    const seen = new Set<string>()
+    return tutorAssignments.filter((assignment) => !seen.has(assignment.kelasId) && !!seen.add(assignment.kelasId))
+  }, [tutorAssignments])
+  const selectedTutorName = isAdmin ? String(tutors.find((tutor) => tutor.id === selectedTutorID)?.nama || 'Tutor') : String(user.nama || user.username)
+  const existingSignature = editingBatchID ? sheet?.lines.find((line) => line.batchId === editingBatchID)?.tandaTangan || '' : ''
+  const selectedClass = classOptions.find((assignment) => assignment.kelasId === classID)?.kelas as Row | undefined
+  const sheetDateInvalid = !isAllowedSaturday(date)
 
-  const load = () => {
-    void request('/jurnal', token).then((r: Row[]) => setRows(r || [])).catch(() => setRows([]))
-  }
+  const loadSheet = useCallback(async () => {
+    if (!classID || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { setSheet(null); return }
+    const version = ++loadVersion.current
+    setLoadingSheet(true)
+    try {
+      const result = await request(`/jurnal/sheet?kelasId=${encodeURIComponent(classID)}&tanggal=${encodeURIComponent(date)}`, token) as Sheet
+      if (version === loadVersion.current) setSheet(result)
+    } catch (error) {
+      if (version === loadVersion.current) { setSheet(null); toast.error(error instanceof Error ? error.message : 'Gagal memuat lembar jurnal.') }
+    } finally { if (version === loadVersion.current) setLoadingSheet(false) }
+  }, [classID, date, token])
 
   useEffect(() => {
-    load()
-    if (isAdmin) void request('/tutor', token).then((r: Row[]) => setTutors(r || [])).catch(() => setTutors([]))
-    void request('/mapel', token).then((r: Row[]) => setMapel(r || [])).catch(() => setMapel([]))
-    void request('/kelas', token).then((r: Row[]) => setKelas(r || [])).catch(() => setKelas([]))
-  }, [token, isAdmin]) // eslint-disable-line react-hooks/exhaustive-deps
+    void request('/penugasan', token).then((value: Assignment[]) => setAssignments(Array.isArray(value) ? value : [])).catch(() => setAssignments([]))
+    if (isAdmin) void request('/tutor', token).then((value: Row[]) => setTutors(Array.isArray(value) ? value : [])).catch(() => setTutors([]))
+  }, [isAdmin, token])
 
-  function openAdd() {
-    setForm({ ...emptyForm })
-    setEditing(null)
-    setFoto(null)
-    setAdding(true)
-  }
-
-  // Aksi pengingat guru dan dashboard kepatuhan membawa kelas/tanggal melalui
-  // URL. Admin juga menerima tutorId agar formulir tetap tercatat atas nama
-  // wali kelas terkait; kepala sekolah hanya melihat data (read-only).
-  // Parameter dikonsumsi sekali lalu dibersihkan agar refresh tidak membuka
-  // formulir kembali setelah pengguna membatalkannya.
   useEffect(() => {
-    const reminderClassID = searchParams.get('kelasId') || ''
-    const reminderDate = searchParams.get('tanggal') || ''
-    const reminderTutorID = searchParams.get('tutorId') || ''
-    const key = `${reminderClassID}|${reminderDate}|${reminderTutorID}`
-    const canPrefill = !readOnly && (isGuru || isAdmin)
-    if (!canPrefill || !reminderClassID || !/^\d{4}-\d{2}-\d{2}$/.test(reminderDate) || reminderPrefillHandled.current === key) return
-    if (!kelas.length) return
+    if (!classID && classOptions.length) setClassID(classOptions[0].kelasId)
+    if (classID && !classOptions.some((assignment) => assignment.kelasId === classID)) setClassID('')
+  }, [classID, classOptions])
+  useEffect(() => { void loadSheet() }, [loadSheet])
+  useEffect(() => {
+    if (!classID) return
+    const timer = window.setInterval(() => void loadSheet(), 60_000)
+    return () => window.clearInterval(timer)
+  }, [classID, loadSheet])
+  useEffect(() => {
+    if (!searchParams.size) return
+    const next = new URLSearchParams(searchParams)
+    next.delete('kelasId'); next.delete('tanggal'); next.delete('mapelId')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
 
-    reminderPrefillHandled.current = key
-    const validClass = kelas.some((classRow) => {
-      if (classRow.id !== reminderClassID) return false
-      const waliKelasID = String(classRow.waliKelasId || '')
-      return isGuru ? waliKelasID === (user.tutorId || '') : waliKelasID === reminderTutorID
-    })
-    if (validClass) {
-      setForm({ ...emptyForm, tutorId: isAdmin ? reminderTutorID : '', kelasId: reminderClassID, tanggal: reminderDate })
-      setEditing(null)
-      setFoto(null)
-      setAdding(true)
-    }
-    const nextParams = new URLSearchParams(searchParams)
-    nextParams.delete('kelasId')
-    nextParams.delete('tanggal')
-    nextParams.delete('tutorId')
-    setSearchParams(nextParams, { replace: true })
-  }, [isAdmin, isGuru, kelas, readOnly, searchParams, setSearchParams, user.tutorId])
-
-  function openEdit(r: Row) {
-    setEditing(r)
-    setForm({
-      tutorId: String(r.tutorId || ''),
-      mapelId: String(r.mapelId || ''),
-      kelasId: String(r.kelasId || ''),
-      tanggal: wibDateInputValue(r.tanggal),
-      materi: String(r.materi || ''),
-      kegiatan: String(r.kegiatan || ''),
-    })
-    setFoto(null)
-    setAdding(true)
+  function openNewBatch() {
+    if (!activeTutorID || !classID) { toast.error(isAdmin ? 'Pilih tutor dan kelas terlebih dahulu.' : 'Pilih kelas terlebih dahulu.'); return }
+    if (sheetDateInvalid) { toast.error('Pengisian jurnal hanya dibuka untuk hari Sabtu dari semester aktif sampai hari ini.'); return }
+    const availableMapel = classAssignments.some((assignment) => assignment.mapelId === prefillMapelID) ? prefillMapelID : classAssignments[0]?.mapelId || ''
+    setEditingBatchID(''); setLines([defaultLine(availableMapel)]); setSignature(''); setPhoto(null); setFormOpen(true)
   }
 
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    if (!form.mapelId || !form.kelasId || !form.tanggal || (isAdmin && !editing && !form.tutorId)) {
-      toast.error('Mapel, kelas, dan tanggal wajib diisi.')
-      return
-    }
+  function openEdit(batchID: string) {
+    if (sheetDateInvalid) { toast.error('Tanggal jurnal tidak dapat diedit dari formulir ini.'); return }
+    const selectedLines = sheet?.lines.filter((line) => line.batchId === batchID) || []
+    if (!selectedLines.length) return
+    setEditingBatchID(batchID); setLines(selectedLines.map((line) => ({ jamKe: line.jamKe, mapelId: line.mapelId, materi: line.materi })))
+    setSignature(selectedLines[0].tandaTangan || ''); setPhoto(null); setFormOpen(true)
+  }
+
+  function updateLine(index: number, patch: Partial<JournalLine>) { setLines((current) => current.map((line, lineIndex) => lineIndex === index ? { ...line, ...patch } : line)) }
+  function addLine() {
+    const nextJam = Math.max(0, ...lines.map((line) => line.jamKe || 0), ...((sheet?.lines || []).map((line) => line.jamKe))) + 1
+    setLines((current) => [...current, { ...defaultLine(classAssignments[0]?.mapelId || ''), jamKe: nextJam }])
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!classID || !activeTutorID) return toast.error('Tutor dan kelas wajib dipilih.')
+    if (sheetDateInvalid) return toast.error('Pilih hari Sabtu dari semester aktif sampai hari ini.')
+    if (lines.length < 1 || lines.some((line) => !line.jamKe || !line.mapelId || !line.materi.trim())) return toast.error('Lengkapi Jam Ke, Mata Pelajaran, dan Materi pada setiap baris.')
+    const signatureToSave = signature || existingSignature
+    if (!signatureToSave) return toast.error('Paraf tutor wajib diisi sebelum menyimpan jurnal.')
+    const data = new FormData()
+    if (isAdmin) data.append('tutorId', selectedTutorID)
+    data.append('kelasId', classID); data.append('tanggal', date); data.append('tandaTangan', signatureToSave); data.append('lines', JSON.stringify(lines))
+    if (photo) data.append('foto', photo)
     setSaving(true)
     try {
-      const data = new FormData()
-      if (isAdmin && !editing) data.append('tutorId', form.tutorId)
-      data.append('mapelId', form.mapelId)
-      data.append('kelasId', form.kelasId)
-      data.append('tanggal', form.tanggal)
-      data.append('materi', form.materi)
-      data.append('kegiatan', form.kegiatan)
-      if (foto) data.append('foto', foto)
-
-      const r = await fetch(apiBase + '/jurnal' + (editing ? '/' + editing.id : ''), {
-        method: editing ? 'PUT' : 'POST',
-        credentials: 'include',
-        headers: { Authorization: `Bearer ${token}` },
-        body: data,
-      })
-      const res = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error((res as any)?.error || `Permintaan gagal (${r.status}).`)
-      toast.success(editing ? 'Jurnal diperbarui.' : 'Jurnal dicatat.')
-      setAdding(false)
-      setEditing(null)
-      setFoto(null)
-      void load()
-    } catch (err: any) {
-      toast.error(err.message || 'Gagal menyimpan jurnal.')
-    } finally {
-      setSaving(false)
-    }
+      const response = await fetch(`${apiBase}/jurnal/batches${editingBatchID ? `/${editingBatchID}` : ''}`, { method: editingBatchID ? 'PUT' : 'POST', credentials: 'include', headers: { Authorization: `Bearer ${token}` }, body: data })
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error((result as { error?: string }).error || `Permintaan gagal (${response.status}).`)
+      toast.success(editingBatchID ? 'Jurnal diperbarui.' : 'Jurnal tersimpan.')
+      setFormOpen(false); setEditingBatchID(''); setPhoto(null); setPrefillMapelID(''); await loadSheet()
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Gagal menyimpan jurnal.') } finally { setSaving(false) }
   }
 
-  async function openFoto(r: Row) {
+  async function exportSheet(format: 'pdf' | 'docx' | 'jpg') {
+    if (!classID || !date) return
     try {
-      const res = await fetch(apiBase + '/jurnal/' + r.id + '/foto', {
-        credentials: 'include',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error('foto tidak tersedia')
-      const url = URL.createObjectURL(await res.blob())
-      window.open(url, '_blank')
-      setTimeout(() => URL.revokeObjectURL(url), 60000)
-    } catch (err: any) {
-      toast.error(err.message || 'Gagal memuat foto.')
-    }
+      const response = await fetch(`${apiBase}/jurnal/export?kelasId=${encodeURIComponent(classID)}&tanggal=${encodeURIComponent(date)}&format=${format}`, { credentials: 'include', headers: { Authorization: `Bearer ${token}` } })
+      if (!response.ok) throw new Error('Ekspor jurnal gagal.')
+      const blob = await response.blob(); const url = URL.createObjectURL(blob); const anchor = document.createElement('a')
+      anchor.href = url; anchor.download = `jurnal-${date}.${format}`; anchor.click(); URL.revokeObjectURL(url)
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Ekspor jurnal gagal.') }
   }
 
-  async function confirmDelete() {
-    if (!deletingRow) return
-    setIsDeleting(true)
-    try {
-      await request('/jurnal/' + deletingRow.id, token, 'DELETE')
-      toast.success('Jurnal dihapus.')
-      setDeletingRow(null)
-      void load()
-    } catch (err: any) {
-      toast.error(err.message || 'Gagal menghapus jurnal.')
-    } finally {
-      setIsDeleting(false)
+  const batchCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const line of sheet?.lines || []) counts.set(line.batchId, (counts.get(line.batchId) || 0) + 1)
+    return counts
+  }, [sheet])
+  const firstLineIDs = useMemo(() => {
+    const seen = new Set<string>(); const first = new Set<string>()
+    for (const line of sheet?.lines || []) {
+      if (!seen.has(line.batchId)) { seen.add(line.batchId); first.add(line.id) }
     }
-  }
+    return first
+  }, [sheet])
 
-  return (
-    <div className="space-y-4">
-      <PageToolbar
-        title="Jurnal Mengajar"
-        description="Catat kegiatan mengajar harian per mapel & rombel. Jurnal langsung tersimpan & berlaku (tanpa persetujuan)."
-        actions={
-          !readOnly && (
-            <Button onClick={openAdd}>
-              <Plus className="h-4 w-4" />
-              Catat jurnal
-            </Button>
-          )
-        }
-      />
+  return <div className="space-y-4">
+    <PageToolbar title="Jurnal Mengajar" description="Lembar jurnal Sabtu per kelas. Ketidakhadiran tersinkron langsung dari Presensi Kelas." actions={<div className="flex flex-wrap gap-2">
+      <Button variant="outline" disabled={!classID || !date} onClick={() => void exportSheet('pdf')}><FileText className="h-4 w-4" /> PDF</Button>
+      <Button variant="outline" disabled={!classID || !date} onClick={() => void exportSheet('docx')}><FileType2 className="h-4 w-4" /> Word</Button>
+      <Button variant="outline" disabled={!classID || !date} onClick={() => void exportSheet('jpg')}><FileImage className="h-4 w-4" /> JPG</Button>
+      {!readOnly && <Button onClick={openNewBatch}><Plus className="h-4 w-4" /> Isi jurnal</Button>}
+    </div>} />
 
-      {adding && !readOnly && (
-        <FormCard
-          title={editing ? 'Edit Jurnal' : 'Catat Jurnal Mengajar'}
-          description="Foto dokumentasi opsional (jpg/png, maks 5 MB). Jurnal langsung berlaku begitu disimpan."
-        >
-          <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
-			{isAdmin && (
-			  <div className="grid gap-2 sm:col-span-2">
-				<Label>Tutor pemilik jurnal</Label>
-				<Select
-				  value={form.tutorId}
-				  onChange={(e) => setForm({ ...form, tutorId: e.target.value })}
-				  required={!editing}
-				  disabled={!!editing}
-				>
-				  <option value="">Pilih tutor</option>
-				  {tutors.map((t) => (
-					<option key={t.id} value={t.id}>{String(t.nama || '-')}</option>
-				  ))}
-				</Select>
-				{editing && <p className="text-xs text-muted-foreground">Tutor pemilik jurnal tidak dapat diubah.</p>}
-			  </div>
-			)}
-            <div className="grid gap-2">
-              <Label>Mata Pelajaran</Label>
-              <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>
-                <option value="">Pilih mapel</option>
-                {mapel.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {String(m.namaMapel || '-')}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label>Kelas / Rombel</Label>
-              <Select value={form.kelasId} onChange={(e) => setForm({ ...form, kelasId: e.target.value })} required>
-                <option value="">Pilih kelas</option>
-                {kelasOptions.map((k) => (
-                  <option key={k.id} value={k.id}>
-                    {kelasLabel(k)}
-                  </option>
-                ))}
-              </Select>
-              {isGuru && !kelasOptions.length && (
-                <p className="text-xs text-muted-foreground">Anda belum ditetapkan sebagai wali kelas mana pun.</p>
-              )}
-            </div>
-            <div className="grid gap-2">
-              <Label>Tanggal</Label>
-              <Input type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} required />
-            </div>
-            <div className="grid gap-2">
-              <Label>Foto Dokumentasi (opsional)</Label>
-              <Input
-                type="file"
-                accept="image/png,image/jpeg"
-                onChange={(e) => setFoto(e.target.files?.[0] || null)}
-              />
-              {editing && (editing.fotoPath as string) && !foto && (
-                <p className="text-xs text-muted-foreground">Foto lama tetap dipakai bila tidak diganti.</p>
-              )}
-            </div>
-            <div className="grid gap-2 sm:col-span-2">
-              <Label>Materi</Label>
-              <Input
-                value={form.materi}
-                onChange={(e) => setForm({ ...form, materi: e.target.value })}
-                placeholder="Materi yang diajarkan"
-              />
-            </div>
-            <div className="grid gap-2 sm:col-span-2">
-              <Label>Kegiatan</Label>
-              <textarea
-                className="flex min-h-[120px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={form.kegiatan}
-                onChange={(e) => setForm({ ...form, kegiatan: e.target.value })}
-                placeholder="Deskripsi kegiatan pembelajaran..."
-              />
-            </div>
-            <div className="flex gap-2 sm:col-span-2">
-              <Button type="submit" disabled={saving}>
-                {saving ? 'Menyimpan...' : editing ? 'Simpan perubahan' : 'Simpan jurnal'}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setAdding(false)
-                  setEditing(null)
-                  setFoto(null)
-                }}
-              >
-                Batal
-              </Button>
-            </div>
-          </form>
-        </FormCard>
-      )}
+    <Card className="grid gap-4 p-4 md:grid-cols-3">
+      {isAdmin && <div className="grid gap-2"><Label>Tutor</Label><Select value={selectedTutorID} onChange={(event) => setSelectedTutorID(event.target.value)}><option value="">Pilih tutor</option>{tutors.map((tutor) => <option key={tutor.id} value={tutor.id}>{String(tutor.nama || '-')}</option>)}</Select></div>}
+      <div className="grid gap-2"><Label>Kelas / Rombel</Label><Select value={classID} onChange={(event) => setClassID(event.target.value)} disabled={!activeTutorID}><option value="">Pilih kelas</option>{classOptions.map((assignment) => <option key={assignment.kelasId} value={assignment.kelasId}>{assignmentClassLabel(assignment)}</option>)}</Select></div>
+      <div className="grid gap-2"><Label>Tanggal jurnal</Label><Input type="date" value={date} max={wibToday()} onChange={(event) => setDate(event.target.value)} />{sheetDateInvalid && <p className="text-xs text-destructive">Hanya Sabtu dari semester aktif sampai hari ini yang dapat disimpan.</p>}</div>
+      <div className="flex items-end"><Button variant="outline" disabled={!classID || loadingSheet} onClick={() => void loadSheet()}><RefreshCw className="h-4 w-4" /> Muat ulang</Button></div>
+    </Card>
 
-      <Card className="rounded-2xl border border-border bg-card shadow-2xs overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow className="border-b border-border">
-              <TableHead>Tanggal</TableHead>
-              <TableHead>Mapel</TableHead>
-              <TableHead>Kelas</TableHead>
-              <TableHead>Materi</TableHead>
-              <TableHead className="text-right">Aksi</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((r) => {
-              const m = (r.mapel as Row) || {}
-              const k = (r.kelas as Row) || {}
-              const canModify = !readOnly
-              return (
-                <TableRow key={r.id}>
-                  <TableCell className="text-sm">{fmtDate(r.tanggal)}</TableCell>
-                  <TableCell className="font-medium">{String(m.namaMapel || '-')}</TableCell>
-                  <TableCell>{kelasLabel(k)}</TableCell>
-                  <TableCell>
-                    <div className="text-sm">{String(r.materi || '-')}</div>
-                    {r.kegiatan ? (
-                      <div className="text-xs text-muted-foreground line-clamp-1 max-w-xs">{String(r.kegiatan)}</div>
-                    ) : null}
-                    {r.fotoPath ? (
-                      <button
-                        type="button"
-                        onClick={() => openFoto(r)}
-                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
-                      >
-                        <ImageIcon className="h-3 w-3" /> Lihat foto
-                      </button>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      {canModify && (
-                        <Button size="sm" variant="outline" aria-label="Ubah" onClick={() => openEdit(r)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                      {canModify && (
-                        <Button size="sm" variant="destructive" aria-label="Hapus" onClick={() => setDeletingRow(r)}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-            {!rows.length && <EmptyState colSpan={5} label="Belum ada jurnal mengajar." />}
-          </TableBody>
-        </Table>
-      </Card>
+    {formOpen && !readOnly && <FormCard title={editingBatchID ? 'Edit jurnal saya' : 'Isi jurnal saya'} description={`Tutor: ${selectedTutorName}. Paraf berlaku untuk seluruh baris pada kiriman ini.`}>
+      <form className="space-y-4" onSubmit={submit}>
+        <div className="overflow-x-auto rounded-xl border border-border"><Table className="min-w-[960px]"><TableHeader><TableRow><TableHead className="w-24">Jam Ke</TableHead><TableHead className="w-48">Nama Tutor</TableHead><TableHead className="w-56">Mata Pelajaran</TableHead><TableHead>Materi</TableHead><TableHead className="w-64">Peserta Didik Tidak Hadir</TableHead><TableHead className="w-12" /></TableRow></TableHeader><TableBody>{lines.map((line, index) => <TableRow key={index}><TableCell><Input type="number" min="1" value={line.jamKe} onChange={(event) => updateLine(index, { jamKe: Number(event.target.value) })} required /></TableCell><TableCell className="font-medium">{selectedTutorName}</TableCell><TableCell><Select value={line.mapelId} onChange={(event) => updateLine(index, { mapelId: event.target.value })} required><option value="">Pilih mapel</option>{classAssignments.map((assignment) => <option key={assignment.mapelId} value={assignment.mapelId}>{assignmentMapelLabel(assignment)}</option>)}</Select></TableCell><TableCell><textarea className="min-h-20 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" value={line.materi} onChange={(event) => updateLine(index, { materi: event.target.value })} placeholder="Materi yang diajarkan" required /></TableCell><TableCell className="text-xs text-muted-foreground">{sheet?.attendanceStatus === 'belum_ada' ? 'Belum ada presensi; akan tersinkron otomatis.' : absenceText(sheet?.absentStudents || [])}</TableCell><TableCell>{lines.length > 1 && <Button type="button" size="icon" variant="ghost" aria-label="Hapus baris" onClick={() => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))}><Trash2 className="h-4 w-4" /></Button>}</TableCell></TableRow>)}</TableBody></Table></div>
+        <Button type="button" variant="outline" onClick={addLine}><Plus className="h-4 w-4" /> Tambah baris</Button>
+        <div className="grid gap-2"><Label>Foto dokumentasi (opsional)</Label><Input type="file" accept="image/png,image/jpeg" onChange={(event) => setPhoto(event.target.files?.[0] || null)} /></div>
+        <Signature value={signature || existingSignature} onChange={setSignature} userName={selectedTutorName} label="Paraf Tutor" />
+        <div className="flex gap-2"><Button type="submit" disabled={saving}>{saving ? 'Menyimpan...' : 'Simpan Jurnal'}</Button><Button type="button" variant="outline" onClick={() => { setFormOpen(false); setEditingBatchID('') }}>Batal</Button></div>
+      </form>
+    </FormCard>}
 
-      <AlertDialog open={!!deletingRow} onOpenChange={(open) => !open && setDeletingRow(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Jurnal?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Jurnal mengajar <strong>{String((deletingRow?.mapel as Row)?.namaMapel || '')}</strong> tanggal{' '}
-              {fmtDate(deletingRow?.tanggal)} akan dihapus.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeleting}>Batal</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={confirmDelete}
-              disabled={isDeleting}
-            >
-              {isDeleting ? 'Menghapus...' : 'Hapus'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  )
+    <Card className="overflow-hidden rounded-2xl border border-border">
+      <div className="border-b border-border px-5 py-4"><p className="font-semibold">Hari/Tanggal: Sabtu, {formatWibDate(`${date}T00:00:00+07:00`)}</p><p className="mt-1 text-sm text-muted-foreground">{selectedClass ? `Kelas ${String(selectedClass.jenjang || '')}${String(selectedClass.namaRombel || '')}` : 'Pilih kelas'} · {sheet?.attendanceStatus === 'belum_ada' ? 'Presensi belum diisi' : sheet?.attendanceStatus === 'sebagian' ? 'Presensi sedang dilengkapi' : 'Presensi tersinkron'}</p></div>
+      <div className="overflow-x-auto"><Table className="min-w-[960px]"><TableHeader><TableRow><TableHead>Jam Ke</TableHead><TableHead>Nama Tutor</TableHead><TableHead>Mata Pelajaran</TableHead><TableHead>Materi</TableHead><TableHead>Peserta Didik Tidak Hadir</TableHead><TableHead>Paraf</TableHead></TableRow></TableHeader><TableBody>{(sheet?.lines || []).map((line) => {
+        const isFirstBatchLine = firstLineIDs.has(line.id)
+        return <TableRow key={line.id}><TableCell className="text-center font-medium">{line.jamKe}</TableCell><TableCell>{line.tutorNama}</TableCell><TableCell>{line.mapelNama}</TableCell><TableCell className="whitespace-pre-wrap">{line.materi}{line.kegiatan ? <div className="mt-1 text-xs text-muted-foreground">{line.kegiatan}</div> : null}</TableCell><TableCell className="max-w-xs text-sm">{absenceText(sheet?.absentStudents || [])}</TableCell>{isFirstBatchLine && <TableCell rowSpan={batchCounts.get(line.batchId) || 1} className="min-w-32 align-middle text-center">{line.tandaTangan ? <img src={line.tandaTangan} alt={`Paraf ${line.tutorNama}`} className="mx-auto max-h-16 max-w-28 object-contain" /> : <span className="text-muted-foreground">—</span>}{line.canEdit && !readOnly && <Button size="sm" variant="ghost" className="mt-1" onClick={() => openEdit(line.batchId)}><Pencil className="h-3.5 w-3.5" /> Edit</Button>}</TableCell>}</TableRow>
+      })}{!loadingSheet && !(sheet?.lines || []).length && <EmptyState colSpan={6} label="Belum ada jurnal untuk kelas dan tanggal ini." />}</TableBody></Table></div>
+    </Card>
+  </div>
 }

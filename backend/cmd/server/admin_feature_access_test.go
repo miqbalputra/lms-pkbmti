@@ -33,8 +33,19 @@ func TestAdminCanCreateTeachingContentWithoutTutorProfile(t *testing.T) {
 	if err := s.db.Where("is_aktif = ?", true).First(&year).Error; err != nil {
 		t.Fatal(err)
 	}
+	journalDay := latestSaturday(currentWIBDay())
+	year.TanggalMulai, year.TanggalSelesai = journalDay.AddDate(0, 0, -7), journalDay.AddDate(0, 0, 14)
+	if err := s.db.Save(&year).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Model(&Semester{}).Where("tahun_ajaran_id = ?", year.ID).Update("is_archived", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&Semester{TahunAjaranID: year.ID, NamaSemester: "Jurnal Admin", TanggalMulai: year.TanggalMulai, TanggalSelesai: year.TanggalSelesai}).Error; err != nil {
+		t.Fatal(err)
+	}
 	tutor := Tutor{Nama: "Tutor Pemilik Konten", JenisKelamin: "P"}
-	mapel := MataPelajaran{NamaMapel: "Mapel Konten", KodeMapel: "MK"}
+	mapel := MataPelajaran{NamaMapel: "Mapel Konten", KodeMapel: "MK", IsActive: true}
 	if err := s.db.Create(&tutor).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +54,9 @@ func TestAdminCanCreateTeachingContentWithoutTutorProfile(t *testing.T) {
 	}
 	kelas := Kelas{Jenjang: 1, NamaRombel: "Konten", PokjarID: pokjar.ID, TahunAjaranID: year.ID, WaliKelasID: &tutor.ID}
 	if err := s.db.Create(&kelas).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&PenugasanGuruMapel{Base: Base{CreatedAt: journalDay.Add(-time.Hour)}, TutorID: tutor.ID, KelasID: kelas.ID, MapelID: mapel.ID}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,14 +68,18 @@ func TestAdminCanCreateTeachingContentWithoutTutorProfile(t *testing.T) {
 		return res
 	}
 
-	resJurnal := postForm("/api/jurnal", url.Values{
-		"tutorId": {tutor.ID}, "mapelId": {mapel.ID}, "kelasId": {kelas.ID}, "tanggal": {"2026-08-22"}, "materi": {"Pecahan"}, "kegiatan": {"Diskusi"},
+	journalLines, err := json.Marshal([]journalLineInput{{JamKe: 1, MapelID: mapel.ID, Materi: "Pecahan"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resJurnal := postForm("/api/jurnal/batches", url.Values{
+		"tutorId": {tutor.ID}, "kelasId": {kelas.ID}, "tanggal": {wibTimeFormat(journalDay, "2006-01-02")}, "tandaTangan": {validPngSignature}, "lines": {string(journalLines)},
 	})
 	if resJurnal.StatusCode != http.StatusCreated {
 		resJurnal.Body.Close()
 		t.Fatalf("admin create jurnal: want 201, got %d", resJurnal.StatusCode)
 	}
-	var jurnal JurnalMengajar
+	var jurnal JurnalBatch
 	if err := json.NewDecoder(resJurnal.Body).Decode(&jurnal); err != nil {
 		resJurnal.Body.Close()
 		t.Fatal(err)
@@ -71,7 +89,11 @@ func TestAdminCanCreateTeachingContentWithoutTutorProfile(t *testing.T) {
 		t.Fatalf("jurnal owner = %q, want selected tutor %q", jurnal.TutorID, tutor.ID)
 	}
 
-	resJurnalUpdate, err := app.Test(adminFormRequest(http.MethodPut, "/api/jurnal/"+jurnal.ID, token, url.Values{"materi": {"Pecahan Lanjutan"}}))
+	updatedLines, err := json.Marshal([]journalLineInput{{JamKe: 1, MapelID: mapel.ID, Materi: "Pecahan Lanjutan"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resJurnalUpdate, err := app.Test(adminFormRequest(http.MethodPut, "/api/jurnal/batches/"+jurnal.ID, token, url.Values{"kelasId": {kelas.ID}, "tanggal": {wibTimeFormat(journalDay, "2006-01-02")}, "lines": {string(updatedLines)}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +188,7 @@ func TestAdminCanCreateTeachingContentWithoutTutorProfile(t *testing.T) {
 func TestAdminJournalRequiresSelectedTutor(t *testing.T) {
 	_, app := setupE2EServer(t)
 	token, _ := getAdminToken(t, app)
-	res, err := app.Test(adminFormRequest(http.MethodPost, "/api/jurnal", token, url.Values{
+	res, err := app.Test(adminFormRequest(http.MethodPost, "/api/jurnal/batches", token, url.Values{
 		"mapelId": {"missing-mapel"}, "kelasId": {"missing-kelas"}, "tanggal": {"2026-08-22"},
 	}))
 	if err != nil {

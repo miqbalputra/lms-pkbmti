@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func getOperationalCompliance(t *testing.T, app interface {
@@ -62,10 +63,14 @@ func TestOperationalComplianceDashboard(t *testing.T) {
 	}
 	tutorA := Tutor{Nama: "Wali Kepatuhan A", JenisKelamin: "P"}
 	tutorB := Tutor{Nama: "Wali Kepatuhan B", JenisKelamin: "L"}
+	mapel := MataPelajaran{NamaMapel: "Mapel Kepatuhan", KodeMapel: "KPT", IsActive: true}
 	if err := s.db.Create(&tutorA).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.Create(&tutorB).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&mapel).Error; err != nil {
 		t.Fatal(err)
 	}
 	headToken := loginRole(t, app, adminToken, "kepala-kepatuhan", "kepala_sekolah", nil)
@@ -88,6 +93,13 @@ func TestOperationalComplianceDashboard(t *testing.T) {
 			PokjarID: pokjar.ID, Status: "aktif",
 		}
 		if err := s.db.Create(&student).Error; err != nil {
+			t.Fatal(err)
+		}
+		owner := tutorA.ID
+		if index == len(classes)-1 {
+			owner = tutorB.ID
+		}
+		if err := s.db.Create(&PenugasanGuruMapel{Base: Base{CreatedAt: meetingDay.Add(-time.Hour)}, TutorID: owner, KelasID: classes[index].ID, MapelID: mapel.ID}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -116,7 +128,7 @@ func TestOperationalComplianceDashboard(t *testing.T) {
 	if err := s.db.Create(&Presensi{KelasID: classes[3].ID, Tanggal: meetingDay, StatusPertemuan: "libur"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := s.db.Create(&JurnalMengajar{TutorID: tutorA.ID, KelasID: classes[2].ID, Tanggal: today, Materi: "Sudah tercatat", Status: "disetujui"}).Error; err != nil {
+	if err := s.db.Create(&JurnalMengajar{TutorID: tutorA.ID, KelasID: classes[2].ID, MapelID: mapel.ID, Tanggal: meetingDay, Materi: "Sudah tercatat", Status: "disetujui"}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,7 +199,7 @@ func TestOperationalComplianceDashboard(t *testing.T) {
 		t.Fatalf("journal filter: want 4 tasks, got %+v", jurnalOnly.Tasks)
 	}
 	for _, task := range jurnalOnly.Tasks {
-		if task.Type != "jurnal" || task.Date != today.Format("2006-01-02") {
+		if task.Type != "jurnal" || task.Date != meetingDay.Format("2006-01-02") {
 			t.Fatalf("journal task is invalid: %+v", task)
 		}
 	}
