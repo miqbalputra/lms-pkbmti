@@ -67,6 +67,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'kelas', label: 'Kelas Rombel', icon: School, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'peserta-didik', label: 'Peserta Didik', icon: GraduationCap, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'identitas-siswa', label: 'Identitas Siswa', icon: FileUp, roles: ['admin'] },
       { id: 'relasi-orang-tua', label: 'Relasi Orang Tua', icon: Users, roles: ['admin', 'kepala_sekolah'] },
       { id: 'kenaikan-kelas', label: 'Kenaikan Kelas', icon: GraduationCap, roles: ['admin', 'kepala_sekolah'] },
       { id: 'arsip', label: 'Arsip Data', icon: ArchiveIcon, roles: ['admin', 'kepala_sekolah'] },

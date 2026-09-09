@@ -203,6 +203,7 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/orang-tua/anak/:id/perilaku", s.getPerilakuAnak)
 	api.Get("/orang-tua/anak/:id/surat", s.listSuratAnak)
 	api.Get("/orang-tua/anak/:id/surat/:suratId/download", s.downloadSuratAnak)
+	api.Get("/orang-tua/anak/:id/identitas/download", s.downloadIdentitasAnak)
 
 	// Modul P — Kartu Pelajar (prd_fitur_simpkbm.md). Cetak PDF (ID card + QR) per
 	// siswa atau massal per rombel. Guard canManageKelas via kelas siswa (admin/kepala
@@ -355,6 +356,9 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Post("/backup/r2/restore", s.restoreR2ArchiveHandler)
 	admin.Post("/surat-siswa", s.uploadSuratSiswa)
 	admin.Delete("/surat-siswa/:id", s.deleteSuratSiswa)
+	// Identitas siswa adalah dokumen privat; hanya admin dapat memetakan ZIP
+	// kelas dan orang tua mengunduhnya melalui route scoped di atas.
+	admin.Post("/identitas-siswa/zip", s.uploadIdentitasSiswaZip)
 }
 
 func id(c *fiber.Ctx) string { return c.Params("id") }

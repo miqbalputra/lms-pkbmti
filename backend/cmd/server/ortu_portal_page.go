@@ -172,7 +172,7 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 
 <script>
 const API='/api';
-let state={token:'',anakId:'',anakList:[],anakData:null};
+let state={token:'',anakId:'',anakList:[],anakData:null,identityPreviewUrl:'',identityPreviewRequest:0};
 let turnstileToken='';
 const TABS=[
   {id:'identitas',label:'Identitas',icon:'👤'},
@@ -192,6 +192,7 @@ function show(el){el.classList.remove('hidden')}
 function hide(el){el.classList.add('hidden')}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function hdr(){return{Authorization:'Bearer '+state.token}}
+function clearIdentityPreview(){if(state.identityPreviewUrl){URL.revokeObjectURL(state.identityPreviewUrl);state.identityPreviewUrl=''}state.identityPreviewRequest++}
 function onTurnstileSuccess(token){turnstileToken=token}
 function onTurnstileExpired(){turnstileToken=''}
 function onTurnstileError(){turnstileToken=''}
@@ -227,6 +228,7 @@ function renderChildSelect(){
 }
 
 async function selectAnak(id){
+  clearIdentityPreview();
   state.anakId=id;state.anakData=state.anakList.find(a=>a.id===id);
   renderChildSelect();
   renderTabs();
@@ -238,6 +240,7 @@ function renderTabs(){
 }
 
 function showTab(tab,el){
+  if(tab!=='identitas')clearIdentityPreview();
   document.querySelectorAll('.tab').forEach(n=>n.classList.remove('active'));
   if(el)el.classList.add('active');
   const c=document.getElementById('tabContent');
@@ -273,8 +276,23 @@ async function downloadSurat(suratId){
 
 async function loadIdentitas(c){
   const a=state.anakData;if(!a)return;
+  clearIdentityPreview();
+  const identityPreviewRequest=state.identityPreviewRequest;
   const kelas='Kelas '+String(a.kelas?.jenjang||'')+esc(a.kelas?.namaRombel||'');
   const pokjar=esc(a.kelas?.pokjar?.namaPokjar||'-');
+  const ext=String(a.identitasFileExt||'').toLowerCase();
+  const hasIdentitas=['jpg','jpeg','png','pdf'].includes(ext);
+  const isImage=ext==='jpg'||ext==='jpeg'||ext==='png';
+  let identitySection='<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)"><div style="font-size:14px;font-weight:600;margin-bottom:8px">Identitas Foto Anak</div>';
+  if(!hasIdentitas){
+    identitySection+='<div class="empty-state" style="padding:16px 0">Foto belum tersedia.</div>';
+  }else if(ext==='pdf'){
+    identitySection+='<div style="display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--secondary)"><span style="font-size:25px">📄</span><div style="min-width:0;flex:1"><div style="font-size:13px;font-weight:600">Dokumen identitas PDF</div><div style="font-size:11px;color:var(--muted-foreground)">Tersedia untuk diunduh secara privat.</div></div></div>';
+  }else{
+    identitySection+='<div id="identityPreview" style="min-height:120px;display:flex;align-items:center;justify-content:center;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--secondary);font-size:12px;color:var(--muted-foreground)">Memuat pratinjau foto...</div>';
+  }
+  if(hasIdentitas)identitySection+='<button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="downloadIdentitas()">Download Foto / Dokumen</button>';
+  identitySection+='</div>';
   c.innerHTML='<div class="card"><div class="card-content">'+
     '<div style="text-align:center;margin-bottom:16px"><div style="width:64px;height:64px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;margin:0 auto 8px;font-size:24px">👤</div>'+
     '<div style="font-size:16px;font-weight:600">'+esc(a.nama)+'</div>'+
@@ -284,7 +302,34 @@ async function loadIdentitas(c){
     '<div class="profile-row"><span class="profile-label">Jenis Kelamin</span><span class="profile-val">'+esc(a.jenisKelamin==='L'?'Laki-laki':'Perempuan')+'</span></div>'+
     '<div class="profile-row"><span class="profile-label">Pokjar</span><span class="profile-val">'+pokjar+'</span></div>'+
     '<div class="profile-row"><span class="profile-label">Status</span><span class="profile-val"><span class="badge badge-success">'+esc(a.status)+'</span></span></div>'+
+    identitySection+
     '</div></div>';
+  if(isImage){
+    try{
+      const r=await fetch(API+'/orang-tua/anak/'+encodeURIComponent(a.id)+'/identitas/download',{headers:hdr()});
+      if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Foto identitas gagal dimuat')}
+      const blob=await r.blob();
+      if(state.anakId!==a.id||state.identityPreviewRequest!==identityPreviewRequest){return}
+      const url=URL.createObjectURL(blob);state.identityPreviewUrl=url;
+      const preview=c.querySelector('#identityPreview');
+      if(!preview){clearIdentityPreview();return}
+      preview.innerHTML='<img src="'+url+'" alt="Identitas '+esc(a.nama||'anak')+'" style="display:block;max-width:100%;max-height:280px;border-radius:6px;object-fit:contain">';
+    }catch(e){
+      const preview=c.querySelector('#identityPreview');
+      if(preview)preview.innerHTML='<span style="color:#b91c1c">'+esc(e.message||'Foto identitas gagal dimuat')+'</span>';
+    }
+  }
+}
+
+async function downloadIdentitas(){
+  try{
+    const r=await fetch(API+'/orang-tua/anak/'+encodeURIComponent(state.anakId)+'/identitas/download',{headers:hdr()});
+    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Identitas gagal diunduh')}
+    const blob=await r.blob();
+    const cd=r.headers.get('Content-Disposition')||'';
+    const match=/filename="?([^";]+)"?/.exec(cd);
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=match?.[1]||'identitas-anak';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+  }catch(e){alert(e.message||'Identitas gagal diunduh')}
 }
 
 async function loadPerforma(c){
@@ -410,7 +455,7 @@ async function loadChat(c){
     }else{
       html+='<div class="empty-state">Mulai chat dengan wali kelas</div>';
     }
-    html+='</div><div class="chat-input-wrap"><input class="input" id="chatInput" placeholder="Ketik pesan..." onkeydown="if(event.key==='Enter')sendChat()"><button class="btn btn-primary" onclick="sendChat()">Kirim</button></div></div></div>';
+  html+='</div><div class="chat-input-wrap"><input class="input" id="chatInput" placeholder="Ketik pesan..." onkeydown="if(event.key===&quot;Enter&quot;)sendChat()"><button class="btn btn-primary" onclick="sendChat()">Kirim</button></div></div></div>';
     c.innerHTML=html;
     const el=document.getElementById('chatMsgs');if(el)el.scrollTop=el.scrollHeight;
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
@@ -443,7 +488,7 @@ async function loadBuku(c){
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
 }
 
-function doLogout(){state.token='';resetTurnstile();hide(document.getElementById('portalCard'));show(document.getElementById('loginCard'))}
+function doLogout(){clearIdentityPreview();state.token='';resetTurnstile();hide(document.getElementById('portalCard'));show(document.getElementById('loginCard'))}
 function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;show(e)}
 function hideErr(id){document.getElementById(id).classList.remove('show')}
 </script>

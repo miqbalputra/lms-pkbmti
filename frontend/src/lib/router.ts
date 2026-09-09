@@ -51,6 +51,7 @@ export const PAGE_IDS = [
   'penugasan',
   'kelas',
   'peserta-didik',
+  'identitas-siswa',
   'relasi-orang-tua',
   'kenaikan-kelas',
   'arsip',

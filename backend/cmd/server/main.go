@@ -220,9 +220,13 @@ type PesertaDidik struct {
 	OrangTuaID   string     `gorm:"index" json:"orangTuaId"`
 	ProgramID    *string    `gorm:"index" json:"programId"` // Modul O — opsional
 	FotoPath     *string    `json:"fotoPath"`               // Modul P — foto kartu pelajar
-	Status       string     `gorm:"default:aktif" json:"status"`
-	Kelas        Kelas      `json:"kelas"`
-	OrangTua     OrangTua   `json:"orangTua"`
+	// IdentitasFilePath is deliberately never serialized: identity documents are
+	// served only from the parent-scoped download endpoint, never as public URLs.
+	IdentitasFilePath *string  `json:"-"`
+	IdentitasFileExt  *string  `gorm:"size:5" json:"identitasFileExt"`
+	Status            string   `gorm:"default:aktif" json:"status"`
+	Kelas             Kelas    `json:"kelas"`
+	OrangTua          OrangTua `json:"orangTua"`
 }
 type RiwayatKelasPesertaDidik struct {
 	Base
