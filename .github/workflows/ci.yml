@@ -55,6 +55,14 @@ jobs:
   minio-r2-integration:
     needs: backend
     runs-on: ubuntu-latest
+    services:
+      minio:
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin-ci-password
+        ports:
+          - 9000
     defaults:
       run:
         working-directory: backend
@@ -75,28 +83,14 @@ jobs:
         with:
           go-version: '1.25.x'
           cache-dependency-path: backend/go.sum
-      - name: Start disposable MinIO and run R2 integration
+      - name: Wait for MinIO and run R2 integration
         run: |
-          container_name="pkbm-minio-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker run --detach --rm \
-            --name "$container_name" \
-            --publish-all \
-            --env MINIO_ROOT_USER=minioadmin \
-            --env MINIO_ROOT_PASSWORD=minioadmin-ci-password \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936 server /data
-          cleanup() {
-            docker rm --force "$container_name" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-          minio_port="$(docker port "$container_name" 9000/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1)"
-          test -n "$minio_port"
-          export BACKUP_R2_ENDPOINT="http://127.0.0.1:${minio_port}"
+          export BACKUP_R2_ENDPOINT="http://127.0.0.1:${{ job.services.minio.ports[9000] }}"
           for attempt in {1..30}; do
             if curl --fail --silent "${BACKUP_R2_ENDPOINT}/minio/health/live"; then
               break
             fi
             if [ "$attempt" -eq 30 ]; then
-              docker logs "$container_name"
               exit 1
             fi
             sleep 1
