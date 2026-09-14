@@ -1078,7 +1078,7 @@ func main() {
 	protected := api.Group("", s.auth)
 	protected.Get("/dashboard", s.dashboard)
 	s.routes(protected)
-	if cfg.Env == "production" {
+	if cfg.Env == "production" || strings.EqualFold(env("SERVE_STATIC", "false"), "true") {
 		app.Static("/", "./public")
 		app.Get("/*", func(c *fiber.Ctx) error { return c.SendFile("./public/index.html") })
 	}
