@@ -28,6 +28,7 @@ import {
 } from '../components/ui/dialog'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { safeExternalUrl } from '../lib/safe-url'
 import { formatWibDateTime, wibDateInputValue } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -373,7 +374,8 @@ export function MateriView({
               const m = (r.mapel as Row) || {}
               const k = (r.kelas as Row) || {}
               const hasFile = !!r.filePath && String(r.tipe || '') !== ''
-              const hasLink = !!String(r.linkUrl || '').trim()
+              const linkUrl = safeExternalUrl(r.linkUrl)
+              const hasLink = !!linkUrl
               return (
                 <TableRow key={r.id}>
                   <TableCell className="text-muted-foreground">{String(r.urutan ?? '') || '-'}</TableCell>
@@ -387,7 +389,7 @@ export function MateriView({
                   <TableCell>{kelasLabel(k)}</TableCell>
                   <TableCell className="text-sm text-muted-foreground space-y-1">
                     {hasFile && <div className="flex items-center gap-1"><FileText className="h-3 w-3" />{String(r.tipe || '')} {fmtSize(Number(r.ukuran) || 0)}</div>}
-                    {hasLink && <div className="flex items-center gap-1"><LinkIcon className="h-3 w-3" /><a href={String(r.linkUrl)} target="_blank" rel="noreferrer" className="text-primary hover:underline truncate max-w-[160px]">Link</a></div>}
+                    {hasLink && <div className="flex items-center gap-1"><LinkIcon className="h-3 w-3" /><a href={linkUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline truncate max-w-[160px]">Link</a></div>}
                     {!hasFile && !hasLink && <span>-</span>}
                   </TableCell>
                   <TableCell>
@@ -437,8 +439,8 @@ export function MateriView({
                   <Download className="h-3.5 w-3.5" /> Unduh {String(detail?.tipe || '')}
                 </Button>
               ) : null}
-              {detail?.linkUrl ? (
-                <Button size="sm" variant="outline" onClick={() => window.open(String(detail?.linkUrl), '_blank', 'noopener,noreferrer')}>
+              {safeExternalUrl(detail?.linkUrl) ? (
+                <Button size="sm" variant="outline" onClick={() => window.open(safeExternalUrl(detail?.linkUrl), '_blank', 'noopener,noreferrer')}>
                   <LinkIcon className="h-3.5 w-3.5" /> Buka Link
                 </Button>
               ) : null}

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"html"
 	"os"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 func (s *Server) serveUjianOnlinePage(c *fiber.Ctx) error {
@@ -13,8 +15,15 @@ func (s *Server) serveUjianOnlinePage(c *fiber.Ctx) error {
 	if siteKey == "" && s.cfg.Env != "production" {
 		siteKey = "1x00000000000000000000AA"
 	}
-	html := strings.Replace(ujianOnlineHTML, "{{TURNSTILE_SITE_KEY}}", siteKey, 1)
-	return c.SendString(html)
+	nonce, _ := c.Locals("cspNonce").(string)
+	if nonce == "" {
+		nonce = uuid.NewString()
+	}
+	page := strings.NewReplacer(
+		"{{TURNSTILE_SITE_KEY}}", html.EscapeString(siteKey),
+		"{{CSP_NONCE}}", html.EscapeString(nonce),
+	).Replace(ujianOnlineHTML)
+	return c.SendString(page)
 }
 
 var ujianOnlineHTML = `<!DOCTYPE html>
@@ -28,7 +37,7 @@ var ujianOnlineHTML = `<!DOCTYPE html>
 <title>Ujian Online — PKBM Tunas Ilmu</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-<style>
+<style nonce="{{CSP_NONCE}}">
 :root{
   --background:#ffffff;--foreground:#0a0a0a;
   --card:#ffffff;--card-foreground:#0a0a0a;
@@ -191,7 +200,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     </div>
   </div>
   <div class="card-footer login-footer">
-    <button class="btn btn-primary btn-lg" onclick="cekUjian()" id="cekBtn" style="width:100%">Masuk & Cari Ujian</button>
+    <button class="btn btn-primary btn-lg" data-action="check-exam" id="cekBtn" style="width:100%">Masuk & Cari Ujian</button>
   </div>
   </div>
 </div>
@@ -203,7 +212,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     <div id="examList"></div>
   </div>
   <div class="card-footer">
-    <button class="btn btn-outline" onclick="showLogin()" style="width:100%">Ganti Akun</button>
+    <button class="btn btn-outline" data-action="show-login" style="width:100%">Ganti Akun</button>
   </div>
 </div>
 
@@ -220,9 +229,9 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     <div class="progress"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
     <div id="soalContainer"></div>
     <div class="nav-buttons">
-      <button class="btn btn-outline" onclick="prevSoal()" id="prevBtn" disabled style="flex:0 0 auto">Sebelumnya</button>
-      <button class="btn btn-primary" onclick="nextSoal()" id="nextBtn" style="flex:1">Selanjutnya</button>
-      <button class="btn btn-success hidden" onclick="selesaiUjian()" id="selesaiBtn" style="flex:1">Selesai</button>
+      <button class="btn btn-outline" data-action="previous-question" id="prevBtn" disabled style="flex:0 0 auto">Sebelumnya</button>
+      <button class="btn btn-primary" data-action="next-question" id="nextBtn" style="flex:1">Selanjutnya</button>
+      <button class="btn btn-success hidden" data-action="finish-exam" id="selesaiBtn" style="flex:1">Selesai</button>
     </div>
   </div>
 </div>
@@ -238,7 +247,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     </div>
   </div>
   <div class="card-footer" style="justify-content:center">
-    <button class="btn btn-primary" onclick="showLogin()">Kembali ke Awal</button>
+    <button class="btn btn-primary" data-action="show-login">Kembali ke Awal</button>
   </div>
 </div>
 
@@ -253,14 +262,14 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     <div class="offline-status"><span class="offline-dot" id="offlineDot"></span><span id="offlineStatusText">Memeriksa koneksi...</span></div>
     <p class="offline-title">Akses Internet Terputus</p>
     <p class="offline-desc">Jawaban Anda tersimpan secara lokal. Sambungkan ulang untuk menyinkronkan dengan server.</p>
-    <button class="btn btn-primary btn-lg" onclick="reconnect()" id="reconnectBtn" style="width:100%">Sambungkan Ulang</button>
+    <button class="btn btn-primary btn-lg" data-action="reconnect" id="reconnectBtn" style="width:100%">Sambungkan Ulang</button>
   </div>
 </div>
 
 <!-- Connection Restored Toast -->
 <div id="toastReconnect" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--success);color:#fff;padding:12px 20px;border-radius:var(--radius);font-size:14px;font-weight:500;z-index:10000;box-shadow:0 4px 12px rgba(0,0,0,.15);display:none">Koneksi tersambung kembali</div>
 
-<script>
+<script nonce="{{CSP_NONCE}}">
 const API='/api';
 let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,ujianPesertaId:'',soal:[],jawaban:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[]};
 let turnstileToken='';
@@ -311,12 +320,31 @@ async function reconnect(){
 
 function show(el){el.classList.remove('hidden')}
 function hide(el){el.classList.add('hidden')}
-function showLogin(){resetTurnstile();show(document.getElementById('loginCard'));hide(document.getElementById('listCard'));hide(document.getElementById('examCard'));hide(document.getElementById('resultCard'));clearInterval(state.timerInterval)}
+function showLogin(){resetTurnstile();clearInterval(state.timerInterval);state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,ujianPesertaId:'',soal:[],jawaban:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[]};void fetch(API+'/ujian-online/logout',{method:'POST',credentials:'include'}).catch(()=>{});show(document.getElementById('loginCard'));hide(document.getElementById('listCard'));hide(document.getElementById('examCard'));hide(document.getElementById('resultCard'))}
 function showError(id,msg){const e=document.getElementById(id);e.textContent=msg;show(e)}
 function onTurnstileSuccess(token){turnstileToken=token}
 function onTurnstileExpired(){turnstileToken=''}
 function onTurnstileError(){turnstileToken=''}
 function resetTurnstile(){turnstileToken='';if(window.turnstile)window.turnstile.reset()}
+
+document.addEventListener('click',e=>{
+  const el=e.target instanceof Element?e.target.closest('[data-action]'):null;
+  if(!el)return;
+  switch(el.dataset.action){
+    case 'check-exam':void cekUjian();break;
+    case 'show-login':showLogin();break;
+    case 'previous-question':prevSoal();break;
+    case 'next-question':nextSoal();break;
+    case 'finish-exam':void selesaiUjian();break;
+    case 'reconnect':void reconnect();break;
+    case 'start-exam':void mulaiUjian(el.dataset.id||'');break;
+    case 'answer':e.preventDefault();jawab(el.dataset.id||'',Number(el.dataset.value));break;
+  }
+});
+document.addEventListener('input',e=>{
+  const el=e.target instanceof Element?e.target.closest('[data-action="text-answer"]'):null;
+  if(el)jawabTeks(el.dataset.id||'',el.value);
+});
 
 async function cekUjian(){
 const nisn=document.getElementById('nisn').value.trim();
@@ -328,7 +356,7 @@ document.getElementById('cekBtn').disabled=true;document.getElementById('cekBtn'
 try{
 const fd=new FormData();fd.append('nisn',nisn);fd.append('aksesKode',kode);
 fd.append('cf-turnstile-response',turnstileToken);
-const r=await fetch(API+'/ujian-online/cek',{method:'POST',body:fd});
+const r=await fetch(API+'/ujian-online/cek',{method:'POST',body:fd,credentials:'include'});
 const d=await r.json();
 if(!r.ok)throw new Error(d.error||'Gagal');
 state.nisn=nisn;state.aksesKode=kode;state.ujians=d;
@@ -346,14 +374,13 @@ c.innerHTML=state.ujians.map(u=>{
 const mulai=new Date(u.waktuMulai).toLocaleString('id-ID',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 const selesai=new Date(u.waktuSelesai).toLocaleString('id-ID',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 let badge=u.sudahMengerjakan?'<span class="badge badge-success">Selesai</span>':'';
-return '<div class="exam-item"><h3>'+esc(u.judul)+'</h3><div class="exam-meta"><span>'+esc(u.mapel?.namaMapel||'')+'</span><span>'+u.durasiMenit+' menit</span><span>'+mulai+' — '+selesai+'</span></div><div style="display:flex;align-items:center;gap:8px">'+badge+'<button class="btn btn-primary btn-sm" onclick="mulaiUjian(\''+u.id+'\')" '+(u.sudahMengerjakan?'disabled':'')+'>Mulai</button></div></div>'
+return '<div class="exam-item"><h3>'+esc(u.judul)+'</h3><div class="exam-meta"><span>'+esc(u.mapel?.namaMapel||'')+'</span><span>'+u.durasiMenit+' menit</span><span>'+mulai+' — '+selesai+'</span></div><div style="display:flex;align-items:center;gap:8px">'+badge+'<button class="btn btn-primary btn-sm" data-action="start-exam" data-id="'+esc(u.id)+'" '+(u.sudahMengerjakan?'disabled':'')+'>Mulai</button></div></div>'
 }).join('');
 }
 
 async function mulaiUjian(ujianId){
 try{
-const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);
-const r=await fetch(API+'/ujian-online/'+ujianId+'/mulai',{method:'POST',body:fd});
+const r=await fetch(API+'/ujian-online/'+ujianId+'/mulai',{method:'POST',credentials:'include'});
 const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
 state.currentUjian=state.ujians.find(u=>u.id===ujianId);
 state.ujianPesertaId=d.id;
@@ -366,7 +393,7 @@ startTimer(d.mulai,d.sisaWaktu);
 }
 
 async function loadSoal(ujianId){
-const r=await fetch(API+'/ujian-online/'+ujianId+'/soal?nisn='+encodeURIComponent(state.nisn)+'&aksesKode='+encodeURIComponent(state.aksesKode));
+const r=await fetch(API+'/ujian-online/'+ujianId+'/soal',{credentials:'include'});
 const d=await r.json();if(!r.ok){
   if(d.error&&d.error.includes('habis')){hide(document.getElementById('examCard'));show(document.getElementById('resultCard'));document.getElementById('scoreValue').textContent='—';document.getElementById('scoreDetail').innerHTML='<strong>Waktu ujian sudah habis.</strong>';}
   throw new Error(d.error||'Gagal');
@@ -390,10 +417,10 @@ let html='<div class="question-card"><div class="question-num">Soal '+state.curr
 if(s.tipe==='pg'&&s.opsi){
 s.opsi.forEach((op,i)=>{
 const sel=state.jawaban[s.id]===String(i)?'selected':'';
-html+='<label class="option '+sel+'" onclick="jawab(\''+s.id+'','+i+')"><input type="radio" name="soal_'+s.id+'" '+(sel?'checked':'')+'><span class="option-label"><strong>'+String.fromCharCode(65+i)+'</strong>. '+esc(op)+'</span></label>';
+ html+='<label class="option '+sel+'" data-action="answer" data-id="'+esc(s.id)+'" data-value="'+i+'"><input type="radio" name="soal_'+esc(s.id)+'" '+(sel?'checked':'')+'><span class="option-label"><strong>'+String.fromCharCode(65+i)+'</strong>. '+esc(op)+'</span></label>';
 });
 }else{
-html+='<textarea class="textarea" oninput="jawabTeks(\''+s.id+'',this.value)" placeholder="Tulis jawaban Anda di sini...">'+esc(state.jawaban[s.id]||'')+'</textarea>';
+ html+='<textarea class="textarea" data-action="text-answer" data-id="'+esc(s.id)+'" placeholder="Tulis jawaban Anda di sini...">'+esc(state.jawaban[s.id]||'')+'</textarea>';
 }
 html+='</div>';
 c.innerHTML=html;
@@ -412,8 +439,8 @@ sendJawaban(soalId,val);
 }
 function sendJawaban(soalId,val){
 if(!isOnline){state.offlineQueue.push({soalId,val});return}
-const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);fd.append('ujianSoalId',soalId);fd.append('jawaban',val);
-fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd}).catch(()=>{state.offlineQueue.push({soalId,val})});
+const fd=new FormData();fd.append('ujianSoalId',soalId);fd.append('jawaban',val);
+fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd,credentials:'include'}).catch(()=>{state.offlineQueue.push({soalId,val})});
 }
 function prevSoal(){if(state.currentIdx>0){state.currentIdx--;renderSoal()}}
 function nextSoal(){if(state.currentIdx<state.soal.length-1){state.currentIdx++;renderSoal()}}
@@ -458,8 +485,7 @@ if(!auto&&!confirm('Yakin ingin menyelesaikan ujian?'))return;
 if(!isOnline){showOfflinePopup();return}
 clearInterval(state.timerInterval);
 try{
-const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);
-const r=await fetch(API+'/ujian-online/'+state.currentUjian.id+'/selesai',{method:'POST',body:fd});
+const r=await fetch(API+'/ujian-online/'+state.currentUjian.id+'/selesai',{method:'POST',credentials:'include'});
 const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
 document.getElementById('scoreValue').textContent=Math.round(d.skor||0);
 document.getElementById('scoreDetail').innerHTML='Benar: <strong>'+d.benar+'</strong> dari <strong>'+d.total+'</strong> soal<br>Status: <strong>Selesai</strong>';
@@ -469,8 +495,7 @@ hide(document.getElementById('examCard'));show(document.getElementById('resultCa
 
 document.addEventListener('visibilitychange',()=>{
 if(document.hidden&&state.currentUjian&&!document.getElementById('examCard').classList.contains('hidden')){
-const fd=new FormData();fd.append('nisn',state.nisn);fd.append('aksesKode',state.aksesKode);
-fetch(API+'/ujian-online/'+state.currentUjian.id+'/tab-switch',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+fetch(API+'/ujian-online/'+state.currentUjian.id+'/tab-switch',{method:'POST',credentials:'include'}).then(r=>r.json()).then(d=>{
   if(d.locked){
     if(state.timerInterval)clearInterval(state.timerInterval);
     document.getElementById('scoreValue').textContent=Math.round(d.skor||0);

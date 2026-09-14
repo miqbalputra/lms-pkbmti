@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -33,6 +34,7 @@ import (
 	"golang.org/x/oauth2/google"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 type Base struct {
@@ -59,10 +61,10 @@ type User struct {
 	// OrangTuaID diisi untuk role="orang_tua" (Portal Orang Tua) — akun login
 	// penuh yang melihat data anak-anak terhubung. Nullable agar akun staf
 	// lama tetap valid (backward compatible).
-	OrangTuaID   *string `gorm:"index" json:"orangTuaId"`
-	IsActive     bool    `gorm:"default:true" json:"isActive"`
-	FailedLogins int
-	LockedUntil  *time.Time
+	OrangTuaID   *string    `gorm:"index" json:"orangTuaId"`
+	IsActive     bool       `gorm:"default:true" json:"isActive"`
+	FailedLogins int        `json:"-"`
+	LockedUntil  *time.Time `json:"-"`
 }
 type RefreshToken struct {
 	Base
@@ -787,12 +789,22 @@ type Config struct {
 	AccessTTL, RefreshTTL                          time.Duration
 }
 type Server struct {
-	db        *gorm.DB
-	cfg       Config
-	startedAt time.Time
-	metrics   backupMetrics
-	r2        r2Coordinator
-	notifier  operationNotifier
+	db              *gorm.DB
+	cfg             Config
+	startedAt       time.Time
+	metrics         backupMetrics
+	r2              r2Coordinator
+	notifier        operationNotifier
+	streamTicketsMu sync.Mutex
+	streamTickets   map[string]notificationStreamTicket
+}
+
+// notificationStreamTicket is a short-lived, one-time credential used by the
+// browser EventSource connection. Access tokens must not be placed in URLs:
+// URLs can be copied to history, reverse-proxy logs, analytics, and referrers.
+type notificationStreamTicket struct {
+	UserID    string
+	ExpiresAt time.Time
 }
 
 func env(k, d string) string {
@@ -801,8 +813,78 @@ func env(k, d string) string {
 	}
 	return d
 }
+
+const normalRequestBodyLimit int64 = 16 * 1024 * 1024
+
+// requestBodyLimitForPath keeps ordinary JSON/form requests small even though
+// Fiber's app-level limit must remain large enough for a legitimate restore.
+// The few workflows that intentionally accept large multipart archives are
+// explicitly allowlisted. Content-Length is rejected before Fiber parses the
+// body, which prevents large accidental uploads from consuming parser memory.
+func requestBodyLimitForPath(path string) int64 {
+	switch path {
+	case "/api/backup/restore":
+		return int64(backupUploadLimit()) + 4*1024*1024
+	case "/api/identitas-siswa/zip", "/api/surat-siswa":
+		return 256*1024*1024 + 4*1024*1024
+	default:
+		return normalRequestBodyLimit
+	}
+}
+
+func requestIDOrNew(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) == 0 || len(raw) > 128 {
+		return uuid.NewString()
+	}
+	for _, r := range raw {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' && r != '.' {
+			return uuid.NewString()
+		}
+	}
+	return raw
+}
+
+func enforceRequestBodyLimit(c *fiber.Ctx) error {
+	raw := strings.TrimSpace(c.Get("Content-Length"))
+	if raw == "" {
+		// Chunked bodies remain bounded by Fiber's global BodyLimit and by each
+		// upload handler's file-size validation.
+		return c.Next()
+	}
+	size, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || size < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "Content-Length tidak valid")
+	}
+	limit := requestBodyLimitForPath(c.Path())
+	if size > limit {
+		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("ukuran request melebihi batas %d byte", limit))
+	}
+	return c.Next()
+}
+
+func normalizeAppEnv(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "production", "prod":
+		return "production", nil
+	case "development", "dev", "":
+		return "development", nil
+	case "test", "testing":
+		return "test", nil
+	default:
+		return "", fmt.Errorf("APP_ENV tidak dikenal: %q (gunakan development, test, atau production)", raw)
+	}
+}
+
 func main() {
-	cfg := Config{AccessSecret: env("JWT_ACCESS_SECRET", "development-access-secret-change-me-32-chars"), RefreshSecret: env("JWT_REFRESH_SECRET", "development-refresh-secret-change-me-32"), Env: env("APP_ENV", "development"), CookieDomain: os.Getenv("COOKIE_DOMAIN"), AccessTTL: duration("JWT_ACCESS_TTL", "15m"), RefreshTTL: duration("JWT_REFRESH_TTL", "168h")}
+	appEnv, envErr := normalizeAppEnv(os.Getenv("APP_ENV"))
+	if envErr != nil {
+		panic(envErr)
+	}
+	// Keep helpers that read APP_ENV directly (scheduler, backup, and endpoint
+	// configuration) aligned with the normalized runtime mode.
+	_ = os.Setenv("APP_ENV", appEnv)
+	cfg := Config{AccessSecret: env("JWT_ACCESS_SECRET", "development-access-secret-change-me-32-chars"), RefreshSecret: env("JWT_REFRESH_SECRET", "development-refresh-secret-change-me-32"), Env: appEnv, CookieDomain: os.Getenv("COOKIE_DOMAIN"), AccessTTL: duration("JWT_ACCESS_TTL", "15m"), RefreshTTL: duration("JWT_REFRESH_TTL", "168h")}
 	if err := validateConfig(cfg); err != nil {
 		panic(err)
 	}
@@ -814,13 +896,17 @@ func main() {
 		panic(fmt.Errorf("restore recovery requires attention before startup: %w", e))
 	}
 	if e := applyPendingRestore(); e != nil {
-		fmt.Printf("applyPendingRestore FAILED (ignored, continuing with current DB): %v\n", e)
+		// applyPendingRestore is fail-closed: continuing here could serve a new
+		// database with the old upload tree (or the reverse) after a composite
+		// restore failure. The supervisor may restart after an operator fixes the
+		// staged artifact; it must never silently expose an inconsistent state.
+		panic(fmt.Errorf("pending restore requires attention before startup: %w", e))
 	}
 	db, err := openDB()
 	if err != nil {
 		panic(err)
 	}
-	s := &Server{db: db, cfg: cfg, startedAt: time.Now(), notifier: operationNotifier{last: make(map[string]time.Time)}}
+	s := &Server{db: db, cfg: cfg, startedAt: time.Now(), notifier: operationNotifier{last: make(map[string]time.Time)}, streamTickets: make(map[string]notificationStreamTicket)}
 	if err = s.migrate(); err != nil {
 		panic(err)
 	}
@@ -837,10 +923,47 @@ func main() {
 	// disamarkan reverse proxy sebagai HTTP 502. apiError tetap menyamarkan
 	// detail internal pada respons production, sementara stack tercatat di log.
 	app.Use(recover.New(recover.Config{EnableStackTrace: true}))
-	app.Use(logger.New())
+	// Create the correlation id before the logger so every access-log line can
+	// be tied to the safe requestId returned by apiError.
+	app.Use(func(c *fiber.Ctx) error {
+		requestID := requestIDOrNew(c.Get("X-Request-ID"))
+		c.Locals("requestID", requestID)
+		c.Set("X-Request-ID", requestID)
+		return c.Next()
+	})
+	app.Use(logger.New(logger.Config{Format: "${time} ${status} ${method} ${path} request_id=${locals:requestID}\n"}))
 	app.Use(helmet.New())
 	app.Use(compress.New())
-	app.Use(cors.New(cors.Config{AllowOrigins: env("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), AllowHeaders: "Origin, Content-Type, Accept, Authorization", AllowCredentials: true}))
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     env("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Request-ID",
+		ExposeHeaders:    "X-Request-ID",
+		AllowCredentials: true,
+	}))
+	app.Use(enforceRequestBodyLimit)
+	// Defence-in-depth headers for API responses. Helmet covers the standard
+	// browser headers; these headers make data responses non-cacheable and give
+	// operators a request correlation id without exposing internal details.
+	app.Use(func(c *fiber.Ctx) error {
+		cspNonce := uuid.NewString()
+		c.Locals("cspNonce", cspNonce)
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if cfg.Env == "production" {
+			// The two public legacy pages contain small inline UI scripts/styles;
+			// authorize only the per-request nonce instead of enabling arbitrary
+			// inline script execution.
+			c.Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-"+cspNonce+"' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com")
+		}
+		if strings.HasPrefix(c.Path(), "/api") || c.Path() == "/health" {
+			c.Set("Cache-Control", "no-store")
+		}
+		if cfg.Env == "production" {
+			c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		return c.Next()
+	})
 	// Block writes while a composite restore is being applied. Read-only status
 	// routes remain available so the administrator can observe completion.
 	app.Use(func(c *fiber.Ctx) error {
@@ -875,29 +998,45 @@ func main() {
 		},
 	}), s.login)
 	api.Post("/auth/refresh", limiter.New(limiter.Config{Max: 10, Expiration: time.Minute}), s.refresh)
-	api.Post("/auth/logout", s.auth, s.logout)
+	// Logout is intentionally idempotent and does not require a valid access
+	// token: an expired access token must not prevent revoking the refresh cookie.
+	api.Post("/auth/logout", s.logout)
 	api.Get("/auth/me", s.auth, s.me)
 	api.Put("/auth/account", s.auth, s.updateOwnAccount)
 	api.Get("/auth/google/enabled", s.googleEnabled)
 	api.Get("/auth/google", s.googleLogin)
 	api.Get("/auth/google/callback", s.googleCallback)
-	// Public verify endpoints (Modul H/P) — no auth. Hanya data non-sensitif untuk
-	// verifikasi QR sertifikat & kartu pelajar. Terdaftar sebelum group protected.
-	api.Get("/verify/sertifikat/:nomor", s.verifySertifikat)
-	api.Get("/verify/siswa/:nisn", s.verifySiswa)
+	// Public verify endpoints (Modul H/P) — no auth. QR baru memakai token
+	// bertanda tangan; URL NISN lama tetap diterima agar kartu yang sudah
+	// diterbitkan tidak rusak. Rate limit membatasi enumerasi URL legacy.
+	verifyLimiterMax := 120
+	if cfg.Env == "production" {
+		verifyLimiterMax = 60
+	}
+	verifyLimiter := limiter.New(limiter.Config{Max: verifyLimiterMax, Expiration: time.Minute})
+	api.Get("/verify/sertifikat/:nomor", verifyLimiter, s.verifySertifikat)
+	api.Get("/verify/siswa/:nisn", verifyLimiter, s.verifySiswa)
 	// Keep the compose/reverse-proxy probe aligned with the public health probe.
 	api.Get("/health", health)
 	// Public materi share endpoints (Modul E) — no auth. Halaman share materi
 	// untuk peserta didik (publik atau password). Terdaftar sebelum group
 	// protected agar empty-prefix auth quirk tidak bocor ke sini.
-	api.Get("/materi/share/:token", s.viewSharedMateri)
-	api.Get("/materi/share/:token/file", s.downloadSharedMateri)
+	// Password attempts are rate-limited because the share page is public and
+	// the password is intentionally not tied to an application account.
+	materiSharePageLimiter := limiter.New(limiter.Config{Max: 60, Expiration: time.Minute})
+	materiShareUnlockLimiter := limiter.New(limiter.Config{Max: 10, Expiration: time.Minute})
+	api.Get("/materi/share/:token", materiSharePageLimiter, s.viewSharedMateri)
+	api.Post("/materi/share/:token/unlock", materiShareUnlockLimiter, s.unlockSharedMateri)
+	api.Get("/materi/share/:token/file", materiSharePageLimiter, s.downloadSharedMateri)
 	// Backup read endpoints — n8n-friendly: admin JWT OR static BACKUP_API_KEY
-	// (header X-Backup-Key or ?key=). Registered before the protected group so the
+	// (header X-Backup-Key; development also accepts legacy ?key=). Prefer
+	// /backup/offsite for encrypted cloud storage. Registered before the protected group so the
 	// empty-prefix auth quirk doesn't leak JWT-only auth onto them.
-	api.Get("/backup", s.backupReadAuth, s.listBackupsHandler)
-	api.Get("/backup/download", s.backupReadAuth, s.downloadBackup)
-	api.Get("/backup/file/:name", s.backupReadAuth, s.downloadBackupFile)
+	backupReadLimiter := limiter.New(limiter.Config{Max: 30, Expiration: time.Minute})
+	api.Get("/backup", backupReadLimiter, s.backupReadAuth, s.listBackupsHandler)
+	api.Get("/backup/download", backupReadLimiter, s.backupReadAuth, s.downloadBackup)
+	api.Get("/backup/offsite", backupReadLimiter, s.backupReadAuth, s.downloadOffsiteBackup)
+	api.Get("/backup/file/:name", backupReadLimiter, s.backupReadAuth, s.downloadBackupFile)
 	// Endpoint ringkas untuk workflow pengingat presensi n8n. Menggunakan API
 	// key khusus karena login username/password production dilindungi Turnstile.
 	api.Get("/automation/presensi-reminders", s.presensiAutomationAuth, s.presensiAutomationReminders)
@@ -917,6 +1056,7 @@ func main() {
 			return c.Status(429).JSON(fiber.Map{"error": "Terlalu banyak percobaan. Silakan tunggu 1 menit."})
 		},
 	}), s.cekUjianOnline)
+	api.Post("/ujian-online/logout", s.logoutUjianOnline)
 	api.Post("/ujian-online/:ujianId/mulai", s.mulaiUjianOnline)
 	api.Get("/ujian-online/:ujianId/soal", s.getSoalUjianOnline)
 	api.Post("/ujian-online/:ujianId/jawab", s.jawabSoal)
@@ -931,7 +1071,9 @@ func main() {
 	}), s.loginOrangTua)
 	api.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage) // backward compat redirect
-	// SSE notification stream — accepts token via query param (EventSource can't set Authorization headers)
+	// SSE notification stream uses a one-time ticket instead of putting a JWT in
+	// the URL. The ticket endpoint itself requires the normal bearer token.
+	api.Get("/notifikasi/stream-ticket", s.auth, s.issueNotificationStreamTicket)
 	api.Get("/notifikasi/stream", s.streamNotifikasi)
 	protected := api.Group("", s.auth)
 	protected.Get("/dashboard", s.dashboard)
@@ -972,11 +1114,17 @@ func validateConfig(cfg Config) error {
 	if unsafeSecret(cfg.AccessSecret) || unsafeSecret(cfg.RefreshSecret) {
 		return errors.New("production requires JWT_ACCESS_SECRET and JWT_REFRESH_SECRET with unique random values of at least 32 characters")
 	}
+	if cfg.AccessSecret == cfg.RefreshSecret {
+		return errors.New("JWT_ACCESS_SECRET dan JWT_REFRESH_SECRET harus berbeda")
+	}
+	if cfg.AccessTTL <= 0 || cfg.AccessTTL > 24*time.Hour || cfg.RefreshTTL <= cfg.AccessTTL || cfg.RefreshTTL > 365*24*time.Hour {
+		return errors.New("JWT access/refresh TTL production tidak aman")
+	}
 	databaseURL := strings.ToLower(strings.TrimSpace(os.Getenv("DATABASE_URL")))
-	if databaseURL == "" || strings.Contains(databaseURL, "your_password") || strings.Contains(databaseURL, "password123") {
+	if databaseURL == "" || strings.Contains(databaseURL, "your_password") || strings.Contains(databaseURL, "ganti_dengan") || strings.Contains(databaseURL, "password123") {
 		return errors.New("production requires DATABASE_URL; refusing to start with the SQLite fallback")
 	}
-	if _, err := parseDatabaseURL(os.Getenv("DATABASE_URL")); err != nil {
+	if err := requireProductionDatabaseTLS(os.Getenv("DATABASE_URL")); err != nil {
 		return fmt.Errorf("invalid production DATABASE_URL: %w", err)
 	}
 	origins := strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",")
@@ -986,21 +1134,52 @@ func validateConfig(cfg Config) error {
 	for _, raw := range origins {
 		origin := strings.TrimSpace(raw)
 		lowerOrigin := strings.ToLower(origin)
-		if strings.Contains(lowerOrigin, "ganti") || strings.Contains(lowerOrigin, "your_domain") {
+		if strings.Contains(lowerOrigin, "ganti") || strings.Contains(lowerOrigin, "your_domain") || strings.Contains(lowerOrigin, "your-domain") {
 			return fmt.Errorf("CORS_ALLOWED_ORIGINS still contains a placeholder: %q", origin)
 		}
 		u, err := url.Parse(origin)
-		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 			return fmt.Errorf("invalid CORS_ALLOWED_ORIGINS value %q", origin)
 		}
+		if cfg.Env == "production" && u.Scheme != "https" {
+			return fmt.Errorf("production CORS_ALLOWED_ORIGINS must use HTTPS: %q", origin)
+		}
+	}
+	publicBase := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL"))
+	publicURL, publicErr := url.Parse(publicBase)
+	if publicErr != nil || publicURL.Host == "" || publicURL.Path != "" || publicURL.RawQuery != "" || publicURL.Fragment != "" || publicURL.Scheme != "https" {
+		return errors.New("production requires PUBLIC_BASE_URL as an HTTPS origin without path or query")
+	}
+	if domain := strings.TrimSpace(cfg.CookieDomain); domain != "" && (strings.ContainsAny(domain, "/\\\r\n") || strings.Contains(domain, ":") || strings.Contains(strings.ToLower(domain), "your-domain")) {
+		return errors.New("COOKIE_DOMAIN harus berupa hostname tanpa skema atau path")
 	}
 	if strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY")) == "" || strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY")) == "" {
 		return errors.New("production requires TURNSTILE_SECRET_KEY and TURNSTILE_SITE_KEY")
+	}
+	if os.Getenv("GOOGLE_CLIENT_ID") != "" || os.Getenv("GOOGLE_CLIENT_SECRET") != "" || os.Getenv("GOOGLE_REDIRECT_URL") != "" {
+		front := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+		u, err := url.Parse(front)
+		if err != nil || u.Host == "" || u.Scheme != "https" || strings.Contains(strings.ToLower(front), "your-domain") {
+			return errors.New("production Google OAuth requires FRONTEND_URL with HTTPS")
+		}
+		redirect, redirectErr := url.Parse(strings.TrimSpace(os.Getenv("GOOGLE_REDIRECT_URL")))
+		if redirectErr != nil || redirect.Host == "" || redirect.Scheme != "https" || strings.Contains(strings.ToLower(redirect.String()), "your-domain") {
+			return errors.New("production Google OAuth requires GOOGLE_REDIRECT_URL with HTTPS")
+		}
 	}
 	if r2Enabled() {
 		if err := r2ConfigError(); err != nil {
 			return fmt.Errorf("invalid R2 backup configuration: %w", err)
 		}
+	}
+	if key := strings.TrimSpace(os.Getenv("BACKUP_API_KEY")); key != "" && len(key) < 32 {
+		return errors.New("production BACKUP_API_KEY harus memiliki minimal 32 karakter")
+	}
+	if token := strings.TrimSpace(os.Getenv("BACKUP_OFFSITE_TOKEN")); token != "" && len(token) < 32 {
+		return errors.New("production BACKUP_OFFSITE_TOKEN harus memiliki minimal 32 karakter")
+	}
+	if key := strings.TrimSpace(os.Getenv("BACKUP_ENCRYPTION_KEY")); key != "" && len(key) < 32 {
+		return errors.New("production BACKUP_ENCRYPTION_KEY harus memiliki minimal 32 karakter")
 	}
 	if webhook := operationWebhookURL(); webhook != "" {
 		u, err := url.Parse(webhook)
@@ -1031,11 +1210,29 @@ func validateConfig(cfg Config) error {
 		}
 	}
 	if drillURL := strings.TrimSpace(os.Getenv("BACKUP_DRILL_DATABASE_URL")); drillURL != "" {
-		if _, err := parseDatabaseURL(drillURL); err != nil {
+		if err := requireProductionDatabaseTLS(drillURL); err != nil {
 			return fmt.Errorf("invalid BACKUP_DRILL_DATABASE_URL: %w", err)
 		}
 	}
 	return nil
+}
+
+// requireProductionDatabaseTLS prevents a production instance from
+// accidentally sending credentials and student data over an unencrypted
+// PostgreSQL connection. The explicit allowlist also rejects libpq's
+// opportunistic modes (allow/prefer), which can silently fall back to clear
+// text when the server does not require TLS.
+func requireProductionDatabaseTLS(raw string) error {
+	info, err := parseDatabaseURL(raw)
+	if err != nil {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(info.SSLMode)) {
+	case "require", "verify-ca", "verify-full":
+		return nil
+	default:
+		return errors.New("DATABASE_URL must set sslmode=require, verify-ca, or verify-full in production")
+	}
 }
 
 func unsafeSecret(v string) bool {
@@ -1082,7 +1279,7 @@ func duration(k, d string) time.Duration {
 //     reject existing orphan rows or inserts the manual guards don't cover.
 func openDB() (*gorm.DB, error) {
 	if url := os.Getenv("DATABASE_URL"); url != "" {
-		db, err := gorm.Open(postgres.Open(url), &gorm.Config{TranslateError: true})
+		db, err := gorm.Open(postgres.Open(url), productionGORMConfig())
 		if err != nil {
 			return nil, err
 		}
@@ -1090,12 +1287,24 @@ func openDB() (*gorm.DB, error) {
 		return db, nil
 	}
 	dsn := "file:pkbm-lms.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{TranslateError: true})
+	db, err := gorm.Open(sqlite.Open(dsn), productionGORMConfig())
 	if err != nil {
 		return nil, err
 	}
 	configureDBPool(db, true)
 	return db, nil
+}
+
+func productionGORMConfig() *gorm.Config {
+	cfg := &gorm.Config{TranslateError: true}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") {
+		// GORM's SQL logger includes bound values in error output. Keep
+		// production logs free of NISN, email, and other student data; handlers
+		// still return safe errors and the application logger records request
+		// context for operational diagnosis.
+		cfg.Logger = gormlogger.Default.LogMode(gormlogger.Silent)
+	}
+	return cfg
 }
 
 func configureDBPool(db *gorm.DB, sqliteDB bool) {
@@ -1193,7 +1402,9 @@ func (s *Server) migrateSchema() error {
 		var cnt int64
 		s.db.Model(&Semester{}).Where("tahun_ajaran_id = ?", allTA[i].ID).Count(&cnt)
 		if cnt == 0 {
-			s.syncSemesters(s.db, &allTA[i])
+			if err := s.syncSemesters(s.db, &allTA[i]); err != nil {
+				return err
+			}
 		}
 	}
 	var setting PengaturanJadwal
@@ -1286,10 +1497,33 @@ func apiError(c *fiber.Ctx, err error) error {
 		code = e.Code
 	}
 	message := err.Error()
-	if code >= fiber.StatusInternalServerError && env("APP_ENV", "development") == "production" {
+	if env("APP_ENV", "development") == "production" && (code >= fiber.StatusInternalServerError || looksLikeInternalAPIError(message)) {
 		message = "Terjadi kesalahan internal. Silakan coba lagi."
 	}
-	return c.Status(code).JSON(fiber.Map{"error": message})
+	requestID, _ := c.Locals("requestID").(string)
+	if code >= fiber.StatusInternalServerError {
+		operationLog("http_error", map[string]any{"status": code, "method": c.Method(), "requestId": requestID})
+	}
+	payload := fiber.Map{"error": message}
+	if requestID != "" {
+		payload["requestId"] = requestID
+	}
+	return c.Status(code).JSON(payload)
+}
+
+func looksLikeInternalAPIError(message string) bool {
+	lower := strings.ToLower(message)
+	for _, fragment := range []string{
+		"sql:", "gorm", "database", "constraint", "duplicate key", "duplicated key",
+		"unique constraint", "violates", "no such table", "permission denied", "file exists",
+		"dial tcp", "connection refused", "connection reset", "timeout", "syntax error",
+		"pq:", "sqlite", "runtime error", "panic:",
+	} {
+		if strings.Contains(lower, fragment) {
+			return true
+		}
+	}
+	return false
 }
 func (s *Server) token(user User, secret string, ttl time.Duration) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": user.ID, "role": user.Role, "exp": time.Now().Add(ttl).Unix()}).SignedString([]byte(secret))
@@ -1399,6 +1633,9 @@ func (s *Server) requireTurnstile(c *fiber.Ctx, token string) error {
 	return nil
 }
 func (s *Server) issue(c *fiber.Ctx, u User) error {
+	if !u.IsActive || !validRole(u.Role) {
+		return fiber.NewError(403, "akun tidak dapat digunakan")
+	}
 	if e := s.fillUserNames(&u); e != nil {
 		return e
 	}
@@ -1446,19 +1683,52 @@ func (s *Server) refresh(c *fiber.Ctx) error {
 }
 func (s *Server) logout(c *fiber.Ctx) error {
 	raw := c.Cookies("refresh_token")
+	var revokeErr error
 	if raw != "" {
-		s.db.Model(&RefreshToken{}).Where("token_hash = ?", hash(raw)).Update("revoked_at", time.Now())
+		revokeErr = s.db.Model(&RefreshToken{}).Where("token_hash = ?", hash(raw)).Update("revoked_at", time.Now()).Error
 	}
-	c.ClearCookie("refresh_token")
+	s.expireRefreshCookies(c)
+	if revokeErr != nil {
+		operationLog("logout_revoke_failed", map[string]any{"error": safeOperationError(revokeErr)})
+		return fiber.NewError(500, "gagal mengakhiri sesi")
+	}
 	return c.SendStatus(204)
 }
+
+func (s *Server) expireRefreshCookies(c *fiber.Ctx) {
+	// Fiber replaces a Set-Cookie header when the same cookie name is set
+	// twice, so expire the exact active path rather than silently losing it.
+	c.Cookie(&fiber.Cookie{
+		Name: "refresh_token", Value: "", Path: "/api/auth", Domain: s.cfg.CookieDomain,
+		MaxAge: -1, Expires: time.Unix(1, 0), Secure: s.cfg.Env == "production",
+		HTTPOnly: true, SameSite: "Lax",
+	})
+}
+
+func (s *Server) expireOAuthStateCookie(c *fiber.Ctx) {
+	// oauth_state is issued with the same scoped path; ClearCookie without a
+	// matching path would leave the CSRF-state cookie in the browser.
+	c.Cookie(&fiber.Cookie{
+		Name: "oauth_state", Value: "", Path: "/api/auth",
+		MaxAge: -1, Expires: time.Unix(1, 0), Secure: s.cfg.Env == "production",
+		HTTPOnly: true, SameSite: "Lax",
+	})
+}
+
 func (s *Server) auth(c *fiber.Ctx) error {
-	_, uid, role, err := s.parseAccessToken(c.Get("Authorization"))
+	_, uid, _, err := s.parseAccessToken(c.Get("Authorization"))
 	if err != nil {
 		return fiber.NewError(401, err.Error())
 	}
+	// Re-check the current account on every request. This makes deactivation and
+	// role changes effective immediately instead of waiting for the access token
+	// TTL, while keeping the existing JWT format and refresh flow unchanged.
+	var u User
+	if err := s.db.Select("id, role, is_active").First(&u, "id = ?", uid).Error; err != nil || !u.IsActive || !validRole(u.Role) {
+		return fiber.NewError(401, "sesi tidak lagi aktif")
+	}
 	c.Locals("userID", uid)
-	c.Locals("role", role)
+	c.Locals("role", u.Role)
 	return c.Next()
 }
 func (s *Server) me(c *fiber.Ctx) error {
@@ -1515,7 +1785,7 @@ func (s *Server) googleLogin(c *fiber.Ctx) error {
 		return c.Redirect(front+"/?google_error="+url.QueryEscape("Login Google belum dikonfigurasi oleh Administrator."), fiber.StatusTemporaryRedirect)
 	}
 	state := uuid.NewString()
-	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, HTTPOnly: true, SameSite: "Lax", Expires: time.Now().Add(10 * time.Minute), Path: "/"})
+	c.Cookie(&fiber.Cookie{Name: "oauth_state", Value: state, HTTPOnly: true, Secure: s.cfg.Env == "production", SameSite: "Lax", Expires: time.Now().Add(10 * time.Minute), Path: "/api/auth"})
 	return c.Redirect(cfg.AuthCodeURL(state), fiber.StatusTemporaryRedirect)
 }
 
@@ -1535,14 +1805,14 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 	if state == "" || state != c.Cookies("oauth_state") {
 		return fail("State tidak valid (kemungkinan CSRF). Silakan coba lagi.")
 	}
-	c.ClearCookie("oauth_state")
+	s.expireOAuthStateCookie(c)
 	code := c.Query("code")
 	if code == "" {
 		return fail("Tidak ada kode otorisasi dari Google.")
 	}
 	tok, e := cfg.Exchange(c.Context(), code)
 	if e != nil {
-		return fail("Gagal menukar kode otorisasi: " + e.Error())
+		return fail("Gagal menukar kode otorisasi Google. Silakan coba lagi.")
 	}
 	client := cfg.Client(c.Context(), tok)
 	r, e := client.Get("https://www.googleapis.com/oauth2/v3/userinfo")
@@ -1552,7 +1822,7 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 	defer r.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(r.Body, 2048))
 	if r.StatusCode != 200 {
-		return fail(fmt.Sprintf("Google userinfo gagal (HTTP %d): %s", r.StatusCode, string(respBody)))
+		return fail("Gagal memverifikasi akun Google. Silakan coba lagi.")
 	}
 	var info struct {
 		Sub           string      `json:"sub"`
@@ -1578,7 +1848,7 @@ func (s *Server) googleCallback(c *fiber.Ctx) error {
 	}
 	var u User
 	if e := s.db.Where("LOWER(email) = ?", strings.ToLower(info.Email)).First(&u).Error; e != nil {
-		return fail("Akun Google \"" + info.Email + "\" belum terdaftar. Hubungi Administrator untuk mendaftarkan akun Anda.")
+		return fail("Akun Google belum terdaftar. Hubungi Administrator untuk mendaftarkan akun Anda.")
 	}
 	if !u.IsActive {
 		return fail("Akun Anda nonaktif. Silakan hubungi Administrator.")

@@ -1,0 +1,31 @@
+# Keep secrets and local data out of the Docker build context.
+.git
+.github
+.env*
+**/.env*
+*.db
+*.db-shm
+*.db-wal
+*.sql
+*.sql.enc
+*.pem
+*.key
+
+# Dependencies and generated artifacts are rebuilt inside the image or are not
+# needed by the production image.
+node_modules
+**/node_modules
+frontend/dist
+backend/bin
+backend/pkbm-server*
+backend/server.exe
+uploads
+backups
+output
+outputs
+tmp
+tmp_*
+Landing Page
+*.xlsx
+*.xls
+*.csv

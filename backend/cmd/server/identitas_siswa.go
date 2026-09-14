@@ -197,12 +197,17 @@ func (s *Server) extractIdentitasSiswaZip(zipPath string, targets map[string]Pes
 			skipped = append(skipped, identitasSkippedFile{FileName: name, NISN: nisn, Reason: "NISN tidak ditemukan di kelas terpilih"})
 			continue
 		}
-		if err := os.MkdirAll("./uploads/identitas-siswa", 0o750); err != nil {
+		identityDir := filepath.Join(uploadsDir(), "identitas-siswa")
+		if err := os.MkdirAll(identityDir, 0o700); err != nil {
 			cleanup()
 			return nil, nil, nil, fiber.NewError(500, "direktori identitas siswa tidak dapat dibuat")
 		}
+		_ = os.Chmod(uploadsDir(), 0o700)
+		_ = os.Chmod(identityDir, 0o700)
 		path := "uploads/identitas-siswa/" + uuid.NewString() + "." + ext
-		if err := os.WriteFile("./"+path, data, 0o640); err != nil {
+		target := filepath.Join(identityDir, filepath.Base(path))
+		if err := os.WriteFile(target, data, 0o640); err != nil {
+			_ = os.Remove(target)
 			cleanup()
 			return nil, nil, nil, fiber.NewError(500, "file identitas tidak dapat disimpan")
 		}

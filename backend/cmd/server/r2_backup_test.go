@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,5 +53,54 @@ func TestR2ArchivePathGuard(t *testing.T) {
 		if _, err := safeArchivePath(path); err == nil {
 			t.Fatalf("unsafe path %q accepted", path)
 		}
+	}
+}
+
+func TestBackupArchiveLimitIsBounded(t *testing.T) {
+	t.Setenv("BACKUP_MAX_ARCHIVE_MB", "1")
+	if got := backupArchiveLimit(); got != 4096*1024*1024 {
+		t.Fatalf("invalid small archive limit should use safe default, got %d", got)
+	}
+	t.Setenv("BACKUP_MAX_ARCHIVE_MB", "999999")
+	if got := backupArchiveLimit(); got != 32768*1024*1024 {
+		t.Fatalf("oversized archive limit should be capped, got %d", got)
+	}
+}
+
+func TestR2ArchiveRejectsManifestDatabaseTraversal(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "malicious.tar.gz")
+	manifestBytes, err := json.Marshal(r2Manifest{
+		Version:  r2ArchiveVersion,
+		Dialect:  "sqlite",
+		Database: "../../outside.db",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o600, Size: int64(len(manifestBytes))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(manifestBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := extractR2Archive(archivePath, filepath.Join(dir, "extracted")); err == nil {
+		t.Fatal("manifest database traversal was accepted")
 	}
 }

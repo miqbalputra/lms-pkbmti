@@ -10,6 +10,7 @@ import {
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Alert, AlertDescription } from './components/ui/alert'
 import { Card, CardContent } from './components/ui/card'
+import { Button } from './components/ui/button'
 import { Toaster } from './components/ui/sonner'
 import { AppShell } from './components/layout/AppShell'
 import { LoginView } from './pages/Login'
@@ -19,10 +20,6 @@ import { GuruTaskReminder } from './components/GuruTaskReminder'
 import { refreshSession, request, setOnTokenRefreshed, setOnUnauthorized } from './lib/api'
 import { PAGE_IDS, pathFor, pathsFor } from './lib/router'
 import { formatWibDate } from './lib/wib'
-
-// Re-export agar halaman yang masih mengimpor { request } from '../App' tetap
-// berfungsi (sumber kebenaran kini di ./lib/api, tanpa import sirkular).
-export { request }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null }
@@ -35,7 +32,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string |
         <div className="p-6">
           <div className="rounded-md bg-destructive/10 border border-destructive/30 p-4">
             <p className="text-sm font-medium text-destructive">Terjadi kesalahan saat menampilkan halaman.</p>
-            <p className="text-xs text-muted-foreground mt-1">{this.state.error}</p>
+            {!import.meta.env.PROD && <p className="text-xs text-muted-foreground mt-1">{this.state.error}</p>}
             <button className="text-xs underline mt-2" onClick={() => this.setState({ error: null })}>Coba lagi</button>
           </div>
         </div>
@@ -379,14 +376,19 @@ function Dashboard({ token }: { token: string }) {
   const [data, setData] = useState<Record<string, unknown>>({})
   const [tutorsCount, setTutorsCount] = useState<number>(0)
   const [loading, setLoading] = useState<boolean>(true)
+  const [loadError, setLoadError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     const ctrl = new AbortController()
     setLoading(true)
+    setLoadError('')
     Promise.all([
       request('/dashboard', token, 'GET', undefined, ctrl.signal)
         .then(setData)
-        .catch(() => ({})),
+        .catch(() => {
+          setLoadError('Dashboard belum dapat dimuat. Periksa koneksi, lalu coba lagi.')
+        }),
       request('/tutor', token, 'GET', undefined, ctrl.signal)
         .then((res) => {
           if (Array.isArray(res)) setTutorsCount(res.length)
@@ -395,7 +397,7 @@ function Dashboard({ token }: { token: string }) {
     ])
       .finally(() => setLoading(false))
     return () => ctrl.abort()
-  }, [token])
+  }, [token, reloadKey])
 
   const upcomingEvents = (data.upcomingEvents as { id: string; judul: string; jenis: string; tanggal_mulai: string; tanggal_selesai: string }[]) || []
   const unreadNotif = Number(data.unreadNotif) || 0
@@ -442,6 +444,14 @@ function Dashboard({ token }: { token: string }) {
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <Alert variant="destructive" className="flex items-center justify-between gap-3">
+          <AlertDescription>{loadError}</AlertDescription>
+          <Button variant="outline" size="sm" onClick={() => setReloadKey((value) => value + 1)}>
+            Coba lagi
+          </Button>
+        </Alert>
+      )}
       {/* Stat Cards Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 md:gap-6">
         {loading

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -67,8 +68,15 @@ func TestUjianOnlineMonitorEndpointReturnsParticipants(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("monitor endpoint returned %d", res.StatusCode)
 	}
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read monitor response: %v", err)
+	}
+	if strings.Contains(string(raw), `"nisn"`) || strings.Contains(string(raw), `"aksesKode"`) {
+		t.Fatalf("monitor response leaked sensitive student or exam fields: %s", raw)
+	}
 	var rows []UjianPeserta
-	if err := json.NewDecoder(res.Body).Decode(&rows); err != nil {
+	if err := json.Unmarshal(raw, &rows); err != nil {
 		t.Fatalf("decode monitor response: %v", err)
 	}
 	if len(rows) != 1 || rows[0].PesertaDidikID != siswa.ID || rows[0].PesertaDidik.Nama != siswa.Nama || rows[0].TabSwitch != 1 {

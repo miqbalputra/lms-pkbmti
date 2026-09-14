@@ -20,7 +20,7 @@ type Backup = {
 }
 type R2Archive = { key: string; createdAt: string; size: number; automatic: boolean }
 type R2Job = { id: string; kind: string; status: string; phase?: string; sourceKey?: string; objectKey?: string; safetyObjectKey?: string; error?: string; finishedAt?: string; recoveredAt?: string }
-type R2Status = { enabled: boolean; configured?: boolean; bucket?: string; prefix: string; retentionDays: number; schedule: string; maintenance: boolean; lastAutomaticBackupAt?: string; backupAgeHours?: number; backupHealthy?: boolean }
+type R2Status = { enabled: boolean; configured?: boolean; bucket?: string; prefix: string; retentionDays: number; schedule: string; maintenance: boolean; lastAutomaticBackupAt?: string; backupAgeHours?: number; backupHealthy?: boolean; offsiteConfigured?: boolean; offsiteEncrypted?: boolean; offsiteTransport?: string }
 
 function formatBytes(n: number): string {
   if (n < 1024) return n + ' B'
@@ -64,6 +64,7 @@ export function BackupView({ token }: { token: string }) {
   const [showGuide, setShowGuide] = useState(true)
   const [r2Status, setR2Status] = useState<R2Status | null>(null)
   const [r2Archives, setR2Archives] = useState<R2Archive[]>([])
+  const [r2NextPageToken, setR2NextPageToken] = useState('')
   const [r2Jobs, setR2Jobs] = useState<R2Job[]>([])
   const fileRef = useRef<HTMLInputElement | null>(null)
 
@@ -76,20 +77,22 @@ export function BackupView({ token }: { token: string }) {
     )
   }
 
-  async function load() {
+  async function load(appendR2 = false) {
     setLoading(true)
     try {
+      const archiveQuery = appendR2 && r2NextPageToken ? `?pageSize=50&pageToken=${encodeURIComponent(r2NextPageToken)}` : '?pageSize=50'
       const [r, status, archives, jobs] = await Promise.all([
         request('/backup', token) as Promise<{ dir: string; backups: Backup[]; dialect: string }>,
-        request('/backup/r2/status', token) as Promise<R2Status>,
-        request('/backup/r2/archives', token) as Promise<{ archives: R2Archive[] }>,
-        request('/backup/r2/jobs', token) as Promise<{ jobs: R2Job[] }>,
+        request('/backup/r2/status', token).catch(() => null) as Promise<R2Status | null>,
+        request('/backup/r2/archives' + archiveQuery, token).catch(() => ({ archives: [], nextPageToken: '' })) as Promise<{ archives: R2Archive[]; nextPageToken?: string }>,
+        request('/backup/r2/jobs', token).catch(() => ({ jobs: [] })) as Promise<{ jobs: R2Job[] }>,
       ])
       setDir(r.dir || 'backups')
       setBackups(r.backups || [])
       setDialect(r.dialect || 'sqlite')
       setR2Status(status)
-      setR2Archives(archives.archives || [])
+      setR2Archives((current) => appendR2 ? [...current, ...(archives.archives || [])] : (archives.archives || []))
+      setR2NextPageToken(archives.nextPageToken || '')
       setR2Jobs(jobs.jobs || [])
     } catch (e: unknown) {
       toast.error(String((e as Error).message || 'Gagal memuat daftar backup'))
@@ -110,6 +113,11 @@ export function BackupView({ token }: { token: string }) {
   async function testR2() {
     setBusy('r2-test')
     try { await request('/backup/r2/test', token, 'POST'); toast.success('Koneksi Cloudflare R2 berhasil.') } catch (e: unknown) { toast.error(String((e as Error).message || 'Koneksi R2 gagal')) } finally { setBusy(null) }
+  }
+
+  async function loadMoreR2() {
+    if (!r2NextPageToken || loading) return
+    await load(true)
   }
 
   async function restoreR2(key: string) {
@@ -232,13 +240,13 @@ export function BackupView({ token }: { token: string }) {
     }
   }
 
-  const n8nUrl = `${apiBase}/backup/download?format=full&key=YOUR_BACKUP_API_KEY`
+  const n8nUrl = `${apiBase}/backup/offsite?format=full`
 
   return (
     <div className="space-y-4">
       <PageToolbar
         title="Backup & Restore"
-        description="Backup penuh Cloudflare R2 mencakup database dan seluruh lampiran aplikasi."
+        description="Backup aman untuk R2 dan Google Drive: database terenkripsi, restore terverifikasi, dan lampiran tetap ikut terjaga."
       />
 
       <Card className="rounded-2xl border border-primary/30 bg-primary/5 p-4 shadow-2xs space-y-3">
@@ -246,8 +254,9 @@ export function BackupView({ token }: { token: string }) {
           <div>
             <h2 className="text-sm font-semibold">Backup Penuh Cloudflare R2</h2>
             <p className="text-xs text-muted-foreground">Database + foto, tugas, materi, RPP, surat, dan dokumen tutor dalam satu arsip terenkripsi.</p>
-            {r2Status && <p className="mt-1 text-xs text-muted-foreground">{r2Status.enabled && r2Status.configured ? <>Bucket privat <code>{r2Status.bucket}</code> · Retensi {r2Status.retentionDays} hari · {r2Status.schedule}</> : <>R2 belum dikonfigurasi di secret server.</>}</p>}
-			{r2Status?.configured && <p className={`mt-1 text-xs ${r2Status.backupHealthy === false ? 'text-destructive' : 'text-muted-foreground'}`}>{r2Status.lastAutomaticBackupAt ? <>Backup otomatis terakhir: {formatTime(r2Status.lastAutomaticBackupAt)} ({r2Status.backupAgeHours ?? 0} jam lalu).</> : <>Belum ada backup otomatis yang sukses.</>} {r2Status.backupHealthy === false && 'Periksa koneksi dan job R2.'}</p>}
+            {r2Status && <p className="mt-1 text-xs text-muted-foreground">{r2Status.enabled && r2Status.configured ? <>Bucket privat <code>{r2Status.bucket}</code> · Retensi {r2Status.retentionDays} hari · {r2Status.schedule} · lifecycle bucket dikelola operator</> : <>R2 belum dikonfigurasi di secret server.</>}</p>}
+            {r2Status?.offsiteConfigured && <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">Arsip offsite terenkripsi aktif via {r2Status.offsiteTransport || 'gateway terkonfigurasi'}.</p>}
+            {r2Status?.configured && <p className={`mt-1 text-xs ${r2Status.backupHealthy === false ? 'text-destructive' : 'text-muted-foreground'}`}>{r2Status.lastAutomaticBackupAt ? <>Backup otomatis terakhir: {formatTime(r2Status.lastAutomaticBackupAt)} ({r2Status.backupAgeHours ?? 0} jam lalu).</> : <>Belum ada backup otomatis yang sukses.</>} {r2Status.backupHealthy === false && 'Periksa koneksi dan job R2.'}</p>}
           </div>
           <div className="flex gap-2"><Button variant="outline" size="sm" onClick={testR2} disabled={!r2Status?.configured || busy === 'r2-test'}>{busy === 'r2-test' ? 'Menguji...' : 'Uji Koneksi'}</Button><Button size="sm" onClick={runR2Backup} disabled={!r2Status?.configured || busy === 'r2-backup'}><Database className="h-4 w-4" /> {busy === 'r2-backup' ? 'Mengantrikan...' : 'Backup Sekarang'}</Button></div>
         </div>
@@ -256,6 +265,7 @@ export function BackupView({ token }: { token: string }) {
           {r2Archives.map((a) => <TableRow key={a.key}><TableCell className="max-w-[360px] truncate font-mono text-xs" title={a.key}>{a.key}</TableCell><TableCell>{formatBytes(a.size)}</TableCell><TableCell className="text-xs">{formatTime(a.createdAt)}</TableCell><TableCell><Badge variant={a.automatic ? 'default' : 'outline'}>{a.automatic ? 'otomatis' : 'manual'}</Badge></TableCell><TableCell className="text-right"><Button size="sm" variant="destructive" onClick={() => restoreR2(a.key)} disabled={busy === 'r2-restore'}>Restore</Button></TableCell></TableRow>)}
           {!r2Archives.length && <TableRow><TableCell colSpan={5} className="py-5 text-center text-sm text-muted-foreground">Belum ada arsip cloud.</TableCell></TableRow>}
         </TableBody></Table></div>
+        {r2NextPageToken && <div className="flex justify-center"><Button variant="outline" size="sm" onClick={() => void loadMoreR2()} disabled={loading}>Muat arsip berikutnya</Button></div>}
         {!!r2Jobs.length && <div className="text-xs text-muted-foreground">Job terbaru: {r2Jobs.slice(0, 3).map((j) => <span key={j.id} className="mr-3"><strong>{j.kind}</strong> · {j.status}{j.phase ? ` (${j.phase})` : ''}{j.recoveredAt ? ' · dipulihkan setelah restart' : ''}{j.error ? ` (${j.error})` : ''}</span>)}</div>}
       </Card>
 
@@ -271,7 +281,7 @@ export function BackupView({ token }: { token: string }) {
               )}
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className="h-4 w-4" /> Segarkan
           </Button>
         </div>
@@ -404,7 +414,8 @@ export function BackupView({ token }: { token: string }) {
                 Sistem ini mencadangkan <strong>seluruh database</strong> sesuai engine: SQLite memakai snapshot
                 <code>.db</code>/<code>.sql</code>, sedangkan PostgreSQL memakai dump penuh <code>.sql</code> via
                 <code>pg_dump</code>. Backup bisa dibuat manual, terjadwal otomatis (env <code>BACKUP_CRON</code>),
-                atau ditarik dari luar oleh <strong>n8n</strong> via HTTP.
+                atau ditarik dari luar oleh <strong>n8n</strong> via HTTP. Untuk cloud, gunakan endpoint <code>/backup/offsite</code>
+                agar file yang dikirim sudah terenkripsi sebelum masuk Google Drive atau storage S3-compatible.
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs">
@@ -478,9 +489,10 @@ export function BackupView({ token }: { token: string }) {
                 <li>Konfigurasi node <strong>HTTP Request</strong>:
                   <ul className="list-disc pl-5 mt-1 space-y-0.5">
                     <li><strong>Method:</strong> <code>GET</code></li>
-                    <li><strong>URL:</strong> <code>http://&lt;host&gt;:8080/api/backup/download?format=full&amp;key=YOUR_BACKUP_API_KEY</code> (ganti host &amp; key)</li>
+                    <li><strong>URL:</strong> <code>https://&lt;domain&gt;/api/backup/offsite?format=full</code> — respons sudah terenkripsi</li>
+                    <li><strong>Header:</strong> <code>X-Backup-Key: YOUR_BACKUP_API_KEY</code> (lebih aman daripada menaruh key di URL)</li>
                     <li><strong>Response:</strong> <code>File</code> (binary) — agar n8n menerima file</li>
-                    <li>Atau kirim header <code>X-Backup-Key: YOUR_BACKUP_API_KEY</code> sebagai ganti <code>?key=</code></li>
+                    <li>Workflow lama yang masih memakai <code>?key=</code> tetap kompatibel, tetapi sebaiknya migrasikan ke header.</li>
                   </ul>
                 </li>
                 <li>Hubungkan ke node penyimpanan: <strong>Write Binary File</strong>, <strong>Google Drive</strong>, atau <strong>AWS S3</strong>.</li>
@@ -488,8 +500,9 @@ export function BackupView({ token }: { token: string }) {
               </ol>
               <CodeBlock copy={copyCode} code={n8nUrl} />
               <p className="text-xs text-muted-foreground">
-                Endpoint baca lain (juga menerima key): <code>GET /api/backup</code> (daftar file) dan
-                <code> GET /api/backup/file/&lt;nama&gt;</code> (unduh file tertentu). Endpoint tulis (buat/hapus/restore)
+                Endpoint baca lain (juga menerima header <code>X-Backup-Key</code>): <code>GET /api/backup</code> (daftar file) dan
+                <code> GET /api/backup/file/&lt;nama&gt;</code> (unduh file tertentu). Query <code>?key=</code> tetap dipertahankan
+                untuk kompatibilitas workflow lama, tetapi jangan dipakai pada URL yang tercatat di log. Endpoint tulis (buat/hapus/restore)
                 <strong> hanya menerima JWT admin</strong> — bukan key — demi keamanan.
               </p>
             </section>

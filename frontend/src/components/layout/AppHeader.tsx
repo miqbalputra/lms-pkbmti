@@ -29,8 +29,8 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
 import { ThemeToggleButton } from '../common/ThemeToggleButton'
-import { NAV_ITEMS } from './AppSidebar'
-import { useSidebar } from '../../context/SidebarContext'
+import { NAV_ITEMS } from './nav'
+import { useSidebar } from '../../context/useSidebar'
 import { toast } from 'sonner'
 import { apiBase, request } from '../../lib/api'
 import { formatWibDate } from '../../lib/wib'
@@ -103,37 +103,49 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
 
   useEffect(() => {
     loadNotifs()
-    // Use SSE for real-time notifications, fall back to polling
+    // Use SSE for real-time notifications, fall back to polling. EventSource
+    // cannot attach Authorization headers, so obtain a single-use short-lived
+    // ticket first; the access token never appears in the stream URL.
     let evtSource: EventSource | null = null
     let pollingTimer: ReturnType<typeof setInterval> | null = null
+    let disposed = false
     const startPolling = () => {
       if (pollingTimer === null) pollingTimer = setInterval(loadNotifs, 30000)
     }
-    try {
-      evtSource = new EventSource(`${apiBase}/notifikasi/stream?token=${encodeURIComponent(token)}`, { withCredentials: true } as any)
-      evtSource.addEventListener('notifikasi', (e) => {
-        try {
-          const newNotifs = JSON.parse(e.data)
-          setNotifs((prev) => {
-            const combined = [...newNotifs, ...prev]
-            const unique = Array.from(new Map(combined.map((n: any) => [n.id, n])).values())
-            return unique.slice(0, 10)
-          })
-          toast.info('Notifikasi baru diterima', { description: newNotifs[0]?.judul || '' })
-        } catch {}
-      })
-      evtSource.addEventListener('unread', (e) => {
-        setUnreadCount(Number(e.data) || 0)
-      })
-      evtSource.onerror = () => {
-        evtSource?.close()
-        evtSource = null
+    const connect = async () => {
+      try {
+        const result = (await request('/notifikasi/stream-ticket', token)) as { ticket?: string }
+        if (disposed || !result.ticket) {
+          startPolling()
+          return
+        }
+        evtSource = new EventSource(`${apiBase}/notifikasi/stream?ticket=${encodeURIComponent(result.ticket)}`, { withCredentials: true } as any)
+        evtSource.addEventListener('notifikasi', (e) => {
+          try {
+            const newNotifs = JSON.parse(e.data)
+            setNotifs((prev) => {
+              const combined = [...newNotifs, ...prev]
+              const unique = Array.from(new Map(combined.map((n: any) => [n.id, n])).values())
+              return unique.slice(0, 10)
+            })
+            toast.info('Notifikasi baru diterima', { description: newNotifs[0]?.judul || '' })
+          } catch {}
+        })
+        evtSource.addEventListener('unread', (e) => {
+          setUnreadCount(Number(e.data) || 0)
+        })
+        evtSource.onerror = () => {
+          evtSource?.close()
+          evtSource = null
+          startPolling()
+        }
+      } catch {
         startPolling()
       }
-    } catch {
-      startPolling()
     }
+    void connect()
     return () => {
+      disposed = true
       evtSource?.close()
       if (pollingTimer !== null) clearInterval(pollingTimer)
     }
@@ -225,6 +237,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
             <button
               onClick={toggleMobileSidebar}
               className="lg:hidden text-gray-700 dark:text-gray-300"
+              aria-label="Buka menu navigasi"
               title="Buka menu navigasi"
             >
               <svg
@@ -246,6 +259,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
             <button
               onClick={toggleSidebar}
               className="hidden lg:block text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+              aria-label={isExpanded ? 'Ciutkan sidebar' : 'Lebarkan sidebar'}
               title={isExpanded ? 'Ciutkan sidebar' : 'Lebarkan sidebar'}
             >
               <svg
@@ -268,6 +282,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
                 <input
                   ref={searchInputRef}
                   type="text"
+                  aria-label="Cari menu aplikasi"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   onFocus={() => setIsSearchFocused(true)}

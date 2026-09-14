@@ -251,7 +251,7 @@ func uploadOffsiteBackup(srcPath string) (bool, error) {
 	if _, err := deriveBackupKey(secret); err != nil {
 		return false, err
 	}
-	if err := os.MkdirAll(backupDir(), 0o700); err != nil {
+	if err := ensureBackupDir(); err != nil {
 		return false, err
 	}
 	name := filepath.Base(srcPath) + ".enc"

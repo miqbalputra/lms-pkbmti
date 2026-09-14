@@ -20,12 +20,30 @@ Backend memakai SQLite lokal secara default. Akun awal development: `admin` / `A
 ```powershell
 cd backend
 go test ./...
+go vet ./...
 ```
 
 ```powershell
 cd frontend
 npm.cmd run build
+npm.cmd audit --omit=dev
 ```
 
+## Backup dan keamanan
+
+- Backup penuh R2 tersedia dari menu **Backup & Restore** dan mencakup database
+  serta seluruh isi `uploads` dalam arsip terenkripsi.
+- Untuk Google Drive atau S3-compatible melalui n8n, gunakan endpoint
+  `GET /api/backup/offsite?format=full` dengan header `X-Backup-Key`; hasilnya
+  sudah `.db.enc`/`.sql.enc`.
+- Restore selalu divalidasi dan membuat backup pengaman `pre-restore-*`. Ikuti
+  [DATA_SAFETY_RUNBOOK.md](DATA_SAFETY_RUNBOOK.md) sebelum operasi production.
+- CI menjalankan test/vet backend, build frontend, dan audit dependency di
+  `.github/workflows/ci.yml`.
+
 ## Production
-Gunakan `deploy/.env.example` sebagai referensi environment server. Docker belum tersedia pada workspace ini, sehingga `docker compose` perlu divalidasi di mesin yang memasang Docker sebelum deployment.
+Gunakan `deploy/.env.example` sebagai referensi environment server. Image
+production berjalan sebagai user non-root dan entrypoint mempertahankan akses ke
+volume backup/upload lama tanpa menghapus data. Docker belum tersedia pada
+workspace ini, sehingga `docker compose` perlu divalidasi di mesin yang memasang
+Docker sebelum deployment.

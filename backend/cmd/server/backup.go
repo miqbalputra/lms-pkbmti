@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -73,6 +74,21 @@ func dialect() string {
 }
 
 func backupDir() string { return env("BACKUP_DIR", defaultBackupDir) }
+
+// ensureBackupDir keeps database dumps and restore journals private to the
+// application account. Existing files are preserved; only filesystem mode is
+// tightened, so this is safe for current backup data and Docker volumes.
+func ensureBackupDir() error {
+	dir := backupDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+func secureBackupFile(path string) {
+	_ = os.Chmod(path, 0o600)
+}
 
 func backupUploadLimit() int {
 	mb, err := strconv.Atoi(env("BACKUP_MAX_UPLOAD_MB", "512"))
@@ -164,6 +180,20 @@ func pgCommandEnv(info pgConnInfo) []string {
 
 // pgDump runs pg_dump to create a SQL backup of the PostgreSQL database.
 func pgDump(destPath string) error {
+	reserved, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := reserved.Close(); err != nil {
+		_ = os.Remove(destPath)
+		return err
+	}
+	keepDestination := false
+	defer func() {
+		if !keepDestination {
+			_ = os.Remove(destPath)
+		}
+	}()
 	info, err := parseDatabaseURL(os.Getenv("DATABASE_URL"))
 	if err != nil {
 		return err
@@ -185,6 +215,7 @@ func pgDump(destPath string) error {
 	if err != nil {
 		return fmt.Errorf("pg_dump failed: %s — %w", strings.TrimSpace(string(out)), err)
 	}
+	keepDestination = true
 	return nil
 }
 
@@ -243,24 +274,26 @@ func pgDumpStream(w io.Writer) error {
 	return nil
 }
 
-// backupReadAuth allows an admin JWT or a static BACKUP_API_KEY (header
-// X-Backup-Key or ?key=). The static key exists so n8n can pull backups on a
-// schedule without holding a rotating JWT.
+// backupReadAuth allows an admin JWT or a static BACKUP_API_KEY. Production
+// accepts the static key only in X-Backup-Key: query-string secrets are easy to
+// leak into browser history, reverse-proxy logs, and observability systems.
+// Development keeps ?key= as a compatibility convenience for old local scripts.
 func (s *Server) backupReadAuth(c *fiber.Ctx) error {
 	if key := os.Getenv("BACKUP_API_KEY"); key != "" {
 		supplied := c.Get("X-Backup-Key")
-		if supplied == "" {
+		if supplied == "" && s.cfg.Env != "production" {
 			supplied = c.Query("key")
 		}
-		if supplied != "" && supplied == key {
+		if supplied != "" && len(supplied) == len(key) && subtle.ConstantTimeCompare([]byte(supplied), []byte(key)) == 1 {
 			return c.Next()
 		}
 	}
-	_, uid, role, err := s.parseAccessToken(c.Get("Authorization"))
+	_, uid, _, err := s.parseAccessToken(c.Get("Authorization"))
 	if err != nil {
 		return fiber.NewError(401, "missing access token or backup key")
 	}
-	if role != "admin" {
+	var user User
+	if err := s.db.Select("id, role, is_active").First(&user, "id = ?", uid).Error; err != nil || !user.IsActive || user.Role != "admin" {
 		return fiber.NewError(403, "admin access required")
 	}
 	c.Locals("userID", uid)
@@ -276,9 +309,9 @@ func (s *Server) backupReadAuth(c *fiber.Ctx) error {
 // live database to destPath (which must not already exist). Requires SQLite.
 func (s *Server) backupBinary(destPath string) error {
 	if _, err := os.Stat(destPath); err == nil {
-		if err := os.Remove(destPath); err != nil {
-			return err
-		}
+		return fmt.Errorf("backup destination already exists: %s", destPath)
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	// VACUUM INTO needs a string literal (some drivers reject a bind param);
 	// sqlLit single-quotes and escapes internal quotes.
@@ -457,15 +490,35 @@ func listBackupFiles() ([]backupInfo, error) {
 			continue // pre-restore-* etc. are excluded by the prefix check anyway
 		}
 		out = append(out, backupInfo{
-			Name:      name,
-			Size:      info.Size(),
-			ModTime:   wibTimeFormat(info.ModTime(), time.RFC3339),
-			Format:    fmt2,
-			Automatic: strings.Contains(name, "-auto-"),
+			Name:    name,
+			Size:    info.Size(),
+			ModTime: wibTimeFormat(info.ModTime(), time.RFC3339),
+			Format:  fmt2,
+			// Current scheduler writes `-auto.db`/`-auto.sql`; retain the
+			// older `-auto-` marker for backups created by earlier builds.
+			Automatic: strings.Contains(name, "-auto.") || strings.Contains(name, "-auto-"),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ModTime > out[j].ModTime })
 	return out, nil
+}
+
+func latestAutomaticBackupAt() (time.Time, error) {
+	files, err := listBackupFiles()
+	if err != nil {
+		return time.Time{}, err
+	}
+	for _, file := range files {
+		if !file.Automatic {
+			continue
+		}
+		at, parseErr := time.Parse(time.RFC3339, file.ModTime)
+		if parseErr != nil {
+			continue
+		}
+		return at, nil
+	}
+	return time.Time{}, nil
 }
 
 // pruneBackups deletes the oldest backups beyond retention, keeping only the
@@ -502,10 +555,19 @@ func pruneBackups(retention int) {
 // configured format and prunes old automatic backups. Called by the cron job
 // registered in startScheduler (routes.go) when BACKUP_CRON is set. Audited with
 // no user actor (system-initiated).
+func (s *Server) scheduledBackupFailure(stage string) {
+	s.metrics.recordFailure()
+	// Keep operational alerts free of database DSNs, filesystem paths, and
+	// provider responses. The detailed cause remains available in the server
+	// log, while the webhook receives a stable, deduplicated signal.
+	operationLog("scheduled_backup_failed", map[string]any{"stage": stage})
+	s.notifyOperation("backup_failed", "backup_failed:scheduled", "Backup terjadwal gagal. Periksa health endpoint dan log server.", nil)
+}
+
 func (s *Server) runScheduledBackup() {
-	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
+	if err := ensureBackupDir(); err != nil {
 		fmt.Printf("scheduled backup: mkdir failed: %v\n", err)
-		s.metrics.recordFailure()
+		s.scheduledBackupFailure("prepare")
 		return
 	}
 	format := normalizeBackupFormat(env("BACKUP_FORMAT", "full"))
@@ -515,17 +577,18 @@ func (s *Server) runScheduledBackup() {
 	var d string
 	if isSQLite() {
 		if format == "sql" {
-			f, err := os.Create(dest)
+			f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 			if err != nil {
 				fmt.Printf("scheduled backup: create failed: %v\n", err)
-				s.metrics.recordFailure()
+				s.scheduledBackupFailure("create")
 				return
 			}
 			err = s.dumpSQL(f)
 			f.Close()
+			secureBackupFile(dest)
 			if err != nil {
 				fmt.Printf("scheduled backup: dump failed: %v\n", err)
-				s.metrics.recordFailure()
+				s.scheduledBackupFailure("dump")
 				_ = os.Remove(dest)
 				return
 			}
@@ -533,40 +596,44 @@ func (s *Server) runScheduledBackup() {
 		} else {
 			if err := s.backupBinary(dest); err != nil {
 				fmt.Printf("scheduled backup: VACUUM INTO failed: %v\n", err)
-				s.metrics.recordFailure()
-				_ = os.Remove(dest)
+				s.scheduledBackupFailure("snapshot")
 				return
 			}
+			secureBackupFile(dest)
 			d = dest
 		}
 	} else {
 		if err := pgDump(dest); err != nil {
 			fmt.Printf("scheduled backup: pg_dump failed: %v\n", err)
-			_ = os.Remove(dest)
-			s.metrics.recordFailure()
+			s.scheduledBackupFailure("dump")
 			return
 		}
+		secureBackupFile(dest)
 		d = dest
 	}
 	drillVerified, err := verifyBackupArtifact(d)
 	if err != nil {
 		fmt.Printf("scheduled backup: verification failed: %v\n", err)
-		s.metrics.recordFailure()
+		// Do not let an invalid artifact satisfy the durable local-backup
+		// freshness check or remain selectable as a restore source.
+		_ = os.Remove(d)
+		s.scheduledBackupFailure("verify")
 		return
 	}
 	offsiteUploaded, err := uploadOffsiteBackup(d)
 	if err != nil {
 		fmt.Printf("scheduled backup: offsite upload failed: %v\n", err)
-		s.metrics.recordFailure()
+		s.scheduledBackupFailure("offsite")
 		return
 	}
-	// Best-effort audit (system actor: nil uid).
-	s.audit(nil, "backup", "system", "scheduled backup -> "+d)
+	// Best-effort audit (system actor: nil uid); do not persist host paths.
+	backupName := filepath.Base(d)
+	s.audit(nil, "backup", "system", "scheduled backup -> "+backupName)
 	s.metrics.recordSuccess(offsiteUploaded, drillVerified)
 	if r, e := strconv.Atoi(env("BACKUP_RETENTION", "14")); e == nil {
 		pruneBackups(r)
 	}
-	fmt.Printf("scheduled backup written: %s\n", d)
+	fmt.Printf("scheduled backup written: %s\n", backupName)
 }
 
 // ---------------------------------------------------------------------------
@@ -591,21 +658,77 @@ func applyPendingRestore() error {
 	return nil
 }
 
-// savePreRestoreBackup copies the current live DB (+ removes WAL/SHM sidecars)
-// to backups/pre-restore-<ts>.db so a bad restore can be rolled back by hand.
+// savePreRestoreBackup checkpoints SQLite's WAL before copying the live DB to
+// backups/pre-restore-<ts>.db. A plain file copy can omit committed rows that
+// still live in the WAL; removing the sidecars before checkpointing would make
+// that omission a real data-loss event during restore.
 func savePreRestoreBackup() (string, error) {
-	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
+	if err := ensureBackupDir(); err != nil {
 		return "", err
 	}
-	dest := filepath.Join(backupDir(), fmt.Sprintf("pre-restore-%s.db", wibTimeFormat(time.Now(), "20060102-150405")))
+	dest, err := reservePreRestoreBackupPath(".db")
+	if err != nil {
+		return "", err
+	}
+	keepSafety := false
+	defer func() {
+		if !keepSafety {
+			_ = os.Remove(dest)
+		}
+	}()
+	if err := checkpointSQLite(liveDBPath); err != nil {
+		return "", fmt.Errorf("checkpoint live SQLite database failed: %w", err)
+	}
 	if err := copyFile(liveDBPath, dest); err != nil {
 		return "", err
 	}
+	secureBackupFile(dest)
+	keepSafety = true
 	// WAL/SHM sidecars belong to the pre-restore DB state; drop them so the
-	// restored DB starts clean.
-	_ = os.Remove(liveDBPath + "-wal")
-	_ = os.Remove(liveDBPath + "-shm")
+	// restored DB starts clean. The checkpoint above makes this safe.
+	for _, sidecar := range []string{liveDBPath + "-wal", liveDBPath + "-shm"} {
+		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("remove SQLite sidecar %s failed: %w", sidecar, err)
+		}
+	}
 	return dest, nil
+}
+
+func reservePreRestoreBackupPath(ext string) (string, error) {
+	if err := ensureBackupDir(); err != nil {
+		return "", err
+	}
+	pattern := fmt.Sprintf("pre-restore-%s-*%s", wibTimeFormat(time.Now(), "20060102-150405"), ext)
+	f, err := os.CreateTemp(backupDir(), pattern)
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	secureBackupFile(path)
+	return path, nil
+}
+
+// checkpointSQLite flushes committed WAL pages into the main database file
+// before a file-level safety copy. It runs during controlled startup, before
+// the application opens its live connection pool.
+func checkpointSQLite(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	db, err := gorm.Open(sqlite.Open("file:"+path+"?_pragma=busy_timeout(5000)"), productionGORMConfig())
+	if err != nil {
+		return err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+	return db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error
 }
 
 func applyBinaryRestore() error {
@@ -616,11 +739,14 @@ func applyBinaryRestore() error {
 	if err := atomicReplaceLiveDB(pendingDBPath); err != nil {
 		return fmt.Errorf("swap pending db failed: %w", err)
 	}
-	pendingRestoreApplied = true
 	if err := applyPendingUploads(); err != nil {
-		return fmt.Errorf("restore database berhasil tetapi restore uploads gagal: %w", err)
+		if rollbackErr := restoreSQLiteFromSafety(safety); rollbackErr != nil {
+			return fmt.Errorf("restore uploads gagal: %w; rollback database juga gagal: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("restore uploads gagal; database dipulihkan dari safety backup: %w", err)
 	}
-	fmt.Printf("RESTORE applied (binary). Pre-restore safety backup: %s\n", safety)
+	pendingRestoreApplied = true
+	fmt.Printf("RESTORE applied (binary). Pre-restore safety backup: %s\n", filepath.Base(safety))
 	return nil
 }
 
@@ -653,11 +779,14 @@ func applySQLRestore() error {
 		return fmt.Errorf("swap restored db failed: %w", err)
 	}
 	_ = os.Remove(pendingSQLPath)
-	pendingRestoreApplied = true
 	if err := applyPendingUploads(); err != nil {
-		return fmt.Errorf("restore database berhasil tetapi restore uploads gagal: %w", err)
+		if rollbackErr := restoreSQLiteFromSafety(safety); rollbackErr != nil {
+			return fmt.Errorf("restore uploads gagal: %w; rollback database juga gagal: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("restore uploads gagal; database dipulihkan dari safety backup: %w", err)
 	}
-	fmt.Printf("RESTORE applied (sql). Pre-restore safety backup: %s\n", safety)
+	pendingRestoreApplied = true
+	fmt.Printf("RESTORE applied (sql). Pre-restore safety backup: %s\n", filepath.Base(safety))
 	return nil
 }
 
@@ -667,8 +796,10 @@ func applyPendingUploads() error {
 	if _, err := os.Stat(pendingUploadsPath); os.IsNotExist(err) {
 		return nil
 	}
-	old := uploadsDir() + ".pre-restore"
-	_ = os.RemoveAll(old)
+	old := fmt.Sprintf("%s.pre-restore-%d", uploadsDir(), time.Now().UnixNano())
+	for i := 0; exists(old); i++ {
+		old = fmt.Sprintf("%s.pre-restore-%d-%d", uploadsDir(), time.Now().UnixNano(), i)
+	}
 	if err := os.Rename(uploadsDir(), old); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -676,22 +807,47 @@ func applyPendingUploads() error {
 		_ = os.Rename(old, uploadsDir())
 		return err
 	}
-	_ = os.RemoveAll(old)
+	// Keep the previous upload tree as a local rollback copy. It may be large,
+	// but deleting it here would make a later restore failure unrecoverable.
 	return nil
 }
 
 func atomicReplaceLiveDB(stagedPath string) error {
-	oldPath := liveDBPath + ".restore-old"
-	_ = os.Remove(oldPath)
+	oldPath := fmt.Sprintf("%s.restore-old-%d", liveDBPath, time.Now().UnixNano())
+	for i := 0; exists(oldPath); i++ {
+		oldPath = fmt.Sprintf("%s.restore-old-%d-%d", liveDBPath, time.Now().UnixNano(), i)
+	}
 	if err := os.Rename(liveDBPath, oldPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if err := os.Rename(stagedPath, liveDBPath); err != nil {
-		_ = os.Rename(oldPath, liveDBPath)
+		if restoreErr := os.Rename(oldPath, liveDBPath); restoreErr != nil {
+			return fmt.Errorf("swap staged db failed: %w; restoring previous db failed: %v", err, restoreErr)
+		}
 		return err
 	}
+	// The durable pre-restore backup is retained in BACKUP_DIR. Cleanup of this
+	// same-filesystem temporary is best effort; retaining it is safer than
+	// failing a successful restore because an operator or scanner still holds it.
 	_ = os.Remove(oldPath)
 	return nil
+}
+
+func restoreSQLiteFromSafety(safetyPath string) error {
+	tmp, err := os.CreateTemp(".", "pkbm-restore-rollback-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	defer os.Remove(tmpPath)
+	if err := copyFile(safetyPath, tmpPath); err != nil {
+		return err
+	}
+	return atomicReplaceLiveDB(tmpPath)
 }
 
 func copyFile(src, dst string) error {
@@ -704,11 +860,22 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
+	keepDestination := false
+	defer func() {
+		_ = out.Close()
+		if !keepDestination {
+			_ = os.Remove(dst)
+		}
+	}()
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	secureBackupFile(dst)
+	keepDestination = true
+	return nil
 }
 
 // splitSQLStatements splits a SQL dump into top-level statements on `;`
@@ -792,7 +959,7 @@ func (s *Server) listBackupsHandler(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(500, err.Error())
 	}
-	return c.JSON(fiber.Map{"dir": backupDir(), "backups": files, "dialect": dialect()})
+	return c.JSON(fiber.Map{"dir": filepath.Base(filepath.Clean(backupDir())), "backups": files, "dialect": dialect()})
 }
 
 // GET /backup/download?format=db|sql — generate a fresh full backup and stream
@@ -802,7 +969,7 @@ func (s *Server) downloadBackup(c *fiber.Ctx) error {
 	format := normalizeBackupFormat(c.Query("format", "full"))
 	ts := wibTimeFormat(time.Now(), "20060102-150405")
 	fname := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
-	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
+	if err := ensureBackupDir(); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
 	}
 	tmp, err := os.CreateTemp("", "pkbm-dl-*")
@@ -842,11 +1009,71 @@ func (s *Server) downloadBackup(c *fiber.Ctx) error {
 	return nil
 }
 
+// GET /backup/offsite?format=full — create a fresh encrypted backup for an
+// automation client. This keeps the legacy plaintext /backup/download endpoint
+// compatible while giving n8n, Google Drive, and S3 workflows a safe default.
+// The response is AES-256-GCM chunk-encrypted and can only be restored with
+// BACKUP_ENCRYPTION_KEY.
+func (s *Server) downloadOffsiteBackup(c *fiber.Ctx) error {
+	secret := strings.TrimSpace(os.Getenv("BACKUP_ENCRYPTION_KEY"))
+	if _, err := deriveBackupKey(secret); err != nil {
+		return fiber.NewError(503, "backup terenkripsi belum dikonfigurasi")
+	}
+	work, err := os.MkdirTemp("", "pkbm-offsite-")
+	if err != nil {
+		return fiber.NewError(500, "tidak dapat menyiapkan backup offsite")
+	}
+	defer os.RemoveAll(work)
+	format := normalizeBackupFormat(c.Query("format", "full"))
+	plain := filepath.Join(work, "backup."+format)
+	if isSQLite() {
+		if format == "sql" {
+			f, createErr := os.OpenFile(plain, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			if createErr != nil {
+				return fiber.NewError(500, "tidak dapat membuat backup offsite")
+			}
+			err = s.dumpSQL(f)
+			closeErr := f.Close()
+			if err == nil {
+				err = closeErr
+			}
+		} else {
+			err = s.backupBinary(plain)
+		}
+		if err == nil {
+			if format == "sql" {
+				err = validateSQLBackup(plain)
+			} else {
+				err = validateSQLiteBackup(plain)
+			}
+		}
+	} else {
+		err = pgDump(plain)
+	}
+	if err != nil {
+		return fiber.NewError(500, "gagal membuat backup offsite")
+	}
+	secureBackupFile(plain)
+	enc := plain + ".enc"
+	if err := encryptBackupFile(plain, enc, secret); err != nil {
+		return fiber.NewError(500, "gagal mengenkripsi backup offsite")
+	}
+	secureBackupFile(enc)
+	name := fmt.Sprintf("pkbm-lms-%s.%s.enc", wibTimeFormat(time.Now(), "20060102-150405"), format)
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	c.Set("Content-Type", "application/octet-stream")
+	c.Set("Cache-Control", "no-store")
+	if uid, ok := c.Locals("userID").(string); ok && uid != "" {
+		s.audit(&uid, "backup_offsite_download", "system", format)
+	}
+	return c.SendFile(enc)
+}
+
 // GET /backup/file/:name — download a previously created backup file by name.
 // (backupReadAuth) Path traversal guarded.
 func (s *Server) downloadBackupFile(c *fiber.Ctx) error {
 	name := c.Params("name")
-	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") {
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") || strings.ContainsAny(name, "\"\r\n") {
 		return fiber.NewError(400, "nama file tidak valid")
 	}
 	if !strings.HasPrefix(name, "pkbm-lms-") && !strings.HasPrefix(name, "pre-restore-") {
@@ -861,10 +1088,11 @@ func (s *Server) downloadBackupFile(c *fiber.Ctx) error {
 }
 
 // POST /backup (admin JWT) — create a backup now in the backup dir and return
-// its metadata. The admin UI uses this; n8n uses GET /backup/download instead.
+// its metadata. The admin UI uses this; n8n should use GET /backup/offsite for
+// an encrypted cloud-ready payload.
 func (s *Server) createBackupNow(c *fiber.Ctx) error {
 	format := normalizeBackupFormat(c.Query("format", "full"))
-	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
+	if err := ensureBackupDir(); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
 	}
 	ts := wibTimeFormat(time.Now(), "20060102-150405")
@@ -872,35 +1100,36 @@ func (s *Server) createBackupNow(c *fiber.Ctx) error {
 	dest := filepath.Join(backupDir(), name)
 	if isSQLite() {
 		if format == "sql" {
-			f, err := os.Create(dest)
+			f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 			if err != nil {
 				return fiber.NewError(500, err.Error())
 			}
 			err = s.dumpSQL(f)
 			f.Close()
+			secureBackupFile(dest)
 			if err != nil {
 				_ = os.Remove(dest)
 				return fiber.NewError(500, "gagal dump: "+err.Error())
 			}
 		} else {
 			if err := s.backupBinary(dest); err != nil {
-				_ = os.Remove(dest)
 				return fiber.NewError(500, "gagal backup: "+err.Error())
 			}
+			secureBackupFile(dest)
 		}
 	} else {
 		if err := pgDump(dest); err != nil {
-			_ = os.Remove(dest)
 			return fiber.NewError(500, "gagal pg_dump: "+err.Error())
 		}
+		secureBackupFile(dest)
 	}
 	uid := c.Locals("userID").(string)
-	s.audit(&uid, "backup", "system", "manual backup -> "+dest)
+	s.audit(&uid, "backup", "system", "manual backup -> "+name)
 	info, err := os.Stat(dest)
 	if err != nil {
 		return fiber.NewError(500, "backup selesai tetapi file hasil tidak dapat diverifikasi")
 	}
-	return c.JSON(fiber.Map{"name": name, "size": info.Size(), "path": dest, "format": format})
+	return c.JSON(fiber.Map{"name": name, "size": info.Size(), "format": format})
 }
 
 // POST /backup/restore (admin JWT) — stage an uploaded backup file for restore.
@@ -934,6 +1163,7 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 				return fiber.NewError(500, "gagal menyimpan file restore")
 			}
 		default:
+			_ = os.Remove(tmpPath)
 			return fiber.NewError(400, "ekstensi file harus .db atau .sql")
 		}
 		uid := c.Locals("userID").(string)
@@ -970,30 +1200,40 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 		return fiber.NewError(400, "file restore PostgreSQL kosong atau tidak dapat dibaca")
 	}
 	uid := c.Locals("userID").(string)
-	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
+	if err := ensureBackupDir(); err != nil {
 		_ = os.Remove(tmpPath)
 		return fiber.NewError(500, "tidak dapat menyiapkan folder backup pengaman")
 	}
-	preRestorePath := filepath.Join(backupDir(), fmt.Sprintf("pre-restore-%s.sql", wibTimeFormat(time.Now(), "20060102-150405")))
+	preRestorePath, err := reservePreRestoreBackupPath(".sql")
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return fiber.NewError(500, "tidak dapat menyiapkan backup pengaman")
+	}
 	if err := pgDump(preRestorePath); err != nil {
 		_ = os.Remove(tmpPath)
+		_ = os.Remove(preRestorePath)
 		return fiber.NewError(500, "backup pengaman sebelum restore gagal")
 	}
+	preRestoreName := filepath.Base(preRestorePath)
 	if err := pgRestore(tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
-		s.audit(&uid, "restore", "system", "psql restore FAILED; safety backup: "+preRestorePath+"; "+err.Error())
-		return fiber.NewError(500, "gagal restore PostgreSQL; backup pengaman tersimpan di "+preRestorePath)
+		s.audit(&uid, "restore", "system", "psql restore FAILED; safety backup: "+preRestoreName+"; "+err.Error())
+		return fiber.NewError(500, "gagal restore PostgreSQL; backup pengaman tersimpan sebagai "+preRestoreName)
 	}
 	_ = os.Remove(tmpPath)
-	s.audit(&uid, "restore", "system", "psql restore applied successfully; safety backup: "+preRestorePath)
+	s.audit(&uid, "restore", "system", "psql restore applied successfully; safety backup: "+preRestoreName)
 	return c.JSON(fiber.Map{
 		"ok":      true,
 		"mode":    "sql",
-		"message": "Restore PostgreSQL berhasil diterapkan. Backup pengaman tersimpan di " + preRestorePath + ".",
+		"message": "Restore PostgreSQL berhasil diterapkan. Backup pengaman tersimpan sebagai " + preRestoreName + ".",
 	})
 }
 
 func saveRestoreUpload(c *fiber.Ctx, fh *multipart.FileHeader) (string, error) {
+	maxBytes := int64(backupUploadLimit())
+	if fh == nil || fh.Size <= 0 || fh.Size > maxBytes {
+		return "", fiber.NewError(413, fmt.Sprintf("file restore harus antara 1 byte dan %d byte", maxBytes))
+	}
 	tmp, err := os.CreateTemp(".", "pkbm-restore-upload-*")
 	if err != nil {
 		return "", fiber.NewError(500, "tidak dapat membuat file sementara")
@@ -1012,18 +1252,45 @@ func saveRestoreUpload(c *fiber.Ctx, fh *multipart.FileHeader) (string, error) {
 
 func replacePendingRestore(tmpPath, pendingPath string) error {
 	// Only replace pending files after the uploaded file has passed validation.
-	if err := os.Remove(pendingDBPath); err != nil && !os.IsNotExist(err) {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Remove(pendingSQLPath); err != nil && !os.IsNotExist(err) {
-		_ = os.Remove(tmpPath)
-		return err
+	// Preserve a previously staged restore instead of deleting it: an operator
+	// may need it for comparison or manual recovery after a failed deployment.
+	for _, existing := range []string{pendingDBPath, pendingSQLPath} {
+		if _, err := os.Stat(existing); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		if err := archivePendingRestore(existing); err != nil {
+			_ = os.Remove(tmpPath)
+			return err
+		}
 	}
 	if err := os.Rename(tmpPath, pendingPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
 	}
+	return nil
+}
+
+func archivePendingRestore(path string) error {
+	if err := ensureBackupDir(); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(backupDir(), "pre-restore-pending-*")
+	if err != nil {
+		return err
+	}
+	archived := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(archived)
+		return err
+	}
+	_ = os.Remove(archived)
+	if err := os.Rename(path, archived); err != nil {
+		return err
+	}
+	secureBackupFile(archived)
 	return nil
 }
 
@@ -1120,7 +1387,7 @@ func scheduleRestoreRestart() bool {
 // deleteBackupFile (admin JWT) — DELETE /backup/:name — remove a backup file.
 func (s *Server) deleteBackupFile(c *fiber.Ctx) error {
 	name := c.Params("name")
-	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") {
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") || strings.ContainsAny(name, "\"\r\n") {
 		return fiber.NewError(400, "nama file tidak valid")
 	}
 	if !strings.HasPrefix(name, "pkbm-lms-") {

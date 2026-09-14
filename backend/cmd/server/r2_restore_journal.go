@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -33,7 +34,10 @@ func writeR2RestoreJournal(j *r2RestoreJournal) error {
 	if j == nil || j.JobID == "" || j.WorkDir == "" {
 		return errors.New("restore journal tidak lengkap")
 	}
-	if err := os.MkdirAll(backupDir(), 0o700); err != nil {
+	if err := validateR2RestoreJournalPaths(j); err != nil {
+		return err
+	}
+	if err := ensureBackupDir(); err != nil {
 		return err
 	}
 	j.UpdatedAt = time.Now().UTC()
@@ -82,7 +86,48 @@ func loadR2RestoreJournal() (*r2RestoreJournal, error) {
 	if j.JobID == "" || j.WorkDir == "" || j.SafetyArchive == "" || j.Dialect == "" || j.Phase == "" {
 		return nil, errors.New("restore journal rusak atau tidak lengkap")
 	}
+	if j.Dialect != "sqlite" && j.Dialect != "postgresql" {
+		return nil, errors.New("dialect restore journal tidak dikenal")
+	}
+	switch j.Phase {
+	case "safety-created", "sqlite-staged", "sqlite-db-swapping", "sqlite-db-swapped", "sqlite-uploads-swapping", "sqlite-uploads-swapped", "postgres-restoring", "postgres-db-restored", "postgres-uploads-swapping", "postgres-uploads-swapped", "postgres-migrated", "completed", "rolled-back", "rollback-failed":
+	default:
+		return nil, errors.New("fase restore journal tidak dikenal")
+	}
+	if err := validateR2RestoreJournalPaths(&j); err != nil {
+		return nil, err
+	}
 	return &j, nil
+}
+
+func validateR2RestoreJournalPaths(j *r2RestoreJournal) error {
+	if j == nil || j.WorkDir == "" || j.SafetyArchive == "" {
+		return errors.New("restore journal tidak lengkap")
+	}
+	backupRoot, err := filepath.Abs(filepath.Clean(backupDir()))
+	if err != nil {
+		return errors.New("direktori backup tidak valid")
+	}
+	workDir, err := filepath.Abs(filepath.Clean(j.WorkDir))
+	if err != nil || !pathWithin(workDir, backupRoot) || !strings.HasPrefix(filepath.Base(workDir), "r2-restore-") {
+		return errors.New("workdir restore berada di luar direktori backup")
+	}
+	safetyArchive, err := filepath.Abs(filepath.Clean(j.SafetyArchive))
+	if err != nil || !pathWithin(safetyArchive, workDir) {
+		return errors.New("arsip pengaman restore berada di luar workdir")
+	}
+	return nil
+}
+
+func pathWithin(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 func removeR2RestoreJournal(j *r2RestoreJournal) {
@@ -108,36 +153,60 @@ func journalUploadsOld(j *r2RestoreJournal) string { return filepath.Join(j.Work
 func exists(path string) bool { _, err := os.Stat(path); return err == nil }
 
 func swapFileKeepingOld(newPath, livePath, oldPath string) error {
-	if exists(oldPath) && !exists(newPath) && exists(livePath) {
+	if exists(oldPath) && exists(livePath) && !exists(newPath) {
+		// Crash window after the new file reached its live name but before
+		// the durable journal phase update. Treat the completed swap as
+		// success and preserve the safety copy for rollback.
 		return nil
-	} // already swapped
+	}
 	if !exists(newPath) {
 		return fmt.Errorf("file staging restore tidak ditemukan")
 	}
-	_ = os.Remove(oldPath)
-	if err := os.Rename(livePath, oldPath); err != nil && !os.IsNotExist(err) {
-		return err
+	if exists(oldPath) {
+		if exists(livePath) {
+			return fmt.Errorf("file safety restore sudah ada sementara file live masih ada")
+		}
+		// Crash window: live was already moved to oldPath, but newPath has not
+		// been moved into place yet. Continue without deleting the safety copy.
+	} else {
+		if err := os.Rename(livePath, oldPath); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(newPath, livePath); err != nil {
-		_ = os.Rename(oldPath, livePath)
+		if !exists(livePath) {
+			_ = os.Rename(oldPath, livePath)
+		}
 		return err
 	}
 	return nil
 }
 
 func swapDirectoryKeepingOld(newPath, livePath, oldPath string) error {
-	if exists(oldPath) && !exists(newPath) && exists(livePath) {
+	if exists(oldPath) && exists(livePath) && !exists(newPath) {
+		// Crash window after the directory swap completed but before the
+		// durable journal phase update. The old tree remains the rollback
+		// copy, so the operation is safe to resume idempotently.
 		return nil
-	} // already swapped
+	}
 	if !exists(newPath) {
 		return fmt.Errorf("folder staging restore tidak ditemukan")
 	}
-	_ = os.RemoveAll(oldPath)
-	if err := os.Rename(livePath, oldPath); err != nil && !os.IsNotExist(err) {
-		return err
+	if exists(oldPath) {
+		if exists(livePath) {
+			return fmt.Errorf("folder safety restore sudah ada sementara folder live masih ada")
+		}
+		// Crash window: live was already moved to oldPath; preserve it and
+		// finish the second rename below.
+	} else {
+		if err := os.Rename(livePath, oldPath); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(newPath, livePath); err != nil {
-		_ = os.Rename(oldPath, livePath)
+		if !exists(livePath) {
+			_ = os.Rename(oldPath, livePath)
+		}
 		return err
 	}
 	return nil
@@ -145,8 +214,7 @@ func swapDirectoryKeepingOld(newPath, livePath, oldPath string) error {
 
 func rollbackSQLiteJournal(j *r2RestoreJournal) error {
 	if exists(journalDBOld(j)) {
-		failed := liveDBPath + ".restore-failed"
-		_ = os.Remove(failed)
+		failed := fmt.Sprintf("%s.restore-failed-%d", liveDBPath, time.Now().UnixNano())
 		if exists(liveDBPath) {
 			_ = os.Rename(liveDBPath, failed)
 		}
@@ -155,8 +223,7 @@ func rollbackSQLiteJournal(j *r2RestoreJournal) error {
 		}
 	}
 	if exists(journalUploadsOld(j)) {
-		failed := uploadsDir() + ".restore-failed"
-		_ = os.RemoveAll(failed)
+		failed := fmt.Sprintf("%s.restore-failed-%d", uploadsDir(), time.Now().UnixNano())
 		if exists(uploadsDir()) {
 			_ = os.Rename(uploadsDir(), failed)
 		}
@@ -243,7 +310,10 @@ func recoverPendingR2Restore() error {
 	}
 	if exists(journalUploadsOld(j)) {
 		if exists(uploadsDir()) {
-			_ = os.RemoveAll(uploadsDir())
+			failed := fmt.Sprintf("%s.restore-failed-%d", uploadsDir(), time.Now().UnixNano())
+			if err := os.Rename(uploadsDir(), failed); err != nil {
+				return err
+			}
 		}
 		if err := os.Rename(journalUploadsOld(j), uploadsDir()); err != nil {
 			return err

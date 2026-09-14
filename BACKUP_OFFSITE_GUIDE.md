@@ -37,11 +37,11 @@ BACKUP_CRON=0 2 * * *
 # Jangan biarkan literal "endpoint-arsip-anda".
 BACKUP_OFFSITE_URL=https://backup-gateway.example.com/upload
 
-# Minimal 16 karakter; gunakan random string panjang dan simpan di secret manager.
+# Minimal 32 karakter di production; gunakan random string panjang dan simpan di secret manager.
 BACKUP_ENCRYPTION_KEY=GANTI_DENGAN_SECRET_RANDOM_PANJANG
 
 # Database PostgreSQL disposable, bukan database production.
-BACKUP_DRILL_DATABASE_URL=postgres://pkbm:DRILL_PASSWORD@db:5432/pkbm_drill?sslmode=disable
+BACKUP_DRILL_DATABASE_URL=postgres://pkbm:DRILL_PASSWORD@db:5432/pkbm_drill?sslmode=require
 ```
 
 Variabel pendukung yang direkomendasikan:
@@ -53,6 +53,7 @@ BACKUP_OFFSITE_TOKEN=
 BACKUP_FORMAT=full
 BACKUP_RETENTION=14
 BACKUP_MAX_UPLOAD_MB=512
+BACKUP_MAX_ARCHIVE_MB=4096
 ```
 
 Production akan menolak start jika `BACKUP_OFFSITE_URL` diisi tetapi tidak menggunakan HTTPS atau `BACKUP_ENCRYPTION_KEY` belum diisi.
@@ -91,6 +92,13 @@ Endpoint dapat berupa:
 - gateway n8n yang menerima binary lalu menyimpan ke Google Drive, S3, atau storage lain;
 - service internal yang meneruskan body ke S3-compatible storage;
 - endpoint upload yang dikelola sendiri.
+
+Untuk workflow pull dari n8n, gunakan `GET /api/backup/offsite?format=full` dengan
+header `X-Backup-Key`. Endpoint ini membuat backup baru dan mengembalikan file
+`.db.enc`/`.sql.enc`, sehingga data tidak pernah dikirim ke Google Drive atau S3
+dalam bentuk plaintext. Endpoint `GET /api/backup/download` tetap tersedia untuk
+kompatibilitas, tetapi menghasilkan database plaintext dan tidak direkomendasikan
+untuk penyimpanan cloud.
 
 URL presigned S3 yang kadaluarsa biasanya tidak cocok dipakai langsung untuk cron harian karena URL tersebut hanya berlaku sementara. Gunakan gateway yang dapat membuat signature baru, atau gunakan endpoint upload yang masa berlakunya panjang dan dibatasi dengan token.
 
@@ -183,7 +191,7 @@ docker compose exec db psql -U pkbm -d postgres -c "CREATE DATABASE pkbm_drill;"
 Kemudian isi URL sesuai kredensial database drill:
 
 ```env
-BACKUP_DRILL_DATABASE_URL=postgres://pkbm:DRILL_PASSWORD@db:5432/pkbm_drill?sslmode=disable
+BACKUP_DRILL_DATABASE_URL=postgres://pkbm:DRILL_PASSWORD@db:5432/pkbm_drill?sslmode=require
 ```
 
 Untuk production yang lebih aman, gunakan instance PostgreSQL terpisah. Jangan pernah mengarahkan `BACKUP_DRILL_DATABASE_URL` ke database production.

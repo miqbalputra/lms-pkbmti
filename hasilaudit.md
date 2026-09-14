@@ -1,6 +1,111 @@
 # Hasil Audit LMS PKBM Tunas Ilmu
 
-Tanggal audit: 5 September 2026 (WIB)
+> **Addendum 14 September 2026:** tindak lanjut hardening pada worktree ini telah
+> diterapkan. Status terbaru berada pada bagian [Pembaruan Audit](#pembaruan-audit-14-september-2026); bagian di bawahnya menyimpan baseline audit
+> 5 September untuk histori dan tidak boleh dibaca sebagai status terbaru.
+
+## Pembaruan Audit 14 September 2026
+
+Perubahan yang sudah diterapkan tanpa menghapus atau memigrasikan data existing:
+
+- **Security:** validasi status aktif dan role dari database pada setiap JWT request,
+  hardening header HTTP, HSTS production, validasi konfigurasi secret/domain, serta
+  pencegahan JWT pada URL SSE memakai credential satu kali dengan TTL 60 detik.
+- **Backup/restore:** folder backup dipersempit ke permission private, path filesystem
+  tidak lagi dikirim ke browser, endpoint `GET /api/backup/offsite` menghasilkan
+  `.db.enc`/`.sql.enc` AES-256-GCM untuk Google Drive/S3-compatible, dan upload restore
+  terenkripsi dapat langsung didekripsi serta divalidasi sebelum diterapkan.
+- **Scalability:** daftar arsip R2 memakai `ListObjectsV2` pagination dengan
+  continuation token; UI tetap menampilkan backup lokal meski R2 sedang unavailable.
+- **UX/accessibility:** skip link keyboard, landmark semantik, label kontrol, fallback
+  polling notifikasi, error state dashboard dengan aksi retry, dan panduan offsite yang
+  dapat diikuti operator.
+- **Operational quality:** CI mempertahankan backend test/vet, frontend lint/build,
+  MinIO R2 integration, Docker smoke/Playwright, lalu menambah audit dependency,
+  concurrency, dan artefak coverage.
+- **Deployment hardening:** image production memakai user non-root, ownership volume
+  lama dialihkan secara aman saat startup, Compose memakai `no-new-privileges`, dan
+  `.dockerignore` mencegah secret/data lokal masuk ke build context.
+- **Deployment configuration:** Compose sekarang fail-fast bila `DATABASE_URL`, secret
+  auth, CORS, atau password PostgreSQL belum diisi; contoh environment juga mencakup
+  kredensial service database bawaan secara eksplisit. `PUBLIC_BASE_URL`, TTL JWT,
+  dan endpoint R2 juga diteruskan ke container agar validasi production dan konfigurasi
+  backup tidak berbeda antara file `.env` dan runtime. Versi builder Go Docker kini
+  selaras dengan Go version pada CI dan `go.mod`.
+- **Public-session hardening:** sesi ujian online dan share materi memakai cookie
+  HttpOnly bertanda tangan; kredensial/password tidak lagi diteruskan oleh halaman
+  baru melalui URL. Link share materi lama dengan `?pwd=` tetap diterima sekali untuk
+  kompatibilitas lalu di-upgrade ke sesi cookie.
+- **Production privacy/configuration:** koneksi PostgreSQL production wajib
+  `sslmode=require`, `verify-ca`, atau `verify-full`; logger SQL GORM dinonaktifkan di
+  production agar NISN/email tidak masuk ke log query.
+- **Request resilience:** request normal dibatasi 16 MiB, sedangkan restore/ZIP besar
+  tetap memakai allowlist route eksplisit; endpoint unlock share dibatasi 10 percobaan
+  per menit; ekstraksi R2 memiliki batas total dan jumlah file untuk mencegah archive bomb.
+- **Privacy/observability:** QR kartu pelajar baru memakai token verifikasi siswa
+  bertanda tangan dan URL NISN lama tetap kompatibel; endpoint verifikasi diberi rate
+  limit. Request ID disanitasi sebelum masuk access log, dikembalikan pada error, dan
+  error 5xx hanya mencatat metadata operasional yang aman.
+- **Restore hygiene:** workspace dekripsi/ekstraksi R2 dibersihkan jika gagal sebelum
+  journal durable tersimpan; setelah journal tersimpan, artefak tetap dipertahankan
+  untuk recovery lintas restart. Swap file/folder idempotent terhadap crash setelah
+  rename selesai dan safety copy tidak ditimpa.
+- **Upload lifecycle:** penggantian lampiran materi, tugas, RPP, jurnal, dan foto siswa
+  sekarang menyimpan file baru serta data DB terlebih dahulu, menghapus file lama hanya
+  setelah commit berhasil, dan membersihkan file baru bila penyimpanan DB gagal.
+- **Metadata minimization:** respons restore PostgreSQL, audit manual backup, dan log
+  safety restore hanya menyebut nama file relatif, bukan path filesystem host.
+- **Public exam contract:** daftar ujian publik dan hasil ujian orang tua kini memakai
+  DTO allowlist sehingga `aksesKode` serta metadata internal tidak ikut terkirim;
+  jawaban tersimpan juga dipetakan ke ID `UjianSoal` yang digunakan frontend.
+- **Parent privacy contract:** daftar anak, presensi, tugas, materi, peminjaman, dan
+  perilaku pada portal orang tua memakai DTO allowlist; NIK, path file, share token,
+  operator ID, dan payload tanda tangan tidak ikut keluar lewat JSON.
+- **Backup operations:** kegagalan setiap tahap backup terjadwal dicatat sebagai
+  metrik/audit dan dikirim ke webhook operasional; webhook hanya mendinginkan alert
+  setelah respons 2xx, dapat mencoba ulang setelah gagal, dan wajib HTTPS di production.
+  Health/monitoring juga memeriksa umur backup lokal otomatis saat `BACKUP_CRON` aktif;
+  artefak yang gagal diverifikasi tidak dihitung sebagai backup sehat.
+- **Parent session lifecycle:** tombol keluar portal orang tua sekarang memanggil endpoint
+  logout server untuk mencabut sesi dan cookie refresh, lalu membersihkan state lokal.
+- **CSP compatibility:** halaman ujian publik dan portal orang tua tidak lagi memakai
+  inline event handler; interaksi memakai `data-action` dengan event delegation sehingga
+  dapat berjalan di bawah CSP production tanpa `unsafe-inline`.
+
+### Bukti verifikasi terbaru
+
+| Area | Bukti | Status |
+| --- | --- | --- |
+| Backend regression | `go test ./... -count=1` | Lulus |
+| Go static checks | `go vet ./...` dan `git diff --check` | Lulus |
+| Concurrency regression | `go test -race ./...` | Gate CI Linux; belum dapat dijalankan lokal karena compiler C (`gcc`) tidak tersedia |
+| Kualitas Go | `go vet ./...` | Lulus |
+| Offsite backup | Test membuat `.sql.enc`, memastikan plaintext tidak bocor, decrypt, dan validasi SQL | Lulus |
+| SSE credential | Test ticket satu kali pakai | Lulus |
+| Auth session lifecycle | Logout mencabut refresh token dan menghapus cookie pada path scoped | Lulus |
+| Frontend | `npm.cmd run lint` dan `npm.cmd run build` | Lulus |
+| UI visual/accessibility spot check | Preview frontend terbaru; login layout, heading, label, field, toggle password, dan tombol terdeteksi | Lulus |
+| Dependency production | `npm.cmd audit --omit=dev --json` | 0 vulnerability low/moderate/high/critical |
+| Public exam/share/privacy regression | Cookie session, URL bersih, grading unanswered, handler JS, signed QR siswa | Lulus |
+| Backend coverage | `go test -cover ./cmd/server` | 46,8%; masih di bawah target 70% jalur kritis |
+| Docker/cloud nyata | Docker CLI, kredensial R2/Google Drive, dan production DB tidak tersedia di mesin audit | Wajib staging |
+
+### Gate rilis yang masih terbuka
+
+1. Jalankan `docker compose config`, build/start stack, login, upload lampiran, restart,
+   dan verifikasi volume pada staging yang memasang Docker.
+2. Uji real R2 dan Google Drive/n8n: upload, list pagination, download, decrypt,
+   restore database + lampiran, rollback, lifecycle, serta Bucket Lock.
+3. Aktifkan alert ketika backup gagal atau umur backup melewati SLA; bukti konfigurasi
+   lifecycle/retensi storage harus disimpan operator.
+4. Naikkan coverage jalur kritis dan jalankan Playwright lintas role pada environment
+   terisolasi sebelum multi-sekolah production.
+5. **Tetapkan batas tenancy.** Skema saat ini single-school per database; multi-sekolah
+   dalam satu database belum aman tanpa penambahan tenant boundary, backfill, dan
+   pengujian isolasi per role. Gunakan stack/database terpisah per sekolah untuk
+   rilis sekarang.
+
+Tanggal audit baseline: 5 September 2026 (WIB)
 Ruang lingkup: source backend Go, frontend React/Vite, konfigurasi deployment, test otomatis, dependensi frontend, dan fitur backup R2 yang ada di worktree.
 
 ## Ringkasan Eksekutif

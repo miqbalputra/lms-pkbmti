@@ -2,7 +2,8 @@ import type { ReactNode } from 'react'
 import { AppHeader } from './AppHeader'
 import { AppSidebar } from './AppSidebar'
 import { Backdrop } from './Backdrop'
-import { SidebarProvider, useSidebar } from '../../context/SidebarContext'
+import { SidebarProvider } from '../../context/SidebarContext'
+import { useSidebar } from '../../context/useSidebar'
 
 interface User {
   id: string
@@ -29,6 +30,7 @@ function ShellContent({
 
   return (
     <div className="min-h-screen xl:flex bg-gray-50 dark:bg-gray-900">
+      <a className="skip-link" href="#main-content">Lewati ke konten utama</a>
       <div>
         <AppSidebar role={user.role} />
         <Backdrop />
@@ -44,9 +46,9 @@ function ShellContent({
           onLogout={onLogout}
           onOpenTutorAccount={onOpenTutorAccount}
         />
-        <div className="w-full min-w-0 p-3 mx-auto max-w-(--breakpoint-2xl) sm:p-4 md:p-6">
+        <main id="main-content" className="w-full min-w-0 p-3 mx-auto max-w-(--breakpoint-2xl) sm:p-4 md:p-6" tabIndex={-1}>
           {children}
-        </div>
+        </main>
       </div>
     </div>
   )

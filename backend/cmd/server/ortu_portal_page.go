@@ -1,10 +1,12 @@
 package main
 
 import (
+	"html"
 	"os"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 func (s *Server) serveOrangTuaPortalPage(c *fiber.Ctx) error {
@@ -13,8 +15,15 @@ func (s *Server) serveOrangTuaPortalPage(c *fiber.Ctx) error {
 	if siteKey == "" && s.cfg.Env != "production" {
 		siteKey = "1x00000000000000000000AA"
 	}
-	html := strings.Replace(ortuPortalHTML, "{{TURNSTILE_SITE_KEY}}", siteKey, 1)
-	return c.SendString(html)
+	nonce, _ := c.Locals("cspNonce").(string)
+	if nonce == "" {
+		nonce = uuid.NewString()
+	}
+	page := strings.NewReplacer(
+		"{{TURNSTILE_SITE_KEY}}", html.EscapeString(siteKey),
+		"{{CSP_NONCE}}", html.EscapeString(nonce),
+	).Replace(ortuPortalHTML)
+	return c.SendString(page)
 }
 
 var ortuPortalHTML = `<!DOCTYPE html>
@@ -29,7 +38,7 @@ var ortuPortalHTML = `<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<style>
+<style nonce="{{CSP_NONCE}}">
 :root{
   --background:#ffffff;--foreground:#0a0a0a;
   --card:#ffffff;--card-foreground:#0a0a0a;
@@ -153,7 +162,7 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
     </div>
     <div class="form-group turnstile-wrap"><div class="cf-turnstile" data-sitekey="{{TURNSTILE_SITE_KEY}}" data-theme="light" data-callback="onTurnstileSuccess" data-expired-callback="onTurnstileExpired" data-error-callback="onTurnstileError"></div></div>
   </div>
-  <div class="card-footer login-footer"><button class="btn btn-primary btn-lg" onclick="doLogin()" id="loginBtn">Masuk</button></div>
+  <div class="card-footer login-footer"><button class="btn btn-primary btn-lg" data-action="login" id="loginBtn">Masuk</button></div>
   </div>
 </div>
 
@@ -161,7 +170,7 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 <div id="portalCard" class="hidden">
   <div class="top-bar">
     <h2>Portal Orang Tua</h2>
-    <button class="btn btn-ghost btn-sm" onclick="doLogout()">Keluar</button>
+    <button class="btn btn-ghost btn-sm" data-action="logout">Keluar</button>
   </div>
   <div class="child-select" id="childSelect"></div>
   <div class="tabs" id="mainTabs"></div>
@@ -170,7 +179,7 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 
 </div>
 
-<script>
+<script nonce="{{CSP_NONCE}}">
 const API='/api';
 let state={token:'',anakId:'',anakList:[],anakData:null,identityPreviewUrl:'',identityPreviewRequest:0};
 let turnstileToken='';
@@ -198,6 +207,25 @@ function onTurnstileExpired(){turnstileToken=''}
 function onTurnstileError(){turnstileToken=''}
 function resetTurnstile(){turnstileToken='';if(window.turnstile)window.turnstile.reset()}
 
+document.addEventListener('click',e=>{
+  const el=e.target instanceof Element?e.target.closest('[data-action]'):null;
+  if(!el)return;
+  switch(el.dataset.action){
+    case 'login':void doLogin();break;
+    case 'logout':void doLogout();break;
+    case 'select-child':void selectAnak(el.dataset.id||'');break;
+    case 'show-tab':showTab(el.dataset.tab||'',el);break;
+    case 'download-surat':void downloadSurat(el.dataset.id||'');break;
+    case 'download-identitas':void downloadIdentitas();break;
+    case 'send-chat':void sendChat();break;
+  }
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&e.target instanceof Element&&e.target.id==='chatInput'){
+    e.preventDefault();void sendChat();
+  }
+});
+
 async function doLogin(){
   const nisn=document.getElementById('nisn').value.trim();
   const tl=document.getElementById('tanggalLahir').value;
@@ -211,20 +239,21 @@ async function doLogin(){
     state.token=d.accessToken;
     await loadAnak();
     hide(document.getElementById('loginCard'));show(document.getElementById('portalCard'));
-  }catch(e){showErr('loginError',e.message);resetTurnstile()}
+  }catch(e){const token=state.token;state.token='';await revokePortalSession(token);showErr('loginError',e.message);resetTurnstile()}
   finally{btn.disabled=false;btn.textContent='Masuk'}
 }
 
 async function loadAnak(){
   const r=await fetch(API+'/orang-tua/anak',{headers:hdr()});
-  const d=await r.json();state.anakList=Array.isArray(d)?d:[];
+  const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Gagal memuat data anak');
+  state.anakList=Array.isArray(d)?d:[];
   renderChildSelect();
   if(state.anakList.length)selectAnak(state.anakList[0].id);
 }
 
 function renderChildSelect(){
   const el=document.getElementById('childSelect');
-  el.innerHTML=state.anakList.map(a=>'<button class="child-btn'+(a.id===state.anakId?' active':'')+'" onclick="selectAnak(\''+a.id+'\')">'+esc(a.nama)+'</button>').join('');
+  el.innerHTML=state.anakList.map(a=>'<button class="child-btn'+(a.id===state.anakId?' active':'')+'" data-action="select-child" data-id="'+esc(a.id)+'">'+esc(a.nama)+'</button>').join('');
 }
 
 async function selectAnak(id){
@@ -236,7 +265,7 @@ async function selectAnak(id){
 }
 
 function renderTabs(){
-  document.getElementById('mainTabs').innerHTML=TABS.map((t,i)=>'<div class="tab'+(i===0?' active':'')+'" onclick="showTab(\''+t.id+'\',this)">'+t.icon+' '+t.label+'</div>').join('');
+  document.getElementById('mainTabs').innerHTML=TABS.map((t,i)=>'<div class="tab'+(i===0?' active':'')+'" data-action="show-tab" data-tab="'+esc(t.id)+'">'+t.icon+' '+t.label+'</div>').join('');
 }
 
 function showTab(tab,el){
@@ -258,7 +287,7 @@ async function loadSurat(c){
     const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal memuat surat');
     if(!Array.isArray(d)||!d.length){c.innerHTML='<div class="card"><div class="empty-state">Belum ada surat untuk anak ini.</div></div>';return}
     c.innerHTML='<div class="card"><div class="card-header"><h1>Surat untuk '+esc(state.anakData?.nama||'anak')+'</h1><p class="desc">Dokumen resmi yang dapat diunduh dari sekolah.</p></div><div class="card-content">'+
-      d.map(s=>'<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)"><div style="min-width:0"><div style="font-size:13px;font-weight:600;word-break:break-word">'+esc(s.judul)+'</div><div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">'+String(s.createdAt||'').slice(0,10)+'</div></div><button class="btn btn-primary btn-sm" onclick="downloadSurat(\''+esc(s.id)+'\')">Unduh PDF</button></div>').join('')+
+      d.map(s=>'<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)"><div style="min-width:0"><div style="font-size:13px;font-weight:600;word-break:break-word">'+esc(s.judul)+'</div><div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">'+String(s.createdAt||'').slice(0,10)+'</div></div><button class="btn btn-primary btn-sm" data-action="download-surat" data-id="'+esc(s.id)+'">Unduh PDF</button></div>').join('')+
       '</div></div>';
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
 }
@@ -291,7 +320,7 @@ async function loadIdentitas(c){
   }else{
     identitySection+='<div id="identityPreview" style="min-height:120px;display:flex;align-items:center;justify-content:center;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--secondary);font-size:12px;color:var(--muted-foreground)">Memuat pratinjau foto...</div>';
   }
-  if(hasIdentitas)identitySection+='<button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="downloadIdentitas()">Download Foto / Dokumen</button>';
+  if(hasIdentitas)identitySection+='<button class="btn btn-primary btn-sm" style="margin-top:10px" data-action="download-identitas">Download Foto / Dokumen</button>';
   identitySection+='</div>';
   c.innerHTML='<div class="card"><div class="card-content">'+
     '<div style="text-align:center;margin-bottom:16px"><div style="width:64px;height:64px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;margin:0 auto 8px;font-size:24px">👤</div>'+
@@ -335,10 +364,13 @@ async function downloadIdentitas(){
 async function loadPerforma(c){
   const id=state.anakId;
   try{
-    const [rNilai,rPresensi]=await Promise.all([
-      fetch(API+'/orang-tua/anak/'+id+'/nilai',{headers:hdr()}).then(r=>r.json()),
-      fetch(API+'/orang-tua/anak/'+id+'/presensi',{headers:hdr()}).then(r=>r.json())
+    const [nilaiResponse,presensiResponse]=await Promise.all([
+      fetch(API+'/orang-tua/anak/'+id+'/nilai',{headers:hdr()}),
+      fetch(API+'/orang-tua/anak/'+id+'/presensi',{headers:hdr()})
     ]);
+    const [rNilai,rPresensi]=await Promise.all([nilaiResponse.json(),presensiResponse.json()]);
+    if(!nilaiResponse.ok)throw new Error(rNilai.error||'Gagal memuat nilai');
+    if(!presensiResponse.ok)throw new Error(rPresensi.error||'Gagal memuat presensi');
     let html='<div class="card"><div class="card-header"><h1 style="font-size:15px">Grafik Nilai</h1></div><div class="card-content"><div class="chart-box"><canvas id="chartNilai"></canvas></div></div></div>';
     html+='<div class="card"><div class="card-header"><h1 style="font-size:15px">Grafik Presensi</h1></div><div class="card-content"><div class="chart-box"><canvas id="chartPresensi"></canvas></div></div></div>';
     html+='<div class="card"><div class="card-header"><h1 style="font-size:15px">Rekap Nilai</h1></div><div class="card-content">';
@@ -448,14 +480,13 @@ async function loadChat(c){
   try{
     const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/chat',{headers:hdr()});
     const d=await r.json();if(!r.ok)throw new Error(d.error);
-    const uid=JSON.parse(atob(state.token.split('.')[1])).sub;
     let html='<div class="card"><div class="card-content"><div class="chat-messages" id="chatMsgs">';
     if(Array.isArray(d)&&d.length){
-      html+=d.map(m=>'<div class="chat-msg '+(m.pengirimUserId===uid?'sent':'received')+'">'+esc(m.isi)+'</div>').join('');
+      html+=d.map(m=>'<div class="chat-msg '+(m.isMine?'sent':'received')+'">'+esc(m.isi)+'</div>').join('');
     }else{
       html+='<div class="empty-state">Mulai chat dengan wali kelas</div>';
     }
-  html+='</div><div class="chat-input-wrap"><input class="input" id="chatInput" placeholder="Ketik pesan..." onkeydown="if(event.key===&quot;Enter&quot;)sendChat()"><button class="btn btn-primary" onclick="sendChat()">Kirim</button></div></div></div>';
+  html+='</div><div class="chat-input-wrap"><input class="input" id="chatInput" placeholder="Ketik pesan..."><button class="btn btn-primary" data-action="send-chat">Kirim</button></div></div></div>';
     c.innerHTML=html;
     const el=document.getElementById('chatMsgs');if(el)el.scrollTop=el.scrollHeight;
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
@@ -466,12 +497,12 @@ async function sendChat(){
   const isi=input?input.value.trim():'';
   if(!isi)return;
   input.value='';
-  const uid=JSON.parse(atob(state.token.split('.')[1])).sub;
   const msgs=document.getElementById('chatMsgs');
   if(msgs){msgs.innerHTML+='<div class="chat-msg sent">'+esc(isi)+'</div>';msgs.scrollTop=msgs.scrollHeight}
   try{
-    await fetch(API+'/orang-tua/anak/'+state.anakId+'/chat',{method:'POST',headers:{...hdr(),'Content-Type':'application/json'},body:JSON.stringify({isi})});
-  }catch(e){}
+    const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/chat',{method:'POST',headers:{...hdr(),'Content-Type':'application/json'},body:JSON.stringify({isi})});
+    const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Pesan gagal dikirim');
+  }catch(e){if(input)input.value=isi;alert(e.message||'Pesan gagal dikirim')}
 }
 
 async function loadBuku(c){
@@ -479,16 +510,17 @@ async function loadBuku(c){
     const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/peminjaman',{headers:hdr()});
     const d=await r.json();if(!r.ok)throw new Error(d.error);
     if(!Array.isArray(d)||!d.length){c.innerHTML='<div class="empty-state">Tidak ada peminjaman buku</div>';return}
-    c.innerHTML='<div class="table-wrap"><table class="table"><thead><tr><th>Judul</th><th>Tgl Pinjam</th><th>Deadline</th><th>Status</th></tr></thead><tbody>'+
+    c.innerHTML='<div class="table-wrap"><table class="table"><thead><tr><th>Judul</th><th>Tgl Pinjam</th><th>Status</th></tr></thead><tbody>'+
     d.map(p=>{
       const cls=p.status==='Dipinjam'?'badge-warning':'badge-success';
-      return'<tr><td>'+esc(p.buku?.judul||'-')+'</td><td>'+String(p.tanggalPinjam||'').slice(0,10)+'</td><td>'+String(p.tanggalJatuhTempo||'').slice(0,10)+'</td><td><span class="badge '+cls+'">'+esc(p.status)+'</span></td></tr>'
+      return'<tr><td>'+esc(p.buku?.judul||'-')+'</td><td>'+String(p.tanggalPinjam||'').slice(0,10)+'</td><td><span class="badge '+cls+'">'+esc(p.status)+'</span></td></tr>'
     }).join('')+
     '</tbody></table></div>';
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
 }
 
-function doLogout(){clearIdentityPreview();state.token='';resetTurnstile();hide(document.getElementById('portalCard'));show(document.getElementById('loginCard'))}
+ async function revokePortalSession(token){try{if(token)await fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+token},credentials:'same-origin'})}catch(e){}}
+ async function doLogout(){const token=state.token;clearIdentityPreview();state.token='';state.anakId='';state.anakData=null;resetTurnstile();hide(document.getElementById('portalCard'));show(document.getElementById('loginCard'));await revokePortalSession(token)}
 function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;show(e)}
 function hideErr(id){document.getElementById(id).classList.remove('show')}
 </script>

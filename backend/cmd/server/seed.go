@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -238,7 +239,7 @@ func (s *Server) seedDummy() (string, error) {
 		pd := PesertaDidik{
 			Nama: sd.nama, JenisKelamin: sd.jk, NIS: sd.nis, NISN: sd.nisn, NIK: sd.nik,
 			TanggalLahir: timePtr(time.Date(2010+int(sd.nisn[0]-'0'), time.Month(1+int(sd.nisn[1]-'0')), 1+int(sd.nisn[2]-'0'), 0, 0, 0, 0, time.UTC)),
-			KelasID: kelasIDs[sd.kelas], PokjarID: pokjars["Pokjar Tunas Ilmu Pusat"], OrangTuaID: ot.ID,
+			KelasID:      kelasIDs[sd.kelas], PokjarID: pokjars["Pokjar Tunas Ilmu Pusat"], OrangTuaID: ot.ID,
 			ProgramID: strPtr(programs[sd.program]), Status: "aktif",
 		}
 		s.db.Create(&pd)
@@ -307,7 +308,10 @@ func (s *Server) seedDummy() (string, error) {
 
 	// --- Modul C: Tugas + PengumpulanTugas (dinilai agar TUGAS source ada data NA) ---
 	// Ensure uploads dir exists for any optional lampiran (not strictly needed; lampiran nullable).
-	_ = os.MkdirAll("./uploads/tugas", 0o755)
+	tugasDir := filepath.Join(uploadsDir(), "tugas")
+	_ = os.MkdirAll(tugasDir, 0o700)
+	_ = os.Chmod(uploadsDir(), 0o700)
+	_ = os.Chmod(tugasDir, 0o700)
 	tugasMat := Tugas{MapelID: mapelIDs["Matematika"], KelasID: kelas7A, Judul: "Latihan Bilangan Bulat", Deskripsi: "Kerjakan soal halaman 12", Deadline: time.Date(2025, 9, 20, 23, 59, 0, 0, time.UTC), Semester: "Ganjil", BolehUpload: true, DibuatOlehUserID: userIDs["guru1"], ModulID: strPtr(modulIDs["Modul 1: Bilangan Bulat"])}
 	s.db.Create(&tugasMat)
 	tugasBindo := Tugas{MapelID: mapelIDs["Bahasa Indonesia"], KelasID: kelas8B, Judul: "Tulis Teks Narasi", Deskripsi: "Tulis narasi 200 kata", Deadline: time.Date(2025, 9, 25, 23, 59, 0, 0, time.UTC), Semester: "Ganjil", BolehUpload: true, DibuatOlehUserID: userIDs["guru2"]}
@@ -318,7 +322,10 @@ func (s *Server) seedDummy() (string, error) {
 	}
 
 	// --- Modul E: Materi + KomentarMateri (FilePath required; write placeholder file) ---
-	_ = os.MkdirAll("./uploads/materi", 0o755)
+	materiDir := filepath.Join(uploadsDir(), "materi")
+	_ = os.MkdirAll(materiDir, 0o700)
+	_ = os.Chmod(uploadsDir(), 0o700)
+	_ = os.Chmod(materiDir, 0o700)
 	materiPaths := []string{}
 	for _, mt := range []struct {
 		mapel, judul, kelas, modul string
@@ -328,7 +335,7 @@ func (s *Server) seedDummy() (string, error) {
 	} {
 		fname := "dummy-" + uuid.NewString() + ".txt"
 		rel := filepath.ToSlash(filepath.Join("uploads", "materi", fname))
-		_ = os.WriteFile("./"+rel, []byte("Konten materi dummy untuk "+mt.judul), 0o644)
+		_ = os.WriteFile(filepath.Join(uploadsDir(), filepath.FromSlash(strings.TrimPrefix(rel, "uploads/"))), []byte("Konten materi dummy untuk "+mt.judul), 0o640)
 		materiPaths = append(materiPaths, rel)
 		m := Materi{MapelID: mapelIDs[mt.mapel], KelasID: kelasIDs[mt.kelas], Judul: mt.judul, Deskripsi: "Materi pembelajaran " + mt.judul, FilePath: rel, Tipe: ".txt", Ukuran: 64, Semester: "Ganjil", DibuatOlehUserID: userIDs["guru1"], ModulID: strPtr(modulIDs[mt.modul])}
 		s.db.Create(&m)
@@ -502,6 +509,9 @@ func (s *Server) seedDummy() (string, error) {
 
 // seedDummyHandler is the admin-only endpoint that triggers seedDummy.
 func (s *Server) seedDummyHandler(c *fiber.Ctx) error {
+	if s.cfg.Env == "production" {
+		return fiber.NewError(404, "endpoint tidak tersedia di production")
+	}
 	if c.Locals("role") != "admin" {
 		return fiber.NewError(403, "admin access required")
 	}

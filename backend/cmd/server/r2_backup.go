@@ -30,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 const r2ArchiveVersion = 1
@@ -127,6 +128,17 @@ func r2Timeout() time.Duration {
 		return 2 * time.Minute
 	}
 	return v
+}
+
+func backupArchiveLimit() int64 {
+	mb, err := strconv.ParseInt(strings.TrimSpace(env("BACKUP_MAX_ARCHIVE_MB", "4096")), 10, 64)
+	if err != nil || mb < 512 {
+		mb = 4096
+	}
+	if mb > 32768 {
+		mb = 32768
+	}
+	return mb * 1024 * 1024
 }
 
 func r2Client(ctx context.Context) (*s3.Client, error) {
@@ -228,9 +240,14 @@ func (s *Server) createR2Archive(workDir string) (string, r2Manifest, string, in
 	gz := gzip.NewWriter(out)
 	tw := tar.NewWriter(gz)
 	manifest := r2Manifest{Version: r2ArchiveVersion, CreatedAt: time.Now().UTC(), Dialect: dialect(), Database: dbName}
+	var archiveBytes int64
 	closeWithError := func(e error) error { _ = tw.Close(); _ = gz.Close(); _ = out.Close(); return e }
 	if err := addArchiveFile(tw, dbPath, dbName, &manifest.Files); err != nil {
 		return "", r2Manifest{}, "", 0, closeWithError(err)
+	}
+	archiveBytes = manifest.Files[len(manifest.Files)-1].Size
+	if archiveBytes > backupArchiveLimit() {
+		return "", r2Manifest{}, "", 0, closeWithError(errors.New("ukuran database melebihi batas arsip backup"))
 	}
 	var paths []string
 	root := uploadsDir()
@@ -259,6 +276,10 @@ func (s *Server) createR2Archive(workDir string) (string, r2Manifest, string, in
 		}
 		if err := addArchiveFile(tw, path, filepath.ToSlash(filepath.Join("uploads", rel)), &manifest.Files); err != nil {
 			return "", r2Manifest{}, "", 0, closeWithError(err)
+		}
+		archiveBytes += manifest.Files[len(manifest.Files)-1].Size
+		if archiveBytes > backupArchiveLimit() {
+			return "", r2Manifest{}, "", 0, closeWithError(errors.New("ukuran data melebihi batas arsip backup"))
 		}
 	}
 	manifestJSON, err := json.Marshal(manifest)
@@ -308,7 +329,7 @@ func (s *Server) uploadR2Archive(ctx context.Context, path string, kind string) 
 	return key, err
 }
 
-func newUUID() string { return strings.ReplaceAll(fmt.Sprintf("%d", time.Now().UnixNano()), "-", "") }
+func newUUID() string { return uuid.NewString() }
 
 func (s *Server) updateR2Job(job *R2BackupJob, fields map[string]interface{}) {
 	_ = s.db.Model(job).Updates(fields).Error
@@ -341,6 +362,10 @@ func (s *Server) runR2Backup(job *R2BackupJob) {
 	now := time.Now()
 	job.Status = "running"
 	s.updateR2Job(job, map[string]interface{}{"status": "running", "phase": "archiving", "started_at": &now, "error": ""})
+	if err := ensureBackupDir(); err != nil {
+		s.finishR2Job(job, err)
+		return
+	}
 	work, err := os.MkdirTemp(backupDir(), "r2-backup-*")
 	if err == nil {
 		defer os.RemoveAll(work)
@@ -394,7 +419,24 @@ func (s *Server) listR2Archives(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(503, "R2 belum siap")
 	}
-	out, err := client.ListObjectsV2(c.Context(), &s3.ListObjectsV2Input{Bucket: aws.String(os.Getenv("BACKUP_R2_BUCKET")), Prefix: aws.String(r2ArchivePrefix())})
+	pageSize := int32(50)
+	if raw := strings.TrimSpace(c.Query("pageSize")); raw != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 1 && parsed <= 100 {
+			pageSize = int32(parsed)
+		}
+	}
+	input := &s3.ListObjectsV2Input{Bucket: aws.String(os.Getenv("BACKUP_R2_BUCKET")), Prefix: aws.String(r2ArchivePrefix()), MaxKeys: aws.Int32(pageSize)}
+	if pageToken := strings.TrimSpace(c.Query("pageToken")); pageToken != "" {
+		if len(pageToken) > 2048 {
+			return fiber.NewError(400, "page token tidak valid")
+		}
+		input.ContinuationToken = aws.String(pageToken)
+	}
+	paginator := s3.NewListObjectsV2Paginator(client, input)
+	if !paginator.HasMorePages() {
+		return c.JSON(fiber.Map{"archives": []r2ArchiveInfo{}})
+	}
+	out, err := paginator.NextPage(c.Context())
 	if err != nil {
 		return fiber.NewError(502, "daftar backup R2 tidak dapat dimuat")
 	}
@@ -405,11 +447,19 @@ func (s *Server) listR2Archives(c *fiber.Ctx) error {
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
-	return c.JSON(fiber.Map{"archives": items})
+	return c.JSON(fiber.Map{"archives": items, "nextPageToken": aws.ToString(out.NextContinuationToken)})
 }
 
 func (s *Server) r2Status(c *fiber.Ctx) error {
-	status := fiber.Map{"enabled": r2Enabled(), "prefix": r2Prefix(), "retentionDays": r2RetentionDays(), "schedule": "02:00 WIB, setiap 72 jam", "maintenance": s.r2.maintenance.Load()}
+	offsiteConfigured := strings.TrimSpace(os.Getenv("BACKUP_OFFSITE_URL")) != ""
+	_, offsiteKeyErr := deriveBackupKey(os.Getenv("BACKUP_ENCRYPTION_KEY"))
+	offsiteKeyOK := offsiteKeyErr == nil
+	status := fiber.Map{
+		"enabled": r2Enabled(), "prefix": r2Prefix(), "retentionDays": r2RetentionDays(),
+		"schedule": "02:00 WIB, setiap 72 jam", "maintenance": s.r2.maintenance.Load(),
+		"offsiteConfigured": offsiteConfigured, "offsiteEncrypted": !offsiteConfigured || offsiteKeyOK,
+		"offsiteTransport": "HTTP gateway (Google Drive / S3-compatible)",
+	}
 	var last R2BackupJob
 	if s.db.Where("kind = ? AND status = ?", "scheduled", "succeeded").Order("finished_at desc").First(&last).Error == nil && last.FinishedAt != nil {
 		age := time.Since(*last.FinishedAt)
@@ -512,6 +562,9 @@ func (s *Server) downloadR2Object(ctx context.Context, key, dest string) error {
 		return err
 	}
 	defer obj.Body.Close()
+	if obj.ContentLength != nil && *obj.ContentLength > backupArchiveLimit() {
+		return fmt.Errorf("objek backup melebihi batas arsip yang diizinkan")
+	}
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
@@ -535,6 +588,10 @@ func extractR2Archive(tarPath, dest string) (r2Manifest, error) {
 	tr := tar.NewReader(gz)
 	var manifest r2Manifest
 	found := false
+	var extractedBytes int64
+	const maxArchiveFiles = 100000
+	fileCount := 0
+	seenArchivePaths := make(map[string]struct{})
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -547,12 +604,21 @@ func extractR2Archive(tarPath, dest string) (r2Manifest, error) {
 		if err != nil {
 			return r2Manifest{}, err
 		}
+		if _, exists := seenArchivePaths[name]; exists {
+			return r2Manifest{}, errors.New("arsip memiliki path duplikat")
+		}
+		seenArchivePaths[name] = struct{}{}
 		if h.Typeflag != tar.TypeReg {
 			return r2Manifest{}, errors.New("arsip berisi tipe file yang tidak diizinkan")
 		}
-		if h.Size < 0 || h.Size > int64(backupUploadLimit())*4 {
+		fileCount++
+		if fileCount > maxArchiveFiles {
+			return r2Manifest{}, errors.New("arsip memiliki terlalu banyak file")
+		}
+		if h.Size < 0 || h.Size > backupArchiveLimit() || extractedBytes > backupArchiveLimit()-h.Size {
 			return r2Manifest{}, errors.New("ukuran file arsip tidak valid")
 		}
+		extractedBytes += h.Size
 		if name == "manifest.json" {
 			b, e := io.ReadAll(io.LimitReader(tr, h.Size+1))
 			if e != nil {
@@ -590,17 +656,39 @@ func extractR2Archive(tarPath, dest string) (r2Manifest, error) {
 			return r2Manifest{}, closeErr
 		}
 	}
-	if !found || manifest.Version != r2ArchiveVersion || manifest.Database == "" {
+	expectedDatabase := "database.sql"
+	if manifest.Dialect == "sqlite" {
+		expectedDatabase = "database.db"
+	}
+	if !found || manifest.Version != r2ArchiveVersion || manifest.Database != expectedDatabase {
 		return r2Manifest{}, errors.New("manifest backup tidak valid")
 	}
+	if len(manifest.Files) > maxArchiveFiles {
+		return r2Manifest{}, errors.New("manifest backup memiliki terlalu banyak file")
+	}
+	manifestPaths := make(map[string]struct{}, len(manifest.Files))
 	for _, item := range manifest.Files {
 		p, e := safeArchivePath(item.Path)
 		if e != nil {
 			return r2Manifest{}, e
 		}
+		if p == "manifest.json" {
+			return r2Manifest{}, errors.New("manifest backup tidak boleh menunjuk ke dirinya sendiri")
+		}
+		if _, exists := manifestPaths[p]; exists {
+			return r2Manifest{}, errors.New("manifest backup memiliki path duplikat")
+		}
+		manifestPaths[p] = struct{}{}
 		checksum, size, e := sha256File(filepath.Join(dest, filepath.FromSlash(p)))
 		if e != nil || size != item.Size || !strings.EqualFold(checksum, item.SHA256) {
 			return r2Manifest{}, errors.New("integritas isi backup gagal")
+		}
+	}
+	for p := range seenArchivePaths {
+		if p != "manifest.json" {
+			if _, listed := manifestPaths[p]; !listed {
+				return r2Manifest{}, errors.New("arsip berisi file yang tidak tercatat di manifest")
+			}
 		}
 	}
 	return manifest, nil
@@ -646,11 +734,26 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 			s.r2.maintenance.Store(false)
 		}
 	}()
+	if err := ensureBackupDir(); err != nil {
+		s.finishR2Job(job, err)
+		return
+	}
 	work := filepath.Join(backupDir(), "r2-restore-"+job.ID)
 	if err := os.MkdirAll(work, 0o700); err != nil {
 		s.finishR2Job(job, err)
 		return
 	}
+	// Before the journal is durable, this directory is only a temporary
+	// decrypt/extract workspace. Remove it on every validation or staging
+	// failure so encrypted backups and extracted student files do not
+	// accumulate on the persistent backup volume. Once the journal is written,
+	// recovery owns the directory and it must survive a crash.
+	journalDurable := false
+	defer func() {
+		if !journalDurable {
+			_ = os.RemoveAll(work)
+		}
+	}()
 	enc := filepath.Join(work, "remote.tar.gz.enc")
 	plain := filepath.Join(work, "remote.tar.gz")
 	extracted := filepath.Join(work, "extracted")
@@ -687,6 +790,7 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 		s.finishR2Job(job, err)
 		return
 	}
+	journalDurable = true
 	job.SafetyObjectKey = safetyKey
 	s.updateR2Job(job, map[string]interface{}{"safety_object_key": safetyKey, "phase": "safety-created"})
 	if isSQLite() {
@@ -747,7 +851,14 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 		if !isSQLite() {
 			if rollbackErr := restorePostgresSafety(journal); rollbackErr == nil {
 				if exists(journalUploadsOld(journal)) {
-					_ = os.RemoveAll(uploadsDir())
+					if exists(uploadsDir()) {
+						failedUploads := fmt.Sprintf("%s.restore-failed-%d", uploadsDir(), time.Now().UnixNano())
+						if renameErr := os.Rename(uploadsDir(), failedUploads); renameErr != nil {
+							_ = updateR2RestorePhase(journal, "rollback-failed", renameErr)
+							s.finishR2Job(job, renameErr)
+							return
+						}
+					}
 					_ = os.Rename(journalUploadsOld(journal), uploadsDir())
 				}
 				_ = updateR2RestorePhase(journal, "rolled-back", nil)

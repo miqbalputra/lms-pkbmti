@@ -1,25 +1,6 @@
 import type React from "react";
-import { createContext, useContext, useState, useEffect } from "react";
-
-type SidebarContextType = {
-  isExpanded: boolean;
-  isMobileOpen: boolean;
-  isHovered: boolean;
-  toggleSidebar: () => void;
-  toggleMobileSidebar: () => void;
-  setMobileOpen: (open: boolean) => void;
-  setIsHovered: (isHovered: boolean) => void;
-};
-
-const SidebarContext = createContext<SidebarContextType | undefined>(undefined);
-
-export const useSidebar = () => {
-  const context = useContext(SidebarContext);
-  if (!context) {
-    throw new Error("useSidebar must be used within a SidebarProvider");
-  }
-  return context;
-};
+import { useState, useEffect } from 'react'
+import { SidebarContext } from './sidebar-context'
 
 export const SidebarProvider: React.FC<{ children: React.ReactNode }> = ({
   children,

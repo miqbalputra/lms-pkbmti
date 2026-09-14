@@ -151,6 +151,84 @@ func TestRefreshTokenRotatesAndRejectsReuse(t *testing.T) {
 	}
 }
 
+func TestLogoutRevokesRefreshTokenAndExpiresScopedCookies(t *testing.T) {
+	s := testServer(t)
+	hash, err := bcrypt.GenerateFromPassword([]byte("Password123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := User{Username: "logout-user", PasswordHash: string(hash), Role: "admin", IsActive: true}
+	if err := s.db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	app := fiber.New()
+	app.Post("/login", s.login)
+	app.Post("/refresh", s.refresh)
+	app.Post("/logout", s.logout)
+	loginRequest := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(`{"login":"logout-user","password":"Password123"}`))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginResponse, err := app.Test(loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginResponse.StatusCode != http.StatusOK {
+		loginResponse.Body.Close()
+		t.Fatalf("expected login 200, got %d", loginResponse.StatusCode)
+	}
+	cookie := strings.Split(loginResponse.Header.Get("Set-Cookie"), ";")[0]
+	loginResponse.Body.Close()
+	if cookie == "" {
+		t.Fatal("login did not issue a refresh cookie")
+	}
+
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	logoutRequest.Header.Set("Cookie", cookie)
+	logoutResponse, err := app.Test(logoutRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logoutBody := readAndClose(t, logoutResponse)
+	if logoutResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected logout 204, got %d body=%s", logoutResponse.StatusCode, logoutBody)
+	}
+	setCookies := strings.Join(logoutResponse.Header.Values("Set-Cookie"), "\n")
+	if !strings.Contains(strings.ToLower(setCookies), "path=/api/auth") {
+		t.Fatalf("logout did not expire the scoped refresh cookie: %q", setCookies)
+	}
+
+	refreshRequest := httptest.NewRequest(http.MethodPost, "/refresh", nil)
+	refreshRequest.Header.Set("Cookie", cookie)
+	refreshResponse, err := app.Test(refreshRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshBody := readAndClose(t, refreshResponse)
+	if refreshResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked refresh cookie remained usable: status=%d body=%s", refreshResponse.StatusCode, refreshBody)
+	}
+}
+
+func TestOAuthStateCookieExpirationKeepsScopedPath(t *testing.T) {
+	s := testServer(t)
+	app := fiber.New()
+	app.Get("/clear-oauth", func(c *fiber.Ctx) error {
+		s.expireOAuthStateCookie(c)
+		return nil
+	})
+	res, err := app.Test(httptest.NewRequest(http.MethodGet, "/clear-oauth", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAndClose(t, res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected oauth cookie expiration handler to complete, got %d body=%s", res.StatusCode, body)
+	}
+	cookie := strings.ToLower(strings.Join(res.Header.Values("Set-Cookie"), "\n"))
+	if !strings.Contains(cookie, "oauth_state=") || !strings.Contains(cookie, "path=/api/auth") {
+		t.Fatalf("oauth state cookie was not expired on its original path: %q", cookie)
+	}
+}
+
 func TestManagementReadAndWriteGuards(t *testing.T) {
 	s := testServer(t)
 	app := fiber.New()
@@ -171,6 +249,77 @@ func TestManagementReadAndWriteGuards(t *testing.T) {
 	defer write.Body.Close()
 	if write.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected write 403, got %d", write.StatusCode)
+	}
+}
+
+func TestUpdateUserProtectsTutorLinksAndClearsIrrelevantRelations(t *testing.T) {
+	s := testServer(t)
+	if err := s.db.AutoMigrate(&Tutor{}, &OrangTua{}); err != nil {
+		t.Fatal(err)
+	}
+	admin := User{Username: "link-admin", Email: "link-admin@example.test", Role: "admin", IsActive: true}
+	if err := s.db.Create(&admin).Error; err != nil {
+		t.Fatal(err)
+	}
+	tutorA := Tutor{Nama: "Tutor A", JenisKelamin: "L"}
+	tutorB := Tutor{Nama: "Tutor B", JenisKelamin: "P"}
+	if err := s.db.Create(&tutorA).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&tutorB).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherUser := User{Username: "other-guru", Email: "other-guru@example.test", Role: "guru", TutorID: &tutorB.ID, IsActive: true}
+	if err := s.db.Create(&otherUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	target := User{Username: "target-guru", Email: "target-guru@example.test", Role: "guru", TutorID: &tutorA.ID, IsActive: true}
+	if err := s.db.Create(&target).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Model(&Tutor{}).Where("id = ?", tutorA.ID).Update("user_id", target.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	app := fiber.New()
+	app.Put("/users/:id", func(c *fiber.Ctx) error {
+		c.Locals("userID", admin.ID)
+		return s.updateUser(c)
+	})
+	duplicate := httptest.NewRequest(http.MethodPut, "/users/"+target.ID, strings.NewReader(fmt.Sprintf(`{"username":"target-guru","email":"target-guru@example.test","role":"guru","tutorId":"%s","isActive":true}`, tutorB.ID)))
+	duplicate.Header.Set("Content-Type", "application/json")
+	duplicateResponse, err := app.Test(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateResponse.Body.Close()
+	if duplicateResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected duplicate tutor link to be rejected, got %d", duplicateResponse.StatusCode)
+	}
+
+	demote := httptest.NewRequest(http.MethodPut, "/users/"+target.ID, strings.NewReader(`{"username":"target-staff","email":"target-staff@example.test","role":"kepala_sekolah","isActive":true}`))
+	demote.Header.Set("Content-Type", "application/json")
+	demoteResponse, err := app.Test(demote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	demoteResponse.Body.Close()
+	if demoteResponse.StatusCode != http.StatusOK {
+		t.Fatalf("expected demotion to succeed, got %d", demoteResponse.StatusCode)
+	}
+	var updated User
+	if err := s.db.First(&updated, "id = ?", target.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.TutorID != nil || updated.OrangTuaID != nil {
+		t.Fatalf("expected irrelevant links cleared after role change, got tutor=%v parent=%v", updated.TutorID, updated.OrangTuaID)
+	}
+	var detached Tutor
+	if err := s.db.First(&detached, "id = ?", tutorA.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if detached.UserID != nil {
+		t.Fatalf("expected previous tutor reverse link cleared, got %v", *detached.UserID)
 	}
 }
 

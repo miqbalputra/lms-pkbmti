@@ -25,22 +25,38 @@
 3. Set name: `pkbm-db`
 4. Note the internal connection details
 
+The production image runs the application as an unprivileged `lms` user
+(UID/GID 10001). On startup, `deploy/entrypoint.sh` transfers ownership of the
+existing `backupdata` and `uploadsdata` volumes before dropping privileges. This
+is an ownership migration only: it does not delete, rename, or rewrite data.
+Never remove those volumes during a redeploy.
+
+Until an explicit tenant-boundary migration is completed, one production stack
+and one PostgreSQL database must serve one school/PKBM. The schema intentionally
+retains its existing single-school data model; do not place multiple schools in
+the same database and rely on UI filtering. Serving many schools is supported
+through isolated stacks/databases, or requires a separately planned tenant
+migration with row-level isolation and data backfill.
+
 ## 4. Configure Environment Variables
 
 Add these environment variables in your application:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `APP_ENV` | Environment | `production` |
+| `APP_ENV` | Environment (`development`, `test`, or `production`) | `production` |
 | `PORT` | Server port | `8080` |
-| `DATABASE_URL` | PostgreSQL connection | `postgres://user:pass@db-host:5432/pkbm` |
+| `DATABASE_URL` | PostgreSQL connection; production wajib TLS eksplisit | `postgres://user:pass@db-host:5432/pkbm?sslmode=require` |
 | `DB_MAX_OPEN_CONNS` | Batas koneksi database aktif | `25` |
 | `DB_MAX_IDLE_CONNS` | Batas koneksi idle database | `10` |
 | `JWT_ACCESS_SECRET` | Random 32+ chars | `your-secret-key-here` |
 | `JWT_REFRESH_SECRET` | Random 32+ chars | `another-secret-key` |
+| `JWT_ACCESS_TTL` | TTL access token (maks. 24 jam) | `15m` |
+| `JWT_REFRESH_TTL` | TTL refresh token (lebih lama dari access, maks. 365 hari) | `168h` |
 | `ADMIN_DEFAULT_PASSWORD` | Password admin saat first start | Wajib kuat, minimal 12 karakter |
 | `CORS_ALLOWED_ORIGINS` | Your domain | `https://lms.example.com` |
 | `COOKIE_DOMAIN` | Your domain | `lms.example.com` |
+| `PUBLIC_BASE_URL` | Origin publik untuk QR/link verifikasi | `https://lms.example.com` |
 | `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret | Required in production |
 | `TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key for public pages | Required in production |
 | `VITE_TURNSTILE_SITE_KEY` | Same public site key for the main login build | Required in production |
@@ -49,6 +65,7 @@ Add these environment variables in your application:
 | `BACKUP_RETENTION` | Jumlah backup otomatis yang disimpan | `14` |
 | `BACKUP_AUTO_RESTART` | Restart otomatis setelah upload restore | `true` |
 | `BACKUP_MAX_UPLOAD_MB` | Batas upload file restore | `512` |
+| `BACKUP_MAX_ARCHIVE_MB` | Batas total data hasil ekstraksi arsip R2 | `4096` |
 | `BACKUP_API_KEY` | Key untuk download backup via n8n | Optional |
 | `N8N_PRESENSI_API_KEY` | API key khusus workflow pengingat presensi tutor | Wajib jika workflow n8n presensi digunakan |
 | `BACKUP_OFFSITE_URL` | Endpoint S3 presigned/n8n untuk arsip terenkripsi | Optional |

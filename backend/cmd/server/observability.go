@@ -66,6 +66,17 @@ func (s *Server) healthPayload() (fiber.Map, bool) {
 		"r2Configured":           !r2Enabled() || r2ConfigError() == nil,
 		"maintenance":            s.r2.maintenance.Load(),
 	}
+	if strings.TrimSpace(os.Getenv("BACKUP_CRON")) != "" {
+		backup["localConfigured"] = true
+		if last, err := latestAutomaticBackupAt(); err == nil && !last.IsZero() {
+			age := time.Since(last)
+			backup["lastLocalAutomaticAt"] = wibTimeFormat(last, time.RFC3339)
+			backup["localAgeHours"] = int64(age.Hours())
+			backup["localHealthy"] = age <= backupAlertMaxAge()
+		} else {
+			backup["localHealthy"] = false
+		}
+	}
 	if r2Enabled() {
 		var last R2BackupJob
 		if s.db.Where("kind = ? AND status = ?", "scheduled", "succeeded").Order("finished_at desc").First(&last).Error == nil && last.FinishedAt != nil {

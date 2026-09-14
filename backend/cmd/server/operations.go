@@ -32,8 +32,9 @@ type operationAlertState struct {
 }
 
 type operationNotifier struct {
-	mu   sync.Mutex
-	last map[string]time.Time
+	mu       sync.Mutex
+	last     map[string]time.Time
+	inFlight map[string]bool
 }
 
 func operationWebhookURL() string { return strings.TrimSpace(os.Getenv("OPERATIONS_WEBHOOK_URL")) }
@@ -80,7 +81,8 @@ func (s *Server) notifyOperation(event, fingerprint, message string, job *R2Back
 		return
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") ||
+		(env("APP_ENV", "development") == "production" && u.Scheme != "https") {
 		operationLog("operation_webhook_invalid", map[string]any{"operation": event})
 		return
 	}
@@ -89,28 +91,41 @@ func (s *Server) notifyOperation(event, fingerprint, message string, job *R2Back
 	if s.notifier.last == nil {
 		s.notifier.last = make(map[string]time.Time)
 	}
+	if s.notifier.inFlight == nil {
+		s.notifier.inFlight = make(map[string]bool)
+	}
 	if previous, ok := s.notifier.last[fingerprint]; ok && now.Sub(previous) < operationAlertCooldown {
 		s.notifier.mu.Unlock()
 		return
 	}
-	s.notifier.last[fingerprint] = now
+	// Coalesce concurrent checks, but do not record the cooldown yet. The
+	// cooldown represents a delivered notification, not an attempted request.
+	if s.notifier.inFlight[fingerprint] {
+		s.notifier.mu.Unlock()
+		return
+	}
+	s.notifier.inFlight[fingerprint] = true
 	s.notifier.mu.Unlock()
 	if s.db != nil {
 		var state operationAlertState
 		if err := s.db.Where("fingerprint = ?", fingerprint).First(&state).Error; err == nil && state.LastSentAt != nil && now.Sub(*state.LastSentAt) < operationAlertCooldown {
+			s.notifier.mu.Lock()
+			delete(s.notifier.inFlight, fingerprint)
+			s.notifier.mu.Unlock()
 			return
-		}
-		if state.ID == "" {
-			state = operationAlertState{Fingerprint: fingerprint, Event: event, LastSentAt: &now}
-			if err := s.db.Create(&state).Error; err != nil {
-				operationLog("operation_alert_state_failed", map[string]any{"operation": event})
-			}
-		} else {
-			s.db.Model(&state).Updates(map[string]any{"event": event, "last_sent_at": &now})
 		}
 	}
 
 	go func() {
+		delivered := false
+		defer func() {
+			s.notifier.mu.Lock()
+			delete(s.notifier.inFlight, fingerprint)
+			if delivered {
+				s.notifier.last[fingerprint] = time.Now()
+			}
+			s.notifier.mu.Unlock()
+		}()
 		payload := map[string]any{
 			"event": event, "occurredAt": now.UTC().Format(time.RFC3339),
 			"application": "pkbm-lms", "message": message,
@@ -126,6 +141,7 @@ func (s *Server) notifyOperation(event, fingerprint, message string, job *R2Back
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
+			operationLog("operation_webhook_failed", map[string]any{"operation": event})
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -137,9 +153,26 @@ func (s *Server) notifyOperation(event, fingerprint, message string, job *R2Back
 		resp, err := (&http.Client{}).Do(req)
 		if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			operationLog("operation_webhook_failed", map[string]any{"operation": event})
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			return
 		}
 		if resp != nil {
 			_ = resp.Body.Close()
+		}
+		delivered = true
+		if s.db != nil {
+			sentAt := time.Now()
+			var state operationAlertState
+			if err := s.db.Where("fingerprint = ?", fingerprint).First(&state).Error; err != nil || state.ID == "" {
+				state = operationAlertState{Fingerprint: fingerprint, Event: event, LastSentAt: &sentAt}
+				if err := s.db.Create(&state).Error; err != nil {
+					operationLog("operation_alert_state_failed", map[string]any{"operation": event})
+				}
+			} else if err := s.db.Model(&state).Updates(map[string]any{"event": event, "last_sent_at": &sentAt}).Error; err != nil {
+				operationLog("operation_alert_state_failed", map[string]any{"operation": event})
+			}
 		}
 	}()
 }
@@ -156,6 +189,12 @@ func (s *Server) monitorBackupHealth() {
 			s.notifyOperation(event, event, message, nil)
 		}
 		previousHealth = &healthy
+		if strings.TrimSpace(os.Getenv("BACKUP_CRON")) != "" {
+			last, err := latestAutomaticBackupAt()
+			if err != nil || last.IsZero() || time.Since(last) > backupAlertMaxAge() {
+				s.notifyOperation("backup_stale_local", "backup_stale_local", "Backup lokal otomatis belum berhasil dalam rentang yang diizinkan.", nil)
+			}
+		}
 		if !r2Enabled() {
 			return
 		}

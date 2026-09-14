@@ -17,12 +17,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jung-kurt/gofpdf"
 	"github.com/robfig/cron/v3"
@@ -320,16 +322,31 @@ func (s *Server) routes(api fiber.Router) {
 	// Modul O/N — master Program & Fase (admin CRUD).
 	admin.Post("/program", func(c *fiber.Ctx) error { return create[Program](s, c, "program") })
 	admin.Put("/program/:id", func(c *fiber.Ctx) error { return update[Program](s, c, "program") })
-	admin.Delete("/program/:id", func(c *fiber.Ctx) error { return deleteRow[Program](s, c, "program") })
+	admin.Delete("/program/:id", func(c *fiber.Ctx) error {
+		return s.deleteReferenced(c, "program", &Program{},
+			deleteReference{&Kelas{}, "program_id", "kelas"},
+			deleteReference{&PesertaDidik{}, "program_id", "peserta didik"},
+			deleteReference{&Sertifikat{}, "program_id", "sertifikat"},
+		)
+	})
 	admin.Post("/fase", func(c *fiber.Ctx) error { return create[Fase](s, c, "fase") })
 	admin.Put("/fase/:id", func(c *fiber.Ctx) error { return update[Fase](s, c, "fase") })
-	admin.Delete("/fase/:id", func(c *fiber.Ctx) error { return deleteRow[Fase](s, c, "fase") })
+	admin.Delete("/fase/:id", func(c *fiber.Ctx) error {
+		return s.deleteReferenced(c, "fase", &Fase{},
+			deleteReference{&Kelas{}, "fase_id", "kelas"},
+			deleteReference{&RPP{}, "fase_id", "RPP"},
+		)
+	})
 	// Modul H — Sertifikat (terbit admin-only).
 	admin.Post("/sertifikat", s.createSertifikat)
 	// Modul S — Sumber Nilai (master) & bobot per mapel (admin CRUD).
 	admin.Post("/sumber-nilai", func(c *fiber.Ctx) error { return create[SumberNilai](s, c, "sumber_nilai") })
 	admin.Put("/sumber-nilai/:id", func(c *fiber.Ctx) error { return update[SumberNilai](s, c, "sumber_nilai") })
-	admin.Delete("/sumber-nilai/:id", func(c *fiber.Ctx) error { return deleteRow[SumberNilai](s, c, "sumber_nilai") })
+	admin.Delete("/sumber-nilai/:id", func(c *fiber.Ctx) error {
+		return s.deleteReferenced(c, "sumber nilai", &SumberNilai{},
+			deleteReference{&BobotSumberNilai{}, "sumber_id", "konfigurasi bobot"},
+		)
+	})
 	admin.Post("/bobot-sumber-nilai", s.upsertBobotSumberNilai)
 	admin.Delete("/bobot-sumber-nilai/:id", func(c *fiber.Ctx) error { return deleteRow[BobotSumberNilai](s, c, "bobot_sumber_nilai") })
 	// Modul L — Modul Pembelajaran + capaian (admin CRUD).
@@ -339,7 +356,7 @@ func (s *Server) routes(api fiber.Router) {
 	admin.Post("/modul-belajar/:id/outcomes", s.createCapaianModul)
 	admin.Put("/modul-belajar/:id/outcomes/:oid", s.updateCapaianModul)
 	admin.Delete("/modul-belajar/:id/outcomes/:oid", s.deleteCapaianModul)
-	// Backup & restore (admin-only writes). n8n uses the GET /backup/download
+	// Backup & restore (admin-only writes). n8n uses the GET /backup/offsite
 	// read endpoint (backupReadAuth) instead; these create/restore/delete a
 	// backup file and require a real admin session.
 	admin.Post("/backup", s.createBackupNow)
@@ -437,11 +454,55 @@ func get[T any](db *gorm.DB, c *fiber.Ctx) error {
 	}
 	return c.JSON(row)
 }
+
+// baseOf and setBase keep generic CRUD endpoints from accepting immutable
+// persistence fields supplied by a client. The models handled by the generic
+// helpers embed Base, but Go type parameters cannot express that embedding as
+// a constraint, so the small reflection bridge is preferable to duplicating
+// the CRUD handlers. Existing records keep their primary key and timestamps;
+// new records always receive a server-generated ID.
+func baseOf(value any) (Base, bool) {
+	v := reflect.ValueOf(value)
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return Base{}, false
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return Base{}, false
+	}
+	field := v.FieldByName("Base")
+	if !field.IsValid() || field.Type() != reflect.TypeOf(Base{}) || !field.CanInterface() {
+		return Base{}, false
+	}
+	return field.Interface().(Base), true
+}
+
+func setBase(value any, base Base) bool {
+	v := reflect.ValueOf(value)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return false
+	}
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		return false
+	}
+	field := v.FieldByName("Base")
+	if !field.IsValid() || field.Type() != reflect.TypeOf(Base{}) || !field.CanSet() {
+		return false
+	}
+	field.Set(reflect.ValueOf(base))
+	return true
+}
+
 func create[T any](s *Server, c *fiber.Ctx, resource string) error {
 	var row T
 	if e := c.BodyParser(&row); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	// Client-supplied id/createdAt/updatedAt must never control persistence.
+	setBase(&row, Base{})
 	if e := s.db.Create(&row).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}
@@ -454,8 +515,14 @@ func update[T any](s *Server, c *fiber.Ctx, resource string) error {
 	if e := s.db.First(&row, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
 	}
+	originalBase, hasBase := baseOf(&row)
 	if e := c.BodyParser(&row); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if hasBase {
+		// Preserve the row identity and audit timestamps even if JSON contains
+		// id, createdAt, or updatedAt fields.
+		setBase(&row, originalBase)
 	}
 	if e := s.db.Save(&row).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -473,8 +540,73 @@ func deleteRow[T any](s *Server, c *fiber.Ctx, resource string) error {
 	return c.SendStatus(204)
 }
 
+type deleteReference struct {
+	model  any
+	column string
+	label  string
+}
+
+func validateOptionalReference(tx *gorm.DB, reference *string, model any, label string) error {
+	if reference == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*reference)
+	if value == "" {
+		return nil
+	}
+	if err := tx.First(model, "id = ?", value).Error; err != nil {
+		return fiber.NewError(400, label+" tidak ditemukan")
+	}
+	*reference = value
+	return nil
+}
+
+// deleteReferenced prevents master records from being hard-deleted while
+// operational/history rows still point at them. SQLite deployments do not
+// reliably enforce foreign keys, so this invariant belongs in the service
+// layer as well as in the database schema.
+func (s *Server) deleteReferenced(c *fiber.Ctx, resource string, target any, refs ...deleteReference) error {
+	return s.deleteReferencedWithCleanup(c, resource, target, nil, refs...)
+}
+
+func (s *Server) deleteReferencedWithCleanup(c *fiber.Ctx, resource string, target any, cleanup func(*gorm.DB, string) error, refs ...deleteReference) error {
+	rid := strings.TrimSpace(id(c))
+	if rid == "" {
+		return fiber.NewError(400, "id wajib diisi")
+	}
+	uid := c.Locals("userID").(string)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var exists int64
+		if err := tx.Model(target).Where("id = ?", rid).Count(&exists).Error; err != nil {
+			return err
+		}
+		if exists == 0 {
+			return fiber.NewError(404, "record not found")
+		}
+		for _, ref := range refs {
+			var count int64
+			if err := tx.Model(ref.model).Where(ref.column+" = ?", rid).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return fiber.NewError(409, resource+" tidak dapat dihapus karena masih direferensikan oleh "+ref.label)
+			}
+		}
+		if cleanup != nil {
+			if err := cleanup(tx, rid); err != nil {
+				return err
+			}
+		}
+		if err := tx.Delete(target, "id = ?", rid).Error; err != nil {
+			return err
+		}
+		s.auditTx(tx, &uid, "delete", resource, rid)
+		return c.SendStatus(204)
+	})
+}
+
 // saveUpload reads an optional multipart file field, validates size+extension, and
-// stores it under ./uploads/<dir>/<uuid><ext>. Returns the relative path
+// stores it under UPLOADS_DIR/<dir>/<uuid><ext>. Returns the stable virtual path
 // "uploads/<dir>/<uuid><ext>" (or "" when the field is absent). There is no in-house
 // precedent for disk uploads — this is the reusable helper for modul C/E/K/P.
 func (s *Server) saveUpload(c *fiber.Ctx, field, dir string, maxBytes int64, exts []string) (string, error) {
@@ -496,25 +628,73 @@ func (s *Server) saveUpload(c *fiber.Ctx, field, dir string, maxBytes int64, ext
 	if !ok {
 		return "", fiber.NewError(400, fmt.Sprintf("ekstensi file %s tidak diizinkan", ext))
 	}
-	if err := os.MkdirAll("./uploads/"+dir, 0o755); err != nil {
+	// An extension alone is not a file-type check. Reject obvious renamed
+	// executables/scripts while keeping the existing allowed document formats.
+	if file, openErr := fh.Open(); openErr == nil {
+		header := make([]byte, 8)
+		n, readErr := io.ReadFull(file, header)
+		_ = file.Close()
+		if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
+			return "", fiber.NewError(400, "isi file tidak dapat dibaca")
+		}
+		if !uploadHeaderMatches(ext, header[:n]) {
+			return "", fiber.NewError(400, "isi file tidak cocok dengan ekstensi")
+		}
+	} else {
+		return "", fiber.NewError(400, "isi file tidak dapat dibaca")
+	}
+	uploadDir := filepath.Join(uploadsDir(), dir)
+	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
 		return "", fiber.NewError(500, "tidak dapat membuat direktori upload")
 	}
+	_ = os.Chmod(uploadsDir(), 0o700)
+	_ = os.Chmod(uploadDir, 0o700)
 	name := uuid.NewString() + ext
-	if err := c.SaveFile(fh, "./uploads/"+dir+"/"+name); err != nil {
+	target := filepath.Join(uploadDir, name)
+	if err := c.SaveFile(fh, target); err != nil {
+		_ = os.Remove(target)
 		return "", fiber.NewError(500, "tidak dapat menyimpan file")
 	}
 	return "uploads/" + dir + "/" + name, nil
 }
 
+func uploadHeaderMatches(ext string, header []byte) bool {
+	switch ext {
+	case ".pdf":
+		return bytes.HasPrefix(header, []byte("%PDF-"))
+	case ".png":
+		return bytes.HasPrefix(header, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	case ".jpg", ".jpeg":
+		return len(header) >= 3 && header[0] == 0xff && header[1] == 0xd8 && header[2] == 0xff
+	case ".zip", ".docx", ".xlsx", ".pptx":
+		return len(header) >= 4 && header[0] == 'P' && header[1] == 'K' && header[2] == 0x03 && header[3] == 0x04
+	case ".doc", ".xls":
+		return bytes.HasPrefix(header, []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1})
+	default:
+		return true
+	}
+}
+
+func safeUploadPath(relPath string) (string, bool) {
+	virtualRoot := filepath.Clean("uploads")
+	clean := filepath.Clean(filepath.FromSlash(relPath))
+	rel, err := filepath.Rel(virtualRoot, clean)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return filepath.Join(filepath.Clean(uploadsDir()), rel), true
+}
+
 // sendUpload streams a previously saved upload to the client. relPath is the value
 // stored by saveUpload ("uploads/<dir>/<file>"). Path traversal is guarded: only
-// paths under "uploads/" and free of ".." are accepted. Serve via scoped handlers
+// paths under the virtual "uploads/" root and free of ".." are accepted. Serve via scoped handlers
 // (auth) — do NOT expose /uploads as a public static route (files are sensitive).
 func (s *Server) sendUpload(c *fiber.Ctx, relPath string) error {
-	if relPath == "" || !strings.HasPrefix(relPath, "uploads/") || strings.Contains(relPath, "..") {
+	path, ok := safeUploadPath(relPath)
+	if !ok {
 		return fiber.NewError(404, "file tidak ditemukan")
 	}
-	return c.SendFile("./" + relPath)
+	return c.SendFile(path)
 }
 
 func (s *Server) crudTutor(r fiber.Router) {
@@ -526,7 +706,19 @@ func (s *Server) crudTutor(r fiber.Router) {
 	r.Get("/tutor/:id", func(c *fiber.Ctx) error { return get[Tutor](s.db, c) })
 	r.Post("/tutor", s.createTutor)
 	r.Put("/tutor/:id", s.updateTutor)
-	r.Delete("/tutor/:id", func(c *fiber.Ctx) error { return deleteRow[Tutor](s, c, "tutor") })
+	r.Delete("/tutor/:id", s.deleteTutor)
+}
+
+func (s *Server) deleteTutor(c *fiber.Ctx) error {
+	return s.deleteReferenced(c, "tutor", &Tutor{},
+		deleteReference{&User{}, "tutor_id", "akun pengguna"},
+		deleteReference{&Kelas{}, "wali_kelas_id", "kelas"},
+		deleteReference{&RiwayatWaliKelas{}, "tutor_id", "riwayat wali kelas"},
+		deleteReference{&PenugasanGuruMapel{}, "tutor_id", "penugasan guru"},
+		deleteReference{&JurnalMengajar{}, "tutor_id", "jurnal mengajar"},
+		deleteReference{&JurnalBatch{}, "tutor_id", "batch jurnal"},
+		deleteReference{&RPP{}, "tutor_id", "RPP"},
+	)
 }
 
 const sharedTutorAssignmentDocumentCode = "sk_penugasan_tutor"
@@ -741,8 +933,8 @@ func (s *Server) listTutorDocuments(c *fiber.Ctx) error {
 }
 
 func removeUpload(relPath string) {
-	if relPath != "" && strings.HasPrefix(relPath, "uploads/") && !strings.Contains(relPath, "..") {
-		_ = os.Remove("./" + relPath)
+	if path, ok := safeUploadPath(relPath); ok {
+		_ = os.Remove(path)
 	}
 }
 
@@ -962,9 +1154,12 @@ func (s *Server) extractSuratSiswaZip(zipPath string, targets map[string]Peserta
 		return nil, fiber.NewError(400, "file ZIP kosong")
 	}
 
-	if err := os.MkdirAll("./uploads/surat-siswa", 0o755); err != nil {
+	suratDir := filepath.Join(uploadsDir(), "surat-siswa")
+	if err := os.MkdirAll(suratDir, 0o700); err != nil {
 		return nil, fiber.NewError(500, "direktori surat tidak dapat dibuat")
 	}
+	_ = os.Chmod(uploadsDir(), 0o700)
+	_ = os.Chmod(suratDir, 0o700)
 	seen := make(map[string]bool)
 	created := make([]suratSiswaExtractedFile, 0, len(reader.File))
 	totalBytes := uint64(0)
@@ -1022,7 +1217,7 @@ func (s *Server) extractSuratSiswaZip(zipPath string, targets map[string]Peserta
 			return nil, fiber.NewError(400, fmt.Sprintf("file %s bukan PDF yang valid", name))
 		}
 		path := "uploads/surat-siswa/" + uuid.NewString() + ".pdf"
-		if err := os.WriteFile("./"+path, data, 0o640); err != nil {
+		if err := os.WriteFile(filepath.Join(suratDir, filepath.Base(path)), data, 0o640); err != nil {
 			cleanup()
 			return nil, fiber.NewError(500, "PDF hasil ekstraksi tidak dapat disimpan")
 		}
@@ -1199,13 +1394,25 @@ func (s *Server) crudOrangTua(r fiber.Router) {
 	r.Get("/orang-tua", func(c *fiber.Ctx) error { return list[OrangTua](s.db, c) })
 	r.Post("/orang-tua", func(c *fiber.Ctx) error { return create[OrangTua](s, c, "orang_tua") })
 	r.Put("/orang-tua/:id", func(c *fiber.Ctx) error { return update[OrangTua](s, c, "orang_tua") })
-	r.Delete("/orang-tua/:id", func(c *fiber.Ctx) error { return deleteRow[OrangTua](s, c, "orang_tua") })
+	r.Delete("/orang-tua/:id", s.deleteOrangTua)
+}
+func (s *Server) deleteOrangTua(c *fiber.Ctx) error {
+	return s.deleteReferenced(c, "orang tua", &OrangTua{},
+		deleteReference{&PesertaDidik{}, "orang_tua_id", "peserta didik"},
+		deleteReference{&User{}, "orang_tua_id", "akun pengguna"},
+	)
 }
 func (s *Server) crudPokjar(r fiber.Router) {
 	r.Get("/pokjar", func(c *fiber.Ctx) error { return list[Pokjar](s.db, c) })
 	r.Post("/pokjar", func(c *fiber.Ctx) error { return create[Pokjar](s, c, "pokjar") })
 	r.Put("/pokjar/:id", func(c *fiber.Ctx) error { return update[Pokjar](s, c, "pokjar") })
-	r.Delete("/pokjar/:id", func(c *fiber.Ctx) error { return deleteRow[Pokjar](s, c, "pokjar") })
+	r.Delete("/pokjar/:id", s.deletePokjar)
+}
+func (s *Server) deletePokjar(c *fiber.Ctx) error {
+	return s.deleteReferenced(c, "pokjar", &Pokjar{},
+		deleteReference{&Kelas{}, "pokjar_id", "kelas"},
+		deleteReference{&PesertaDidik{}, "pokjar_id", "peserta didik"},
+	)
 }
 
 // migratePokjarClasses moves selected classes and every student currently
@@ -1367,18 +1574,19 @@ func (s *Server) crudMapel(r fiber.Router) {
 	r.Delete("/mapel/:id", s.deleteMapel)
 }
 
-// deleteMapel removes a MataPelajaran and all child rows that reference it via
-// MapelID foreign keys. Without cascade, PostgreSQL rejects the delete.
+// deleteMapel removes an unused MataPelajaran. Data-bearing child rows are
+// intentionally never cascaded: deleting a subject must not silently erase
+// grades, journals, assignments, or learning materials. Administrators can
+// deactivate a subject instead when it has historical data.
 func (s *Server) deleteMapel(c *fiber.Ctx) error {
 	rid := id(c)
 	uid := c.Locals("userID").(string)
-	// child tables referencing mapel_id — order doesn't matter for FK-free delete
+	// Child tables referencing mapel_id. Settings and thresholds are derived
+	// defaults; all other rows are retained as a deletion blocker.
 	children := []struct {
 		table string
 		model interface{}
 	}{
-		{"pengaturan_bobot_nilais", &PengaturanBobotNilai{}},
-		{"ambang_predikats", &AmbangPredikat{}},
 		{"rekap_nilai_akhirs", &RekapNilaiAkhir{}},
 		{"kelas_mapels", &KelasMapel{}},
 		{"penugasan_guru_mapels", &PenugasanGuruMapel{}},
@@ -1395,10 +1603,26 @@ func (s *Server) deleteMapel(c *fiber.Ctx) error {
 		{"kompetensis", &Kompetensi{}},
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		for _, ch := range children {
-			tx.Where("mapel_id = ?", rid).Delete(ch.model)
+		var mapel MataPelajaran
+		if err := tx.First(&mapel, "id = ?", rid).Error; err != nil {
+			return fiber.NewError(404, "mapel tidak ditemukan")
 		}
-		if e := tx.Delete(&MataPelajaran{}, "id = ?", rid).Error; e != nil {
+		for _, ch := range children {
+			var count int64
+			if err := tx.Model(ch.model).Where("mapel_id = ?", rid).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return fiber.NewError(409, "mapel tidak dapat dihapus karena masih digunakan oleh "+ch.table)
+			}
+		}
+		if err := tx.Where("mapel_id = ?", rid).Delete(&PengaturanBobotNilai{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("mapel_id = ?", rid).Delete(&AmbangPredikat{}).Error; err != nil {
+			return err
+		}
+		if e := tx.Delete(&mapel).Error; e != nil {
 			return e
 		}
 		s.auditTx(tx, &uid, "delete", "mapel", rid)
@@ -1413,6 +1637,7 @@ func (s *Server) createMapel(c *fiber.Ctx) error {
 	if e := c.BodyParser(&row); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	setBase(&row, Base{})
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		if e := tx.Create(&row).Error; e != nil {
 			return fiber.NewError(400, e.Error())
@@ -1448,7 +1673,52 @@ func (s *Server) crudTahunAjaran(r fiber.Router) {
 	r.Get("/tahun-ajaran", func(c *fiber.Ctx) error { return list[TahunAjaran](s.db.Order("tanggal_mulai desc"), c) })
 	r.Post("/tahun-ajaran", s.createTahun)
 	r.Put("/tahun-ajaran/:id", s.updateTahun)
-	r.Delete("/tahun-ajaran/:id", func(c *fiber.Ctx) error { return deleteRow[TahunAjaran](s, c, "tahun_ajaran") })
+	r.Delete("/tahun-ajaran/:id", s.deleteTahunAjaran)
+}
+func (s *Server) deleteTahunAjaran(c *fiber.Ctx) error {
+	rid := strings.TrimSpace(id(c))
+	if rid == "" {
+		return fiber.NewError(400, "id wajib diisi")
+	}
+	uid := c.Locals("userID").(string)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var exists int64
+		if err := tx.Model(&TahunAjaran{}).Where("id = ?", rid).Count(&exists).Error; err != nil {
+			return err
+		}
+		if exists == 0 {
+			return fiber.NewError(404, "record not found")
+		}
+		refs := []deleteReference{
+			{&Kelas{}, "tahun_ajaran_id", "kelas"},
+			{&RiwayatKelasPesertaDidik{}, "tahun_ajaran_id", "riwayat kelas peserta didik"},
+			{&Tema{}, "tahun_ajaran_id", "tema pembelajaran"},
+			{&RekapNilaiAkhir{}, "tahun_ajaran_id", "rekap nilai"},
+			{&RPP{}, "tahun_ajaran_id", "RPP"},
+			{&KalenderEvent{}, "tahun_ajaran_id", "kalender"},
+			{&CatatanRapor{}, "tahun_ajaran_id", "catatan rapor"},
+		}
+		for _, ref := range refs {
+			var count int64
+			if err := tx.Model(ref.model).Where(ref.column+" = ?", rid).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return fiber.NewError(409, "tahun ajaran tidak dapat dihapus karena masih direferensikan oleh "+ref.label)
+			}
+		}
+		// Semester rows are derived by syncSemesters and have no independent
+		// identity outside their academic year, so they are removed only after
+		// all data-bearing references above have been proven absent.
+		if err := tx.Where("tahun_ajaran_id = ?", rid).Delete(&Semester{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&TahunAjaran{}, "id = ?", rid).Error; err != nil {
+			return err
+		}
+		s.auditTx(tx, &uid, "delete", "tahun_ajaran", rid)
+		return c.SendStatus(204)
+	})
 }
 func (s *Server) crudUsers(r fiber.Router) {
 	r.Get("/users", s.listUsers)
@@ -1540,7 +1810,9 @@ func (s *Server) createTahun(c *fiber.Ctx) error {
 		if e := tx.Create(&row).Error; e != nil {
 			return fiber.NewError(400, e.Error())
 		}
-		s.syncSemesters(tx, &row)
+		if err := s.syncSemesters(tx, &row); err != nil {
+			return err
+		}
 		s.auditTx(tx, &uid, "create", "tahun_ajaran", row.NamaTahunAjaran)
 		return c.Status(201).JSON(row)
 	})
@@ -1607,7 +1879,9 @@ func (s *Server) updateTahun(c *fiber.Ctx) error {
 		if e := tx.Save(&row).Error; e != nil {
 			return e
 		}
-		s.syncSemesters(tx, &row)
+		if err := s.syncSemesters(tx, &row); err != nil {
+			return err
+		}
 		s.auditTx(tx, &uid, "update", "tahun_ajaran", row.NamaTahunAjaran)
 		return c.JSON(row)
 	})
@@ -1616,7 +1890,7 @@ func (s *Server) updateTahun(c *fiber.Ctx) error {
 // syncSemesters memastikan setiap TahunAjaran memiliki 2 record Semester
 // (Ganjil & Genap). Tanggal semester diturunkan dari tanggalMulaiSemesterGenap
 // bila ada, atau dari titik tengah rentang tahun ajaran.
-func (s *Server) syncSemesters(tx *gorm.DB, ta *TahunAjaran) {
+func (s *Server) syncSemesters(tx *gorm.DB, ta *TahunAjaran) error {
 	genapStart := ta.TanggalMulai
 	if ta.TanggalMulaiSemesterGenap != nil && !ta.TanggalMulaiSemesterGenap.IsZero() {
 		genapStart = *ta.TanggalMulaiSemesterGenap
@@ -1635,25 +1909,34 @@ func (s *Server) syncSemesters(tx *gorm.DB, ta *TahunAjaran) {
 	var g Semester
 	if tx.Where("tahun_ajaran_id = ? AND nama_semester = ?", ta.ID, "Ganjil").First(&g).Error != nil {
 		g = Semester{TahunAjaranID: ta.ID, NamaSemester: "Ganjil", TanggalMulai: ta.TanggalMulai, TanggalSelesai: ganjilEnd}
-		tx.Create(&g)
+		if err := tx.Create(&g).Error; err != nil {
+			return err
+		}
 	} else {
-		tx.Model(&g).Updates(map[string]interface{}{
+		if err := tx.Model(&g).Updates(map[string]interface{}{
 			"tanggal_mulai":   ta.TanggalMulai,
 			"tanggal_selesai": ganjilEnd,
-		})
+		}).Error; err != nil {
+			return err
+		}
 	}
 
 	// Upsert Genap
 	var ge Semester
 	if tx.Where("tahun_ajaran_id = ? AND nama_semester = ?", ta.ID, "Genap").First(&ge).Error != nil {
 		ge = Semester{TahunAjaranID: ta.ID, NamaSemester: "Genap", TanggalMulai: genapStart, TanggalSelesai: ta.TanggalSelesai}
-		tx.Create(&ge)
+		if err := tx.Create(&ge).Error; err != nil {
+			return err
+		}
 	} else {
-		tx.Model(&ge).Updates(map[string]interface{}{
+		if err := tx.Model(&ge).Updates(map[string]interface{}{
 			"tanggal_mulai":   genapStart,
 			"tanggal_selesai": ta.TanggalSelesai,
-		})
+		}).Error; err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (s *Server) crudSemester(r fiber.Router) {
@@ -1730,12 +2013,28 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	if in.Role == "orang_tua" && in.OrangTuaID == nil {
 		return fiber.NewError(400, "orang_tua account requires an orangTuaId")
 	}
-	h, _ := bcryptHash(in.Password)
+	// Relasi ini adalah bagian dari model otorisasi, bukan sekadar metadata.
+	// Jangan biarkan perubahan role meninggalkan relasi lama atau mengizinkan
+	// akun orang tua tanpa identitas portal yang dapat di-scope.
+	if in.Role != "guru" {
+		in.TutorID = nil
+	}
+	if in.Role != "orang_tua" {
+		in.OrangTuaID = nil
+	}
+	h, hashErr := bcryptHash(in.Password)
+	if hashErr != nil {
+		return fiber.NewError(400, "kata sandi tidak valid atau terlalu panjang")
+	}
 	u := User{Username: in.Username, Email: in.Email, PasswordHash: h, Role: in.Role, TutorID: in.TutorID, OrangTuaID: in.OrangTuaID, IsActive: in.IsActive}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if in.TutorID != nil {
-			if err := tx.First(&Tutor{}, "id = ?", *in.TutorID).Error; err != nil {
+			var tutor Tutor
+			if err := tx.First(&tutor, "id = ?", *in.TutorID).Error; err != nil {
 				return fiber.NewError(400, "tutor not found")
+			}
+			if tutor.UserID != nil {
+				return fiber.NewError(400, "tutor is already linked to another user account")
 			}
 			// A tutor may be linked to at most one user account. Without this
 			// check, two guru accounts sharing the same tutorId would both pass
@@ -1744,6 +2043,8 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 			var dup User
 			if err := tx.Where("tutor_id = ?", *in.TutorID).First(&dup).Error; err == nil {
 				return fiber.NewError(400, "tutor is already linked to another user account")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
 			}
 		}
 		if in.OrangTuaID != nil {
@@ -1753,6 +2054,8 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 			var dup User
 			if err := tx.Where("orang_tua_id = ?", *in.OrangTuaID).First(&dup).Error; err == nil {
 				return fiber.NewError(400, "orang tua is already linked to another user account")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
 			}
 		}
 		if err := tx.Create(&u).Error; err != nil {
@@ -1870,6 +2173,18 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 	if in.Role == "guru" && in.TutorID == nil {
 		return fiber.NewError(400, "guru account requires a tutor")
 	}
+	if in.Role == "orang_tua" && in.OrangTuaID == nil {
+		return fiber.NewError(400, "orang_tua account requires an orangTuaId")
+	}
+	// Relasi ini adalah bagian dari model otorisasi, bukan sekadar metadata.
+	// Jangan biarkan perubahan role meninggalkan relasi lama atau mengizinkan
+	// akun orang tua tanpa identitas portal yang dapat di-scope.
+	if in.Role != "guru" {
+		in.TutorID = nil
+	}
+	if in.Role != "orang_tua" {
+		in.OrangTuaID = nil
+	}
 	uid := c.Locals("userID").(string)
 	targetID := id(c)
 	// Cegah admin menonaktifkan atau menurunkan peran akun sendiri — selain
@@ -1889,18 +2204,45 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 		if len(in.Password) < 8 {
 			return fiber.NewError(400, "password must be at least 8 characters")
 		}
-		u.PasswordHash, _ = bcryptHash(in.Password)
+		passwordHash, err := bcryptHash(in.Password)
+		if err != nil {
+			return fiber.NewError(400, "kata sandi tidak valid atau terlalu panjang")
+		}
+		u.PasswordHash = passwordHash
 	}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if in.TutorID != nil {
-			if err := tx.First(&Tutor{}, "id = ?", *in.TutorID).Error; err != nil {
+			var tutor Tutor
+			if err := tx.First(&tutor, "id = ?", *in.TutorID).Error; err != nil {
 				return fiber.NewError(400, "tutor not found")
+			}
+			if tutor.UserID != nil && *tutor.UserID != u.ID {
+				return fiber.NewError(400, "tutor is already linked to another user account")
+			}
+			var dup User
+			if err := tx.Where("tutor_id = ? AND id <> ?", *in.TutorID, u.ID).First(&dup).Error; err == nil {
+				return fiber.NewError(400, "tutor is already linked to another user account")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+		if in.OrangTuaID != nil {
+			if err := tx.First(&OrangTua{}, "id = ?", *in.OrangTuaID).Error; err != nil {
+				return fiber.NewError(400, "orang tua not found")
+			}
+			var dup User
+			if err := tx.Where("orang_tua_id = ? AND id <> ?", *in.OrangTuaID, u.ID).First(&dup).Error; err == nil {
+				return fiber.NewError(400, "orang tua is already linked to another user account")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
 			}
 		}
 		if err := tx.Save(&u).Error; err != nil {
 			return err
 		}
-		tx.Model(&Tutor{}).Where("user_id = ?", u.ID).Update("user_id", nil)
+		if err := tx.Model(&Tutor{}).Where("user_id = ?", u.ID).Update("user_id", nil).Error; err != nil {
+			return err
+		}
 		if in.TutorID != nil {
 			return tx.Model(&Tutor{}).Where("id = ?", *in.TutorID).Update("user_id", u.ID).Error
 		}
@@ -2009,6 +2351,9 @@ func (s *Server) createKelas(c *fiber.Ctx) error {
 	if e := c.BodyParser(&k); e != nil || k.Jenjang < 1 || k.Jenjang > 6 {
 		return fiber.NewError(400, "jenjang must be 1 through 6")
 	}
+	// IDs and timestamps are server-owned, including for this specialized
+	// handler (which cannot use the generic create helper).
+	setBase(&k, Base{})
 	normalizedRombel, err := normalizeRombelName(k.Jenjang, k.NamaRombel)
 	if err != nil {
 		return fiber.NewError(400, err.Error())
@@ -2033,6 +2378,12 @@ func (s *Server) createKelas(c *fiber.Ctx) error {
 				return fiber.NewError(400, "wali kelas (tutor) tidak ditemukan")
 			}
 		}
+		if err := validateOptionalReference(tx, k.ProgramID, &Program{}, "program"); err != nil {
+			return err
+		}
+		if err := validateOptionalReference(tx, k.FaseID, &Fase{}, "fase"); err != nil {
+			return err
+		}
 		if err := tx.Create(&k).Error; err != nil {
 			return fiber.NewError(400, err.Error())
 		}
@@ -2049,6 +2400,7 @@ func (s *Server) updateKelas(c *fiber.Ctx) error {
 	if e := s.db.First(&k, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
 	}
+	originalBase, hasBase := baseOf(&k)
 	var old *string
 	if k.WaliKelasID != nil {
 		previous := *k.WaliKelasID
@@ -2056,6 +2408,11 @@ func (s *Server) updateKelas(c *fiber.Ctx) error {
 	}
 	if e := c.BodyParser(&k); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if hasBase {
+		// The URL identifies the record being edited; clients must not be able
+		// to turn an update into an insert or rewrite audit timestamps.
+		setBase(&k, originalBase)
 	}
 	// Re-validasi jenjang setelah BodyParser: sebelumnya klien bisa menyetel
 	// jenjang:0 atau jenjang:99 tanpa ditolak karena validasi hanya di create.
@@ -2069,6 +2426,23 @@ func (s *Server) updateKelas(c *fiber.Ctx) error {
 	k.NamaRombel = normalizedRombel
 	uid := c.Locals("userID").(string)
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&Pokjar{}, "id = ?", k.PokjarID).Error; err != nil {
+			return fiber.NewError(400, "pokjar tidak ditemukan")
+		}
+		if err := tx.First(&TahunAjaran{}, "id = ?", k.TahunAjaranID).Error; err != nil {
+			return fiber.NewError(400, "tahun ajaran tidak ditemukan")
+		}
+		if k.WaliKelasID != nil {
+			if err := tx.First(&Tutor{}, "id = ?", *k.WaliKelasID).Error; err != nil {
+				return fiber.NewError(400, "wali kelas (tutor) tidak ditemukan")
+			}
+		}
+		if err := validateOptionalReference(tx, k.ProgramID, &Program{}, "program"); err != nil {
+			return err
+		}
+		if err := validateOptionalReference(tx, k.FaseID, &Fase{}, "fase"); err != nil {
+			return err
+		}
 		if err := tx.Save(&k).Error; err != nil {
 			return err
 		}
@@ -2851,6 +3225,7 @@ func (s *Server) createSiswa(c *fiber.Ctx) error {
 	if e := c.BodyParser(&p); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	setBase(&p, Base{})
 	if p.KelasID == "" {
 		return fiber.NewError(400, "kelasId is required")
 	}
@@ -2879,6 +3254,9 @@ func (s *Server) createSiswa(c *fiber.Ctx) error {
 			if e := tx.First(&OrangTua{}, "id = ?", p.OrangTuaID).Error; e != nil {
 				return fiber.NewError(400, "orangTuaId does not exist")
 			}
+		}
+		if err := validateOptionalReference(tx, p.ProgramID, &Program{}, "program"); err != nil {
+			return err
 		}
 		var dupPes PesertaDidik
 		if e := tx.Where("nik = ? AND nik != ''", p.NIK).First(&dupPes).Error; e == nil {
@@ -3032,9 +3410,14 @@ func (s *Server) updateSiswa(c *fiber.Ctx) error {
 	if e := s.db.First(&row, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
 	}
+	originalBase, hasBase := baseOf(&row)
 	previousClassID, previousOrder := row.KelasID, row.Urutan
 	if e := c.BodyParser(&row); e != nil {
 		return fiber.NewError(400, "invalid request body")
+	}
+	if hasBase {
+		// Keep the URL-selected identity and server-managed timestamps immutable.
+		setBase(&row, originalBase)
 	}
 	row.Urutan = previousOrder
 	if row.KelasID != previousClassID {
@@ -3057,6 +3440,14 @@ func (s *Server) updateSiswa(c *fiber.Ctx) error {
 	if class.PokjarID == "" || s.db.First(&Pokjar{}, "id = ?", class.PokjarID).Error != nil {
 		return fiber.NewError(400, "pokjar kelas tidak ditemukan")
 	}
+	if row.OrangTuaID != "" {
+		if err := s.db.First(&OrangTua{}, "id = ?", row.OrangTuaID).Error; err != nil {
+			return fiber.NewError(400, "orangTuaId does not exist")
+		}
+	}
+	if err := validateOptionalReference(s.db, row.ProgramID, &Program{}, "program"); err != nil {
+		return err
+	}
 	// Keep the student Pokjar aligned with the selected class even when an old
 	// client still submits a separate, stale pokjarId field.
 	row.PokjarID = class.PokjarID
@@ -3071,7 +3462,34 @@ func (s *Server) updateSiswa(c *fiber.Ctx) error {
 	return c.JSON(row)
 }
 func (s *Server) deleteSiswa(c *fiber.Ctx) error {
-	return deleteRow[PesertaDidik](s, c, "peserta_didik")
+	var student PesertaDidik
+	if err := s.db.First(&student, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "record not found")
+	}
+	if (student.FotoPath != nil && strings.TrimSpace(*student.FotoPath) != "") || (student.IdentitasFilePath != nil && strings.TrimSpace(*student.IdentitasFilePath) != "") {
+		return fiber.NewError(409, "peserta didik memiliki dokumen tersimpan; ubah status menjadi nonaktif agar riwayat tetap tersedia")
+	}
+	return s.deleteReferencedWithCleanup(c, "peserta didik", &PesertaDidik{}, func(tx *gorm.DB, rid string) error {
+		// This row is a derived membership history created together with the
+		// student. It has no independent access path once the student is
+		// intentionally removed; all operational/history records below remain
+		// protected and block the deletion.
+		return tx.Where("peserta_didik_id = ?", rid).Delete(&RiwayatKelasPesertaDidik{}).Error
+	},
+		deleteReference{&PresensiDetail{}, "peserta_didik_id", "detail presensi"},
+		deleteReference{&NilaiCP{}, "peserta_didik_id", "nilai capaian pembelajaran"},
+		deleteReference{&NilaiUM{}, "peserta_didik_id", "nilai ujian mandiri"},
+		deleteReference{&RekapNilaiAkhir{}, "peserta_didik_id", "rekap nilai"},
+		deleteReference{&PengumpulanTugas{}, "peserta_didik_id", "pengumpulan tugas"},
+		deleteReference{&UjianPeserta{}, "peserta_didik_id", "peserta ujian"},
+		deleteReference{&ChatMessage{}, "peserta_didik_id", "pesan portal orang tua"},
+		deleteReference{&SuratSiswaFile{}, "peserta_didik_id", "surat siswa"},
+		deleteReference{&Sertifikat{}, "peserta_didik_id", "sertifikat"},
+		deleteReference{&CatatanPerilaku{}, "peserta_didik_id", "catatan perilaku"},
+		deleteReference{&CatatanRapor{}, "peserta_didik_id", "catatan rapor"},
+		deleteReference{&NilaiKompetensi{}, "peserta_didik_id", "nilai kompetensi"},
+		deleteReference{&Peminjaman{}, "peserta_didik_id", "peminjaman buku"},
+	)
 }
 func (s *Server) promote(c *fiber.Ctx) error {
 	var in struct {
@@ -3131,9 +3549,17 @@ func (s *Server) getJadwal(c *fiber.Ctx) error {
 func (s *Server) putJadwal(c *fiber.Ctx) error {
 	var v PengaturanJadwal
 	s.db.First(&v)
-	if e := c.BodyParser(&v); e != nil {
+	var in struct {
+		HariDefault string `json:"hariDefault"`
+		JamGenerate string `json:"jamGenerate"`
+		ZonaWaktu   string `json:"zonaWaktu"`
+	}
+	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
+	// Keep the singleton identity and timestamps server-owned; this endpoint
+	// must not turn a settings update into an insert via GORM Save.
+	v.HariDefault, v.JamGenerate, v.ZonaWaktu = in.HariDefault, in.JamGenerate, in.ZonaWaktu
 	validDays := map[string]bool{"Senin": true, "Selasa": true, "Rabu": true, "Kamis": true, "Jumat": true, "Sabtu": true, "Minggu": true}
 	if !validDays[v.HariDefault] || v.ZonaWaktu != "Asia/Jakarta" {
 		return fiber.NewError(400, "invalid schedule settings")
@@ -3231,7 +3657,7 @@ func (s *Server) dashboard(c *fiber.Ctx) error {
 		JenisKelamin string
 		Total        int64
 	}
-	genderQ := s.db.Model(&PesertaDidik{}).Select("jenis_kelamin, COUNT(id) as total").Where("status = ?", "aktif").Group("jenis_kelamin")
+	genderQ := s.db.Model(&PesertaDidik{}).Select("peserta_didiks.jenis_kelamin, COUNT(peserta_didiks.id) as total").Where("peserta_didiks.status = ?", "aktif").Group("peserta_didiks.jenis_kelamin")
 	if c.Locals("role") == "guru" {
 		var user User
 		s.db.First(&user, "id = ?", c.Locals("userID"))
@@ -3923,6 +4349,7 @@ func (s *Server) createJurnal(c *fiber.Ctx) error {
 		Status:   "disetujui",
 	}
 	if e := s.db.Create(&j).Error; e != nil {
+		removeUpload(fotoPath)
 		return fiber.NewError(400, e.Error())
 	}
 	s.audit(&uid, "create", "jurnal", j.ID)
@@ -3984,6 +4411,7 @@ func (s *Server) updateJurnal(c *fiber.Ctx) error {
 		oldPath := j.FotoPath
 		j.FotoPath = &fotoPath
 		if e := s.db.Save(&j).Error; e != nil {
+			removeUpload(fotoPath)
 			return fiber.NewError(400, e.Error())
 		}
 		if oldPath != nil && *oldPath != fotoPath {
@@ -4189,9 +4617,11 @@ func (s *Server) createTugas(c *fiber.Ctx) error {
 		ModulID:          formPtr(c.FormValue("modulId")),
 	}
 	if t.Judul == "" {
+		removeUpload(path)
 		return fiber.NewError(400, "judul wajib diisi")
 	}
 	if e := s.db.Create(&t).Error; e != nil {
+		removeUpload(path)
 		return fiber.NewError(400, e.Error())
 	}
 	s.audit(&uid, "create", "tugas", t.ID)
@@ -4240,6 +4670,10 @@ func (s *Server) updateTugas(c *fiber.Ctx) error {
 	if v := c.FormValue("bolehUpload"); v != "" {
 		t.BolehUpload = v != "false"
 	}
+	oldPath := ""
+	if t.FilePath != nil {
+		oldPath = *t.FilePath
+	}
 	path, e := s.saveUpload(c, "file", "tugas", 10*1024*1024, []string{"pdf", "docx", "doc", "xlsx", "xls", "png", "jpg", "jpeg"})
 	if e != nil {
 		return e
@@ -4248,7 +4682,11 @@ func (s *Server) updateTugas(c *fiber.Ctx) error {
 		t.FilePath = &path
 	}
 	if e := s.db.Save(&t).Error; e != nil {
+		removeUpload(path)
 		return fiber.NewError(400, e.Error())
+	}
+	if path != "" && oldPath != "" && oldPath != path {
+		removeUpload(oldPath)
 	}
 	s.audit(&uid, "update", "tugas", t.ID)
 	return c.JSON(t)
@@ -4263,6 +4701,8 @@ func (s *Server) deleteTugas(c *fiber.Ctx) error {
 	if c.Locals("role") != "admin" && t.DibuatOlehUserID != uid {
 		return fiber.NewError(403, "hanya pembuat atau admin yang dapat menghapus")
 	}
+	var submissions []PengumpulanTugas
+	_ = s.db.Where("tugas_id = ?", t.ID).Find(&submissions).Error
 	// Cascade dalam transaksi: bila hapus pengumpulan gagal, parent tidak
 	// ikut terhapus (sebelumnya error child ditelan → orphan pengumpulan).
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
@@ -4272,6 +4712,14 @@ func (s *Server) deleteTugas(c *fiber.Ctx) error {
 		return tx.Delete(&t).Error
 	}); e != nil {
 		return fiber.NewError(400, e.Error())
+	}
+	if t.FilePath != nil {
+		removeUpload(*t.FilePath)
+	}
+	for _, submission := range submissions {
+		if submission.FilePath != nil {
+			removeUpload(*submission.FilePath)
+		}
 	}
 	s.audit(&uid, "delete", "tugas", t.ID)
 	return c.SendStatus(204)
@@ -4332,7 +4780,12 @@ func (s *Server) createPengumpulan(c *fiber.Ctx) error {
 	found := s.db.Where("tugas_id = ? AND peserta_didik_id = ?", t.ID, pdID).First(&pk).Error == nil
 	if found {
 		if pk.Status == "Dinilai" {
+			removeUpload(path)
 			return fiber.NewError(400, "pengumpulan sudah dinilai, tidak dapat diubah")
+		}
+		oldPath := ""
+		if pk.FilePath != nil {
+			oldPath = *pk.FilePath
 		}
 		pk.TanggalKumpul = now
 		pk.JawabanTeks = jawaban
@@ -4341,7 +4794,11 @@ func (s *Server) createPengumpulan(c *fiber.Ctx) error {
 		}
 		pk.Status = status
 		if e := s.db.Save(&pk).Error; e != nil {
+			removeUpload(path)
 			return fiber.NewError(400, e.Error())
+		}
+		if path != "" && oldPath != "" && oldPath != path {
+			removeUpload(oldPath)
 		}
 	} else {
 		pk = PengumpulanTugas{
@@ -4355,6 +4812,7 @@ func (s *Server) createPengumpulan(c *fiber.Ctx) error {
 			pk.FilePath = &path
 		}
 		if e := s.db.Create(&pk).Error; e != nil {
+			removeUpload(path)
 			return fiber.NewError(400, e.Error())
 		}
 	}
@@ -4485,6 +4943,11 @@ func (s *Server) createMateri(c *fiber.Ctx) error {
 	if !hasFile && linkURL == "" {
 		return fiber.NewError(400, "file atau link materi wajib diisi")
 	}
+	if linkURL != "" {
+		if err := s.validateExternalHTTPURL(linkURL, "link materi"); err != nil {
+			return err
+		}
+	}
 	var (
 		path   string
 		ukuran int64
@@ -4515,6 +4978,7 @@ func (s *Server) createMateri(c *fiber.Ctx) error {
 		Tanggal:          formDatePtr(c.FormValue("tanggal")),
 	}
 	if e := s.db.Create(&m).Error; e != nil {
+		removeUpload(path)
 		return fiber.NewError(400, e.Error())
 	}
 	s.audit(&uid, "create", "materi", m.ID)
@@ -4546,6 +5010,11 @@ func (s *Server) updateMateri(c *fiber.Ctx) error {
 	m.ModulID = formPtr(c.FormValue("modulId"))
 	if v := c.FormValue("linkUrl"); v != "" || c.FormValue("linkUrlCleared") == "1" {
 		m.LinkURL = strings.TrimSpace(v)
+		if m.LinkURL != "" {
+			if err := s.validateExternalHTTPURL(m.LinkURL, "link materi"); err != nil {
+				return err
+			}
+		}
 	}
 	if v := c.FormValue("urutan"); v != "" {
 		m.Urutan = formInt(v)
@@ -4553,6 +5022,7 @@ func (s *Server) updateMateri(c *fiber.Ctx) error {
 	if v := c.FormValue("tanggal"); v != "" || c.FormValue("tanggalCleared") == "1" {
 		m.Tanggal = formDatePtr(v)
 	}
+	oldPath := m.FilePath
 	path, e := s.saveUpload(c, "file", "materi", 10*1024*1024, materiExts)
 	if e != nil {
 		return e
@@ -4566,7 +5036,11 @@ func (s *Server) updateMateri(c *fiber.Ctx) error {
 		}
 	}
 	if e := s.db.Save(&m).Error; e != nil {
+		removeUpload(path)
 		return fiber.NewError(400, e.Error())
+	}
+	if path != "" && oldPath != "" && oldPath != path {
+		removeUpload(oldPath)
 	}
 	s.audit(&uid, "update", "materi", m.ID)
 	return c.JSON(m)
@@ -4589,6 +5063,7 @@ func (s *Server) deleteMateri(c *fiber.Ctx) error {
 	}); e != nil {
 		return fiber.NewError(400, e.Error())
 	}
+	removeUpload(m.FilePath)
 	s.audit(&uid, "delete", "materi", m.ID)
 	return c.SendStatus(204)
 }
@@ -4972,6 +5447,7 @@ func (s *Server) createRPP(c *fiber.Ctx) error {
 		Ukuran:           ukuran,
 	}
 	if e := s.db.Create(&r).Error; e != nil {
+		removeUpload(path)
 		return fiber.NewError(400, e.Error())
 	}
 	s.audit(&uid, "create", "rpp", r.ID)
@@ -5015,14 +5491,12 @@ func (s *Server) updateRPP(c *fiber.Ctx) error {
 		r.Tanggal = formDatePtr(v)
 	}
 	r.Deskripsi = c.FormValue("deskripsi")
+	oldPath := r.FilePath
 	path, e := s.saveUpload(c, "file", "rpp", 10*1024*1024, rppExts)
 	if e != nil {
 		return e
 	}
 	if path != "" {
-		if r.FilePath != "" {
-			os.Remove("./" + r.FilePath) // best-effort hapus file lama
-		}
 		fh, _ := c.FormFile("file")
 		r.FilePath = path
 		if fh != nil {
@@ -5031,7 +5505,11 @@ func (s *Server) updateRPP(c *fiber.Ctx) error {
 		}
 	}
 	if e := s.db.Save(&r).Error; e != nil {
+		removeUpload(path)
 		return fiber.NewError(400, e.Error())
+	}
+	if path != "" && oldPath != "" && oldPath != path {
+		removeUpload(oldPath)
 	}
 	s.audit(&uid, "update", "rpp", r.ID)
 	return c.JSON(r)
@@ -5046,12 +5524,10 @@ func (s *Server) deleteRPP(c *fiber.Ctx) error {
 	if c.Locals("role") != "admin" && r.DibuatOlehUserID != uid {
 		return fiber.NewError(403, "hanya pembuat atau admin yang dapat menghapus")
 	}
-	if r.FilePath != "" {
-		os.Remove("./" + r.FilePath) // best-effort
-	}
 	if e := s.db.Delete(&r).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}
+	removeUpload(r.FilePath)
 	s.audit(&uid, "delete", "rpp", r.ID)
 	return c.SendStatus(204)
 }
@@ -5175,9 +5651,69 @@ func (s *Server) shareMateri(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
+const (
+	materiShareSessionCookie = "materi_share_session"
+	materiShareSessionTTL    = 12 * time.Hour
+)
+
+type materiShareSessionClaims struct {
+	Type string `json:"typ"`
+	jwt.RegisteredClaims
+}
+
+func (s *Server) issueMateriShareSession(c *fiber.Ctx, shareToken string) error {
+	if strings.TrimSpace(shareToken) == "" || strings.TrimSpace(s.cfg.AccessSecret) == "" {
+		return errors.New("sesi share materi tidak dapat diterbitkan")
+	}
+	expiresAt := time.Now().Add(materiShareSessionTTL)
+	raw, err := jwt.NewWithClaims(jwt.SigningMethodHS256, materiShareSessionClaims{
+		Type: "materi_share",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   shareToken,
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+	}).SignedString([]byte(s.cfg.AccessSecret))
+	if err != nil {
+		return err
+	}
+	c.Cookie(&fiber.Cookie{
+		Name:     materiShareSessionCookie,
+		Value:    raw,
+		HTTPOnly: true,
+		Secure:   s.cfg.Env == "production",
+		SameSite: "Lax",
+		Domain:   s.cfg.CookieDomain,
+		Expires:  expiresAt,
+		MaxAge:   int(materiShareSessionTTL / time.Second),
+		Path:     "/api/materi/share/",
+	})
+	return nil
+}
+
+func (s *Server) hasMateriShareSession(c *fiber.Ctx, shareToken string) bool {
+	raw := strings.TrimSpace(c.Cookies(materiShareSessionCookie))
+	if raw == "" || strings.TrimSpace(s.cfg.AccessSecret) == "" || strings.TrimSpace(shareToken) == "" {
+		return false
+	}
+	claims := &materiShareSessionClaims{}
+	tok, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, errors.New("unexpected signing method")
+		}
+		return []byte(s.cfg.AccessSecret), nil
+	}, jwt.WithValidMethods([]string{"HS256"}))
+	return err == nil && tok != nil && tok.Valid && claims.Type == "materi_share" && claims.Subject == shareToken
+}
+
+func sharedMateriURL(token, suffix string) string {
+	return publicBase() + "/api/materi/share/" + url.PathEscape(token) + suffix
+}
+
 // viewSharedMateri renders a public HTML page for a shared materi (no auth).
-// If the materi is password-protected and no/wrong ?pwd= is supplied, a
-// password form is rendered instead of the content.
+// New password unlocks use a short-lived HttpOnly cookie, so the password is
+// never placed in a link or rendered into the download URL. The legacy ?pwd=
+// input remains accepted once to keep already-distributed links working.
 func (s *Server) viewSharedMateri(c *fiber.Ctx) error {
 	token := c.Params("token")
 	if token == "" {
@@ -5188,19 +5724,54 @@ func (s *Server) viewSharedMateri(c *fiber.Ctx) error {
 		return fiber.NewError(404, "materi tidak ditemukan")
 	}
 	protected := m.SharePasswordHash != nil
-	pwd := c.Query("pwd")
 	if protected {
-		if pwd == "" || bcrypt.CompareHashAndPassword([]byte(*m.SharePasswordHash), []byte(pwd)) != nil {
+		if !s.hasMateriShareSession(c, token) {
+			pwd := strings.TrimSpace(c.Query("pwd"))
+			if pwd != "" && bcrypt.CompareHashAndPassword([]byte(*m.SharePasswordHash), []byte(pwd)) == nil {
+				if err := s.issueMateriShareSession(c, token); err != nil {
+					return fiber.NewError(500, "sesi share materi tidak dapat dibuat")
+				}
+				return c.Redirect(sharedMateriURL(token, ""), fiber.StatusSeeOther)
+			}
 			c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
-			return c.SendString(renderMateriSharePasswordHTML(&m))
+			message := ""
+			if pwd != "" {
+				message = "Password salah. Silakan coba lagi."
+			}
+			return c.SendString(renderMateriSharePasswordHTMLWithMessage(&m, message))
 		}
 	}
 	c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
-	return c.SendString(renderMateriShareHTML(&m, pwd))
+	return c.SendString(renderMateriShareHTML(&m))
 }
 
-// downloadSharedMateri streams the shared materi's file (no auth). If password-
-// protected, a correct ?pwd= is required.
+func (s *Server) unlockSharedMateri(c *fiber.Ctx) error {
+	token := c.Params("token")
+	if token == "" {
+		return fiber.NewError(404, "materi tidak ditemukan")
+	}
+	var m Materi
+	if e := s.db.First(&m, "share_token = ?", token).Error; e != nil {
+		return fiber.NewError(404, "materi tidak ditemukan")
+	}
+	if m.SharePasswordHash == nil {
+		return c.Redirect(sharedMateriURL(token, ""), fiber.StatusSeeOther)
+	}
+	pwd := strings.TrimSpace(c.FormValue("pwd"))
+	if pwd == "" || bcrypt.CompareHashAndPassword([]byte(*m.SharePasswordHash), []byte(pwd)) != nil {
+		c.Set(fiber.HeaderContentType, "text/html; charset=utf-8")
+		c.Status(fiber.StatusUnauthorized)
+		return c.SendString(renderMateriSharePasswordHTMLWithMessage(&m, "Password salah. Silakan coba lagi."))
+	}
+	if err := s.issueMateriShareSession(c, token); err != nil {
+		return fiber.NewError(500, "sesi share materi tidak dapat dibuat")
+	}
+	return c.Redirect(sharedMateriURL(token, ""), fiber.StatusSeeOther)
+}
+
+// downloadSharedMateri streams the shared materi's file (no auth). New
+// requests authorize through the HttpOnly share cookie. A correct legacy
+// ?pwd= still works and upgrades that client to the cookie session.
 func (s *Server) downloadSharedMateri(c *fiber.Ctx) error {
 	token := c.Params("token")
 	if token == "" {
@@ -5213,18 +5784,20 @@ func (s *Server) downloadSharedMateri(c *fiber.Ctx) error {
 	if m.FilePath == "" {
 		return fiber.NewError(404, "materi ini tidak memiliki file")
 	}
-	if m.SharePasswordHash != nil {
-		pwd := c.Query("pwd")
+	if m.SharePasswordHash != nil && !s.hasMateriShareSession(c, token) {
+		pwd := strings.TrimSpace(c.Query("pwd"))
 		if pwd == "" || bcrypt.CompareHashAndPassword([]byte(*m.SharePasswordHash), []byte(pwd)) != nil {
 			return fiber.NewError(401, "password salah")
+		}
+		if err := s.issueMateriShareSession(c, token); err != nil {
+			return fiber.NewError(500, "sesi share materi tidak dapat dibuat")
 		}
 	}
 	return s.sendUpload(c, m.FilePath)
 }
 
 // renderMateriShareHTML builds the public content page for a shared materi.
-// pwd is forwarded to the file-download link when the materi is protected.
-func renderMateriShareHTML(m *Materi, pwd string) string {
+func renderMateriShareHTML(m *Materi) string {
 	esc := html.EscapeString
 	title := esc(m.Judul)
 	desc := esc(m.Deskripsi)
@@ -5233,15 +5806,12 @@ func renderMateriShareHTML(m *Materi, pwd string) string {
 		mapel = esc(m.Mapel.NamaMapel)
 	}
 	var linkBlock string
-	if u := strings.TrimSpace(m.LinkURL); u != "" {
+	if u := safeExternalHTTPURL(m.LinkURL); u != "" {
 		linkBlock = `<a class="btn" href="` + esc(u) + `" target="_blank" rel="noopener noreferrer">Buka Link Materi &#8599;</a>`
 	}
 	var fileBlock string
 	if m.FilePath != "" {
-		dl := publicBase() + "/api/materi/share/" + *m.ShareToken + "/file"
-		if pwd != "" {
-			dl += "?pwd=" + urlQueryEscape(pwd)
-		}
+		dl := sharedMateriURL(*m.ShareToken, "/file")
 		fileBlock = `<a class="btn btn-primary" href="` + esc(dl) + `">Unduh File` + fileLabel(m) + `</a>`
 	}
 	body := fileBlock + linkBlock
@@ -5284,11 +5854,20 @@ func renderMateriShareHTML(m *Materi, pwd string) string {
 }
 
 // renderMateriSharePasswordHTML builds the password-gate form for a protected
-// shared materi. Submitting reloads the same URL with ?pwd=.
+// shared materi. The wrapper keeps the helper convenient for callers that do
+// not need an error message.
 func renderMateriSharePasswordHTML(m *Materi) string {
+	return renderMateriSharePasswordHTMLWithMessage(m, "")
+}
+
+func renderMateriSharePasswordHTMLWithMessage(m *Materi, message string) string {
 	esc := html.EscapeString
 	title := esc(m.Judul)
-	action := publicBase() + "/api/materi/share/" + *m.ShareToken
+	action := sharedMateriURL(*m.ShareToken, "/unlock")
+	messageBlock := ""
+	if strings.TrimSpace(message) != "" {
+		messageBlock = `<p style="color:#b42318;font-size:13px;" role="alert">` + esc(message) + `</p>`
+	}
 	return `<!doctype html><html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>` + title + ` &mdash; PKBM Tunas Ilmu</title>
@@ -5314,7 +5893,8 @@ func renderMateriSharePasswordHTML(m *Materi) string {
   <div class="pad">
     <h1 style="margin:0 0 8px;font-size:18px;">` + title + `</h1>
     <p>Materi ini diproteksi password. Masukkan password untuk membuka.</p>
-    <form method="get" action="` + esc(action) + `">
+    ` + messageBlock + `
+    <form method="post" action="` + esc(action) + `">
       <label for="pwd">Password</label>
       <input id="pwd" name="pwd" type="password" autofocus required>
       <button class="btn" type="submit">Buka Materi</button>
@@ -5330,9 +5910,40 @@ func fileLabel(m *Materi) string {
 	return ""
 }
 
-// urlQueryEscape percent-encodes a string for use in a URL query parameter.
-func urlQueryEscape(s string) string {
-	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+func safeExternalHTTPURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > 2048 || strings.ContainsAny(value, "\r\n") {
+		return ""
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Host == "" || u.Hostname() == "" || u.User != nil {
+		return ""
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	return u.String()
+}
+
+func validateExternalHTTPURL(raw, field string) error {
+	if safeExternalHTTPURL(raw) == "" {
+		return fiber.NewError(400, field+" wajib berupa URL HTTP(S) lengkap")
+	}
+	return nil
+}
+
+func (s *Server) validateExternalHTTPURL(raw, field string) error {
+	if err := validateExternalHTTPURL(raw, field); err != nil {
+		return err
+	}
+	if s.cfg.Env == "production" {
+		u, _ := url.Parse(safeExternalHTTPURL(raw))
+		if strings.ToLower(u.Scheme) != "https" {
+			return fiber.NewError(400, field+" pada production wajib menggunakan HTTPS")
+		}
+	}
+	return nil
 }
 
 // fmtSize formats a byte count as a human-readable string (e.g. "1.2 MB").
@@ -5399,6 +6010,9 @@ func (s *Server) createKelasVirtual(c *fiber.Ctx) error {
 	if in.Judul == "" || in.KelasID == "" || in.LinkMeeting == "" {
 		return fiber.NewError(400, "judul, kelasId, dan linkMeeting wajib diisi")
 	}
+	if err := s.validateExternalHTTPURL(in.LinkMeeting, "link meeting"); err != nil {
+		return err
+	}
 	if e := s.canManageKelas(c, in.KelasID); e != nil {
 		return e
 	}
@@ -5453,6 +6067,9 @@ func (s *Server) updateKelasVirtual(c *fiber.Ctx) error {
 	}
 	kv.Deskripsi = in.Deskripsi
 	if in.LinkMeeting != "" {
+		if err := s.validateExternalHTTPURL(in.LinkMeeting, "link meeting"); err != nil {
+			return err
+		}
 		kv.LinkMeeting = in.LinkMeeting
 	}
 	if !in.WaktuMulai.IsZero() {
@@ -6224,11 +6841,61 @@ func (s *Server) verifySertifikat(c *fiber.Ctx) error {
 	})
 }
 
-// verifySiswa (public, no auth) — verifikasi QR kartu pelajar via NISN.
+type publicStudentVerificationClaims struct {
+	Type string `json:"typ"`
+	jwt.RegisteredClaims
+}
+
+func (s *Server) issuePublicStudentVerificationToken(studentID string) (string, error) {
+	studentID = strings.TrimSpace(studentID)
+	if studentID == "" || strings.TrimSpace(s.cfg.AccessSecret) == "" {
+		return "", errors.New("token verifikasi siswa tidak dapat diterbitkan")
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, publicStudentVerificationClaims{
+		Type: "public_student",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:  studentID,
+			IssuedAt: jwt.NewNumericDate(time.Now()),
+		},
+	}).SignedString([]byte(s.cfg.AccessSecret))
+}
+
+func (s *Server) parsePublicStudentVerificationToken(raw string) (string, bool) {
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(s.cfg.AccessSecret) == "" {
+		return "", false
+	}
+	claims := &publicStudentVerificationClaims{}
+	tok, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, errors.New("unexpected signing method")
+		}
+		return []byte(s.cfg.AccessSecret), nil
+	}, jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || tok == nil || !tok.Valid || claims.Type != "public_student" || strings.TrimSpace(claims.Subject) == "" {
+		return "", false
+	}
+	return claims.Subject, true
+}
+
+func (s *Server) studentVerificationURL(pd PesertaDidik) string {
+	if token, err := s.issuePublicStudentVerificationToken(pd.ID); err == nil {
+		return publicBase() + "/api/verify/siswa/" + token
+	}
+	// Keep legacy behavior for development/test callers that do not configure a
+	// signing key, while production startup always requires one.
+	return publicBase() + "/api/verify/siswa/" + pd.NISN
+}
+
+// verifySiswa (public, no auth) — verifikasi QR kartu pelajar via signed token.
+// Existing NISN URLs remain backward compatible for already-issued cards.
 func (s *Server) verifySiswa(c *fiber.Ctx) error {
-	nisn := c.Params("nisn")
+	lookup := c.Params("nisn")
+	query, value := "nisn = ?", lookup
+	if studentID, signed := s.parsePublicStudentVerificationToken(lookup); signed {
+		query, value = "id = ?", studentID
+	}
 	var pd PesertaDidik
-	if s.db.Preload("Kelas").Preload("Kelas.TahunAjaran").Where("nisn = ?", nisn).First(&pd).Error != nil {
+	if s.db.Preload("Kelas").Preload("Kelas.TahunAjaran").Where(query, value).First(&pd).Error != nil {
 		return c.Status(404).JSON(fiber.Map{"valid": false, "error": "NISN tidak ditemukan"})
 	}
 	ta := ""
@@ -6275,9 +6942,17 @@ func (s *Server) uploadFotoSiswa(c *fiber.Ctx) error {
 	if path == "" {
 		return fiber.NewError(400, "foto wajib diunggah")
 	}
+	oldPath := ""
+	if pd.FotoPath != nil {
+		oldPath = *pd.FotoPath
+	}
 	pd.FotoPath = &path
 	if e := s.db.Save(&pd).Error; e != nil {
+		removeUpload(path)
 		return fiber.NewError(400, e.Error())
+	}
+	if oldPath != "" && oldPath != path {
+		removeUpload(oldPath)
 	}
 	uid := c.Locals("userID").(string)
 	s.audit(&uid, "update", "peserta_didik_foto", pd.ID)
@@ -6309,7 +6984,7 @@ func (s *Server) printKartuGroup(c *fiber.Ctx) error {
 }
 
 // renderKartuPDF menggambar kartu pelajar (depan + belakang) per siswa, 2 kartu
-// per baris, multi-halaman. ID-1-ish (90x55 mm). QR verify via NISN.
+// per baris, multi-halaman. ID-1-ish (90x55 mm). QR verify via signed token.
 func (s *Server) renderKartuPDF(c *fiber.Ctx, siswa []PesertaDidik) error {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetAutoPageBreak(false, 0)
@@ -6324,7 +6999,7 @@ func (s *Server) renderKartuPDF(c *fiber.Ctx, siswa []PesertaDidik) error {
 	)
 	y := topY
 	for _, pd := range siswa {
-		drawKartuFront(pdf, leftX, y, cardW, cardH, pd)
+		drawKartuFront(pdf, leftX, y, cardW, cardH, pd, s.studentVerificationURL(pd))
 		drawKartuBack(pdf, leftX+cardW+gapX, y, cardW, cardH, pd)
 		y += cardH + gapY
 		if y+cardH > 287 {
@@ -6347,7 +7022,7 @@ const (
 	kartuGoldB  = 55
 )
 
-func drawKartuFront(pdf *gofpdf.Fpdf, x, y, w, h float64, pd PesertaDidik) {
+func drawKartuFront(pdf *gofpdf.Fpdf, x, y, w, h float64, pd PesertaDidik, verifyURL string) {
 	// Outer border + header band (brand green) + gold accent line.
 	pdf.SetDrawColor(kartuGreenR, kartuGreenG, kartuGreenB)
 	pdf.SetLineWidth(0.4)
@@ -6441,7 +7116,6 @@ func drawKartuFront(pdf *gofpdf.Fpdf, x, y, w, h float64, pd PesertaDidik) {
 	}
 
 	// QR verifikasi (kanan bawah) + micro caption.
-	verifyURL := publicBase() + "/api/verify/siswa/" + pd.NISN
 	if png, e := qrPNG(verifyURL); e == nil {
 		opts := gofpdf.ImageOptions{ImageType: "PNG", ReadDpi: true}
 		qname := "qr-" + pd.ID
@@ -8807,10 +9481,12 @@ func (s *Server) listTema(c *fiber.Ctx) error {
 			return c.JSON([]Tema{})
 		}
 		pairs := make([]string, 0, len(pgs))
+		args := make([]any, 0, len(pgs)*2)
 		for _, pg := range pgs {
-			pairs = append(pairs, "(kelas_id = '"+pg.KelasID+"' AND mapel_id = '"+pg.MapelID+"')")
+			pairs = append(pairs, "(kelas_id = ? AND mapel_id = ?)")
+			args = append(args, pg.KelasID, pg.MapelID)
 		}
-		q = q.Where("(" + strings.Join(pairs, " OR ") + ")")
+		q = q.Where("("+strings.Join(pairs, " OR ")+")", args...)
 	}
 	q = q.Order("urutan asc")
 	var rows []Tema
@@ -9870,7 +10546,12 @@ func (s *Server) crudBuku(r fiber.Router) {
 	r.Get("/buku", func(c *fiber.Ctx) error { return list[Buku](s.db.Order("judul"), c) })
 	r.Post("/buku", func(c *fiber.Ctx) error { return create[Buku](s, c, "buku") })
 	r.Put("/buku/:id", func(c *fiber.Ctx) error { return update[Buku](s, c, "buku") })
-	r.Delete("/buku/:id", func(c *fiber.Ctx) error { return deleteRow[Buku](s, c, "buku") })
+	r.Delete("/buku/:id", func(c *fiber.Ctx) error {
+		return s.deleteReferenced(c, "buku", &Buku{},
+			deleteReference{&BukuKelas{}, "buku_id", "penempatan buku di kelas"},
+			deleteReference{&Peminjaman{}, "buku_id", "riwayat peminjaman"},
+		)
+	})
 }
 
 // listBukuKelas returns the book-per-class assignments (§4.19). Guru needs this

@@ -20,6 +20,7 @@ import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
 import { request } from '../lib/api'
+import { safeExternalUrl } from '../lib/safe-url'
 import { formatWibDateTime, wibDateTimeLocalToISO, wibDateTimeLocalValue } from '../lib/wib'
 
 type Row = Record<string, unknown> & { id: string }
@@ -233,6 +234,7 @@ export function KelasVirtualView({
             {rows.map((r) => {
               const m = (r.mapel as Row) || {}
               const k = (r.kelas as Row) || {}
+              const meetingUrl = safeExternalUrl(r.linkMeeting)
               return (
                 <TableRow key={r.id}>
                   <TableCell>
@@ -247,8 +249,8 @@ export function KelasVirtualView({
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      {r.linkMeeting ? (
-                        <Button size="sm" variant="outline" onClick={() => window.open(String(r.linkMeeting), '_blank')}>
+                      {meetingUrl ? (
+                        <Button size="sm" variant="outline" onClick={() => window.open(meetingUrl, '_blank', 'noopener,noreferrer')}>
                           <ExternalLink className="h-3.5 w-3.5" /> Buka
                         </Button>
                       ) : null}
