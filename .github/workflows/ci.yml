@@ -57,10 +57,10 @@ jobs:
     runs-on: ubuntu-latest
     services:
       minio:
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936
+        image: rustfs/rustfs:1.0.0-rc.6@sha256:97171b3d72cd47dc81000f92ea84de25608bfc35a94c965501afaeb5d99f6035
         env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin-ci-password
+          RUSTFS_ACCESS_KEY: PKBMLMSCI
+          RUSTFS_SECRET_KEY: pkbm-rustfs-ci-secret
         ports:
           - 9000
     defaults:
@@ -72,8 +72,8 @@ jobs:
       BACKUP_R2_ENDPOINT: http://127.0.0.1:9000
       BACKUP_R2_ACCOUNT_ID: minio
       BACKUP_R2_BUCKET: pkbm-lms-ci
-      BACKUP_R2_ACCESS_KEY_ID: minioadmin
-      BACKUP_R2_SECRET_ACCESS_KEY: minioadmin-ci-password
+      BACKUP_R2_ACCESS_KEY_ID: PKBMLMSCI
+      BACKUP_R2_SECRET_ACCESS_KEY: pkbm-rustfs-ci-secret
       BACKUP_R2_PREFIX: pkbm-lms-ci
       BACKUP_R2_TIMEOUT: 20s
       BACKUP_ENCRYPTION_KEY: ci-r2-encryption-key-0123456789

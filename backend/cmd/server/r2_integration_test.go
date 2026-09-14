@@ -13,12 +13,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// Run this only against the disposable MinIO service in CI or a dedicated R2
-// test bucket. It is opt-in so local and production credentials are never
-// contacted by an ordinary go test invocation.
+// Run this only against the disposable S3-compatible service in CI or a
+// dedicated R2 test bucket. It is opt-in so local and production credentials
+// are never contacted by an ordinary go test invocation.
 func TestR2S3CompatibleIntegration(t *testing.T) {
 	if os.Getenv("RUN_R2_INTEGRATION") != "1" {
-		t.Skip("set RUN_R2_INTEGRATION=1 for MinIO/R2 integration")
+		t.Skip("set RUN_R2_INTEGRATION=1 for S3-compatible/R2 integration")
 	}
 	client, err := r2Client(context.Background())
 	if err != nil {
