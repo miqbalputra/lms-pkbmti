@@ -675,14 +675,46 @@ func uploadHeaderMatches(ext string, header []byte) bool {
 	}
 }
 
-func safeUploadPath(relPath string) (string, bool) {
+func uploadPathCandidates(relPath string) ([]string, bool) {
+	// Normalize both separators so paths created by older Windows deployments
+	// remain readable after moving the application to Linux containers.
+	normalized := strings.ReplaceAll(strings.TrimSpace(relPath), "\\", "/")
 	virtualRoot := filepath.Clean("uploads")
-	clean := filepath.Clean(filepath.FromSlash(relPath))
+	clean := filepath.Clean(filepath.FromSlash(normalized))
 	rel, err := filepath.Rel(virtualRoot, clean)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return nil, false
+	}
+	configured := filepath.Join(filepath.Clean(uploadsDir()), rel)
+	legacy := filepath.Join(virtualRoot, rel)
+	if filepath.Clean(configured) == filepath.Clean(legacy) {
+		return []string{configured}, true
+	}
+	return []string{configured, legacy}, true
+}
+
+func safeUploadPath(relPath string) (string, bool) {
+	candidates, ok := uploadPathCandidates(relPath)
+	if !ok || len(candidates) == 0 {
 		return "", false
 	}
-	return filepath.Join(filepath.Clean(uploadsDir()), rel), true
+	return candidates[0], true
+}
+
+func resolveUploadPath(relPath string) (string, bool) {
+	candidates, ok := uploadPathCandidates(relPath)
+	if !ok || len(candidates) == 0 {
+		return "", false
+	}
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, true
+		}
+	}
+	// Keep the configured path in the error path so Fiber returns its normal
+	// 404 response when neither the configured nor legacy location exists.
+	return candidates[0], true
 }
 
 // sendUpload streams a previously saved upload to the client. relPath is the value
@@ -690,7 +722,7 @@ func safeUploadPath(relPath string) (string, bool) {
 // paths under the virtual "uploads/" root and free of ".." are accepted. Serve via scoped handlers
 // (auth) — do NOT expose /uploads as a public static route (files are sensitive).
 func (s *Server) sendUpload(c *fiber.Ctx, relPath string) error {
-	path, ok := safeUploadPath(relPath)
+	path, ok := resolveUploadPath(relPath)
 	if !ok {
 		return fiber.NewError(404, "file tidak ditemukan")
 	}

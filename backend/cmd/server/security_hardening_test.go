@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,6 +31,25 @@ func TestSafeUploadPathStaysInsideUploads(t *testing.T) {
 	clean, ok := safeUploadPath("uploads/private/file.pdf")
 	if !ok || clean != filepath.Join(customRoot, "private", "file.pdf") {
 		t.Fatalf("safeUploadPath did not honor UPLOADS_DIR: clean=%q ok=%v", clean, ok)
+	}
+}
+
+func TestResolveUploadPathReadsLegacyRelativeUploadLocation(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("UPLOADS_DIR", filepath.Join(dir, "configured-uploads"))
+	legacyPath := filepath.Join(dir, "uploads", "rpp", "legacy.doc")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("legacy-rpp"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, ok := resolveUploadPath(`uploads\\rpp\\legacy.doc`)
+	resolvedAbs, err := filepath.Abs(resolved)
+	if err != nil || !ok || resolvedAbs != legacyPath {
+		t.Fatalf("expected legacy upload path %q, got %q (ok=%v)", legacyPath, resolved, ok)
 	}
 }
 
