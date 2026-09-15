@@ -19,7 +19,7 @@ import { EmptyState, FormCard, PageToolbar } from '../components/ui/page'
 import { Select } from '../components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { User } from '../App'
-import { request } from '../lib/api'
+import { downloadFile, request } from '../lib/api'
 import { formatWibDate, wibDateInputValue } from '../lib/wib'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -209,18 +209,10 @@ export function RppView({
 
   async function download(r: Row) {
     try {
-      const res = await fetch(apiBase + '/rpp/' + r.id + '/download', {
-        credentials: 'include',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error('file tidak tersedia')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = String(r.judul || 'rpp') + (String(r.tipe || ''))
-      a.click()
-      URL.revokeObjectURL(url)
+      const rawType = String(r.tipe || '').trim().toLowerCase()
+      const extension = rawType ? (rawType.startsWith('.') ? rawType : `.${rawType}`) : ''
+      const fallbackName = `${String(r.judul || 'rpp')}${extension}`
+      await downloadFile('/rpp/' + encodeURIComponent(r.id) + '/download', token, fallbackName)
     } catch (err: any) {
       toast.error(err.message || 'Gagal mengunduh RPP.')
     }
