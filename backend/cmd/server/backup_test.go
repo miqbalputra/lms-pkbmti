@@ -335,6 +335,57 @@ func TestDownloadOffsiteBackupIsEncryptedAndPortable(t *testing.T) {
 	}
 }
 
+func TestDownloadOffsiteFullBackupIncludesUploads(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("UPLOADS_DIR", filepath.Join(dir, "uploads"))
+	t.Setenv("BACKUP_ENCRYPTION_KEY", "offsite-full-test-key-that-is-long-enough-2026")
+	if err := os.MkdirAll(filepath.Join(uploadsDir(), "rpp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploadsDir(), "rpp", "backup-test.doc"), []byte("RPP backup lengkap"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := newTestDB(t, filepath.Join(dir, "src.db"))
+	if err := src.Create(&backupTestRow{ID: "full", Name: "offsite full", Note: "sensitive"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: src}
+	app := fiber.New()
+	app.Get("/backup/offsite", s.downloadOffsiteBackup)
+
+	res, err := app.Test(httptest.NewRequest(http.MethodGet, "/backup/offsite?format=full", nil))
+	if err != nil {
+		t.Fatalf("request full offsite backup: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if bytes.Contains(body, []byte("RPP backup lengkap")) {
+		t.Fatal("full offsite response contains plaintext upload")
+	}
+	encPath := filepath.Join(dir, "full.tar.gz.enc")
+	plainPath := filepath.Join(dir, "full.tar.gz")
+	if err := os.WriteFile(encPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := decryptBackupFile(encPath, plainPath, os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+		t.Fatal(err)
+	}
+	extracted := filepath.Join(dir, "extracted")
+	if _, err := extractR2Archive(plainPath, extracted); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(extracted, "uploads", "rpp", "backup-test.doc")); err != nil || string(got) != "RPP backup lengkap" {
+		t.Fatalf("RPP missing from offsite full backup: %q %v", got, err)
+	}
+}
+
 func TestSplitSQLStatements(t *testing.T) {
 	in := "INSERT INTO t VALUES('it''s');-- c\nINSERT INTO t VALUES('a;b');/* x ; y */INSERT INTO t VALUES(1);"
 	out := splitSQLStatements(in)

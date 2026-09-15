@@ -254,21 +254,26 @@ func uploadOffsiteBackup(srcPath string) (bool, error) {
 	if err := ensureBackupDir(); err != nil {
 		return false, err
 	}
-	name := filepath.Base(srcPath) + ".enc"
-	tmp, err := os.CreateTemp(backupDir(), ".offsite-*.enc")
-	if err != nil {
-		return false, err
+	name := filepath.Base(srcPath)
+	uploadPath := srcPath
+	if !isFullBackupArchiveName(srcPath) {
+		name += ".enc"
+		tmp, err := os.CreateTemp(backupDir(), ".offsite-*.enc")
+		if err != nil {
+			return false, err
+		}
+		tmpPath := tmp.Name()
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmpPath)
+			return false, err
+		}
+		defer os.Remove(tmpPath)
+		if err := encryptBackupFile(srcPath, tmpPath, secret); err != nil {
+			return false, err
+		}
+		uploadPath = tmpPath
 	}
-	tmpPath := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return false, err
-	}
-	defer os.Remove(tmpPath)
-	if err := encryptBackupFile(srcPath, tmpPath, secret); err != nil {
-		return false, err
-	}
-	in, err := os.Open(tmpPath)
+	in, err := os.Open(uploadPath)
 	if err != nil {
 		return false, err
 	}
@@ -312,6 +317,9 @@ func verifyBackupArtifact(path string) (bool, error) {
 	}
 	if stat.Size() == 0 {
 		return false, errors.New("backup file is empty")
+	}
+	if isFullBackupArchiveName(path) {
+		return verifyFullBackupArtifact(path)
 	}
 	if isSQLite() {
 		switch strings.ToLower(filepath.Ext(path)) {

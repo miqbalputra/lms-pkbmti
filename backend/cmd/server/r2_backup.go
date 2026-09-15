@@ -552,6 +552,61 @@ func (s *Server) startR2Restore(key string) (*R2BackupJob, error) {
 	return job, nil
 }
 
+// stageLocalFullRestore accepts the same encrypted full archive produced by
+// the local, offsite, and R2 backup flows.  It intentionally shares the R2
+// coordinator: restoring a database and uploads is a single destructive
+// operation, so a second backup/restore must never run concurrently.
+func (s *Server) stageLocalFullRestore(c *fiber.Ctx) error {
+	if _, err := deriveBackupKey(os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+		return fiber.NewError(503, "BACKUP_ENCRYPTION_KEY belum dikonfigurasi untuk restore backup lengkap")
+	}
+	fh, err := c.FormFile("file")
+	if err != nil {
+		return fiber.NewError(400, "file backup lengkap wajib diunggah (field name=file)")
+	}
+	if !isFullBackupArchiveName(fh.Filename) {
+		return fiber.NewError(400, "file backup lengkap harus berekstensi .tar.gz.enc")
+	}
+	if fh.Size <= 0 || fh.Size > backupArchiveLimit() {
+		return fiber.NewError(413, "ukuran file backup lengkap tidak valid atau melebihi batas")
+	}
+	if err := ensureBackupDir(); err != nil {
+		return fiber.NewError(500, "tidak dapat menyiapkan direktori backup")
+	}
+
+	s.r2.mu.Lock()
+	defer s.r2.mu.Unlock()
+	if s.r2.active {
+		return fiber.NewError(409, "backup atau restore lain masih berjalan")
+	}
+	job := &R2BackupJob{Kind: "restore-local", Status: "queued", SourceKey: "local-upload"}
+	if err := s.db.Create(job).Error; err != nil {
+		return err
+	}
+	work := filepath.Join(backupDir(), "r2-restore-"+job.ID)
+	archivePath := filepath.Join(work, "uploaded.tar.gz.enc")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		_ = s.db.Delete(job).Error
+		return fiber.NewError(500, "tidak dapat menyiapkan restore backup lengkap")
+	}
+	if err := c.SaveFile(fh, archivePath); err != nil {
+		_ = os.RemoveAll(work)
+		_ = s.db.Delete(job).Error
+		return fiber.NewError(500, "gagal menyimpan backup lengkap untuk restore")
+	}
+	secureBackupFile(archivePath)
+	s.r2.active = true
+	go func() {
+		defer func() {
+			s.r2.mu.Lock()
+			s.r2.active = false
+			s.r2.mu.Unlock()
+		}()
+		s.runLocalFullRestore(job, work, archivePath)
+	}()
+	return c.Status(202).JSON(job)
+}
+
 func (s *Server) downloadR2Object(ctx context.Context, key, dest string) error {
 	client, err := r2Client(ctx)
 	if err != nil {
@@ -694,6 +749,32 @@ func extractR2Archive(tarPath, dest string) (r2Manifest, error) {
 	return manifest, nil
 }
 
+// verifyFullBackupArtifact validates the encryption envelope, manifest, every
+// uploaded file checksum, and the embedded database before a scheduled full
+// backup is considered successful.
+func verifyFullBackupArtifact(path string) (bool, error) {
+	if _, err := deriveBackupKey(os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+		return false, err
+	}
+	work, err := os.MkdirTemp("", "pkbm-full-verify-")
+	if err != nil {
+		return false, err
+	}
+	defer os.RemoveAll(work)
+	plain := filepath.Join(work, "backup.tar.gz")
+	if err := decryptBackupFile(path, plain, os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+		return false, err
+	}
+	manifest, err := extractR2Archive(plain, filepath.Join(work, "extracted"))
+	if err != nil {
+		return false, err
+	}
+	if manifest.Dialect != dialect() {
+		return false, errors.New("engine database backup tidak cocok dengan aplikasi ini")
+	}
+	return verifyBackupArtifact(filepath.Join(work, "extracted", manifest.Database))
+}
+
 func copyDirectory(src, dst string) error {
 	if err := os.MkdirAll(dst, 0o700); err != nil {
 		return err
@@ -728,9 +809,9 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 	job.Status = "running"
 	s.updateR2Job(job, map[string]interface{}{"status": "running", "phase": "downloading", "started_at": &now, "error": ""})
 	s.r2.maintenance.Store(true)
-	releaseMaintenance := true
+	keepMaintenance := false
 	defer func() {
-		if releaseMaintenance {
+		if !keepMaintenance {
 			s.r2.maintenance.Store(false)
 		}
 	}()
@@ -743,6 +824,31 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 		s.finishR2Job(job, err)
 		return
 	}
+	enc := filepath.Join(work, "remote.tar.gz.enc")
+	if err := s.downloadR2Object(context.Background(), job.SourceKey, enc); err != nil {
+		_ = os.RemoveAll(work)
+		s.finishR2Job(job, err)
+		return
+	}
+	keepMaintenance = s.runFullArchiveRestore(job, work, enc, true)
+}
+
+func (s *Server) runLocalFullRestore(job *R2BackupJob, work, archivePath string) {
+	now := time.Now()
+	job.Status = "running"
+	s.updateR2Job(job, map[string]interface{}{"status": "running", "phase": "validating", "started_at": &now, "error": ""})
+	s.r2.maintenance.Store(true)
+	keepMaintenance := s.runFullArchiveRestore(job, work, archivePath, false)
+	if !keepMaintenance {
+		s.r2.maintenance.Store(false)
+	}
+}
+
+// runFullArchiveRestore restores a validated encrypted archive containing a
+// database snapshot and the complete uploads tree.  R2 restores additionally
+// copy their safety archive to R2; local restores retain that safety archive
+// in BACKUP_DIR so they do not require cloud credentials.
+func (s *Server) runFullArchiveRestore(job *R2BackupJob, work, enc string, uploadSafetyToR2 bool) (keepMaintenance bool) {
 	// Before the journal is durable, this directory is only a temporary
 	// decrypt/extract workspace. Remove it on every validation or staging
 	// failure so encrypted backups and extracted student files do not
@@ -754,14 +860,10 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 			_ = os.RemoveAll(work)
 		}
 	}()
-	enc := filepath.Join(work, "remote.tar.gz.enc")
 	plain := filepath.Join(work, "remote.tar.gz")
 	extracted := filepath.Join(work, "extracted")
-	err := s.downloadR2Object(context.Background(), job.SourceKey, enc)
-	if err == nil {
-		s.updateR2Phase(job, "validating")
-		err = decryptBackupFile(enc, plain, os.Getenv("BACKUP_ENCRYPTION_KEY"))
-	}
+	s.updateR2Phase(job, "validating")
+	err := decryptBackupFile(enc, plain, os.Getenv("BACKUP_ENCRYPTION_KEY"))
 	var manifest r2Manifest
 	if err == nil {
 		manifest, err = extractR2Archive(plain, extracted)
@@ -774,11 +876,11 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 		return
 	}
 	// Keep the encrypted safety snapshot on the persistent backup volume until
-	// every database and uploads step has completed. R2 is a second copy, not
-	// the only rollback source should the network be unavailable after a crash.
+	// every database and uploads step has completed. R2 is an optional second
+	// copy, not the only rollback source should the network be unavailable.
 	safetyDir := filepath.Join(work, "safety")
 	var safetyEnc, safetyKey string
-	if safetyEnc, _, _, _, err = s.createR2Archive(safetyDir); err == nil {
+	if safetyEnc, _, _, _, err = s.createR2Archive(safetyDir); err == nil && uploadSafetyToR2 {
 		safetyKey, err = s.uploadR2Archive(context.Background(), safetyEnc, "pre-restore")
 	}
 	if err != nil {
@@ -806,7 +908,7 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 			s.updateR2Phase(job, "sqlite-staged")
 		}
 		if err == nil && scheduleRestoreRestart() {
-			releaseMaintenance = false
+			keepMaintenance = true
 		}
 	} else {
 		err = updateR2RestorePhase(journal, "postgres-restoring", nil)
@@ -872,7 +974,7 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 	if isSQLite() {
 		// The job is finalized by reconcileR2Operations after the supervisor
 		// restarts this process and applies the journal before opening SQLite.
-		return
+		return keepMaintenance
 	}
 	_ = os.RemoveAll(journalUploadsOld(journal))
 	if err = updateR2RestorePhase(journal, "completed", nil); err != nil {
@@ -883,6 +985,13 @@ func (s *Server) runR2Restore(job *R2BackupJob) {
 	finished := time.Now()
 	job.Status, job.Phase = "succeeded", "completed"
 	s.updateR2Job(job, map[string]interface{}{"status": "succeeded", "phase": "completed", "finished_at": &finished})
-	s.audit(nil, "restore_r2", "backup", job.SourceKey)
-	s.notifyOperation("restore_succeeded", "restore_succeeded:"+job.ID, "Restore R2 selesai dengan backup pengaman tersedia di R2.", job)
+	auditAction := "restore_r2"
+	message := "Restore R2 selesai dengan backup pengaman tersedia di R2."
+	if !uploadSafetyToR2 {
+		auditAction = "restore_full"
+		message = "Restore backup lengkap selesai dengan backup pengaman tersimpan di server."
+	}
+	s.audit(nil, auditAction, "backup", job.SourceKey)
+	s.notifyOperation("restore_succeeded", "restore_succeeded:"+job.ID, message, job)
+	return false
 }

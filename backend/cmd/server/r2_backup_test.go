@@ -48,6 +48,50 @@ func TestR2ArchiveContainsDatabaseUploadsAndManifest(t *testing.T) {
 	}
 }
 
+func TestLocalFullBackupIncludesUploadsAndIsVerifiable(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("BACKUP_DIR", filepath.Join(dir, "backups"))
+	t.Setenv("BACKUP_ENCRYPTION_KEY", "local-full-backup-test-key-2026")
+	s := &Server{db: newTestDB(t, liveDBPath)}
+	if err := s.db.Create(&backupTestRow{ID: "local-full", Name: "included", Note: "database"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rppPath := filepath.Join(uploadsDir(), "rpp", "rpp.doc")
+	if err := os.MkdirAll(filepath.Dir(rppPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rppPath, []byte("rpp-file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureBackupDir(); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(backupDir(), fullBackupFileName("20260915-120000", false))
+	if err := s.createFullBackupFile(dest); err != nil {
+		t.Fatalf("create local full backup: %v", err)
+	}
+	if ok, err := verifyFullBackupArtifact(dest); err != nil || !ok {
+		t.Fatalf("verify local full backup: ok=%v err=%v", ok, err)
+	}
+	plain := filepath.Join(dir, "local-full.tar.gz")
+	if err := decryptBackupFile(dest, plain, os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+		t.Fatalf("decrypt local full backup: %v", err)
+	}
+	extracted := filepath.Join(dir, "local-full-extracted")
+	if _, err := extractR2Archive(plain, extracted); err != nil {
+		t.Fatalf("extract local full backup: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(extracted, "uploads", "rpp", "rpp.doc")); err != nil || string(got) != "rpp-file" {
+		t.Fatalf("RPP missing after local backup roundtrip: %q %v", got, err)
+	}
+	backups, err := listBackupFiles()
+	if err != nil || len(backups) != 1 || backups[0].Format != "full" {
+		t.Fatalf("listed local full backup = %#v, err=%v", backups, err)
+	}
+}
+
 func TestR2ArchivePathGuard(t *testing.T) {
 	for _, path := range []string{"../secret", "/absolute", "uploads/../../secret", ""} {
 		if _, err := safeArchivePath(path); err == nil {

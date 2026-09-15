@@ -15,7 +15,7 @@ type Backup = {
   name: string
   size: number
   modTime: string
-  format: 'db' | 'sql'
+  format: 'db' | 'sql' | 'full'
   automatic: boolean
 }
 type R2Archive = { key: string; createdAt: string; size: number; automatic: boolean }
@@ -165,10 +165,23 @@ export function BackupView({ token }: { token: string }) {
   async function downloadFullBackup() {
     setBusy('full')
     try {
-      await downloadBinary('/backup/download?format=full', token, isPG ? 'pkbm-lms-full.sql' : 'pkbm-lms-full.db')
-      toast.success('Database full berhasil diunduh.')
+      await downloadBinary('/backup/download?format=full', token, 'pkbm-lms-full.tar.gz.enc')
+      toast.success('Backup lengkap berhasil diunduh.')
     } catch (e: unknown) {
-      toast.error(String((e as Error).message || 'Gagal mengunduh database full'))
+      toast.error(String((e as Error).message || 'Gagal mengunduh backup lengkap'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function createFullBackup() {
+    setBusy('full-create')
+    try {
+      const r = (await request('/backup?format=full', token, 'POST')) as { name: string }
+      toast.success(`Backup lengkap dibuat: ${r.name}`)
+      void load()
+    } catch (e: unknown) {
+      toast.error(String((e as Error).message || 'Gagal membuat backup lengkap'))
     } finally {
       setBusy(null)
     }
@@ -203,20 +216,23 @@ export function BackupView({ token }: { token: string }) {
     e.preventDefault()
     const f = fileRef.current?.files?.[0]
     if (!f) {
-      toast.error('Pilih file backup (.sql) terlebih dahulu.')
+      toast.error('Pilih file backup terlebih dahulu.')
       return
     }
+    const isFullArchive = f.name.toLowerCase().endsWith('.tar.gz.enc')
     const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
     const innerExt = ext === '.enc' ? f.name.slice(0, -4).slice(f.name.slice(0, -4).lastIndexOf('.')).toLowerCase() : ext
-    if (isPG && innerExt !== '.sql') {
+    if (!isFullArchive && isPG && innerExt !== '.sql') {
       toast.error('PostgreSQL hanya menerima file .sql atau .sql.enc')
       return
     }
-    if (!isPG && innerExt !== '.db' && innerExt !== '.sql') {
+    if (!isFullArchive && !isPG && innerExt !== '.db' && innerExt !== '.sql') {
       toast.error('File harus berekstensi .db, .sql, .db.enc, atau .sql.enc')
       return
     }
-    if (!confirm('Restore akan mengganti seluruh isi database dengan file ini. Database saat ini akan diamankan terlebih dahulu. Lanjutkan?')) return
+    if (!confirm(isFullArchive
+      ? 'Restore backup lengkap akan mengganti database dan seluruh file unggahan (RPP, tugas, materi, surat, dan lampiran lain). Data saat ini akan diamankan terlebih dahulu. Lanjutkan?'
+      : 'Restore akan mengganti seluruh isi database dengan file ini. Database saat ini akan diamankan terlebih dahulu. Lanjutkan?')) return
     setBusy('restore')
     setRestoreMsg('')
     try {
@@ -230,8 +246,8 @@ export function BackupView({ token }: { token: string }) {
       })
       const x = (await r.json().catch(() => ({}))) as { error?: string; message?: string; restartScheduled?: boolean }
       if (!r.ok) throw new Error(x.error || 'Gagal menyiapkan restore')
-      setRestoreMsg(x.message || 'Restore berhasil.')
-      toast.success(isPG ? 'Restore PostgreSQL berhasil diterapkan.' : 'Restore disiapkan — restart server untuk menerapkan.')
+      setRestoreMsg(isFullArchive ? 'Restore backup lengkap dimasukkan ke antrean. Pantau status job backup di atas.' : (x.message || 'Restore berhasil.'))
+      toast.success(isFullArchive ? 'Restore backup lengkap dimasukkan ke antrean.' : (isPG ? 'Restore PostgreSQL berhasil diterapkan.' : 'Restore disiapkan — restart server untuk menerapkan.'))
       if (fileRef.current) fileRef.current.value = ''
     } catch (err: unknown) {
       toast.error(String((err as Error).message || 'Gagal restore'))
@@ -275,9 +291,9 @@ export function BackupView({ token }: { token: string }) {
             <h2 className="text-sm font-semibold">Buat Backup Baru</h2>
             <p className="text-xs text-muted-foreground">
               {isPG ? (
-                <>Format <strong>.sql</strong> = dump PostgreSQL via <code>pg_dump</code> (portable, bisa direstore ke instance PG lain).</>
+                <>Backup lengkap <strong>.tar.gz.enc</strong> memuat database dan seluruh unggahan. Format <strong>.sql</strong> hanya dump PostgreSQL untuk interoperabilitas.</>
               ) : (
-                <>Format <strong>.db</strong> = snapshot biner (paling cepat &amp; restore paling mudah). Format <strong>.sql</strong> = text portable (bisa dibaca/diff, untuk arsip n8n).</>
+                <>Backup lengkap <strong>.tar.gz.enc</strong> memuat database dan seluruh unggahan. Format <strong>.db</strong>/<strong>.sql</strong> hanya database.</>
               )}
             </p>
           </div>
@@ -287,12 +303,17 @@ export function BackupView({ token }: { token: string }) {
         </div>
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold">Download Database Full</p>
-            <p className="text-xs text-muted-foreground">Satu file lengkap untuk dipindahkan atau dipakai restore.</p>
+            <p className="text-sm font-semibold">Backup Lengkap: Database + Unggahan</p>
+            <p className="text-xs text-muted-foreground">Termasuk RPP, tugas, materi, surat, dokumen tutor, dan semua file di penyimpanan unggahan.</p>
           </div>
-          <Button onClick={downloadFullBackup} disabled={busy === 'full'}>
-            <HardDriveDownload className="h-4 w-4" /> {busy === 'full' ? 'Mengunduh...' : 'Download Database Full'}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={createFullBackup} disabled={busy === 'full-create'}>
+              <Database className="h-4 w-4" /> {busy === 'full-create' ? 'Membuat...' : 'Simpan di Server'}
+            </Button>
+            <Button onClick={downloadFullBackup} disabled={busy === 'full'}>
+              <HardDriveDownload className="h-4 w-4" /> {busy === 'full' ? 'Mengunduh...' : 'Unduh Backup Lengkap'}
+            </Button>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {!isPG && (
@@ -334,7 +355,7 @@ export function BackupView({ token }: { token: string }) {
             {backups.map((b) => (
               <TableRow key={b.name}>
                 <TableCell className="font-mono text-xs">{b.name}</TableCell>
-                <TableCell><Badge variant={b.format === 'db' ? 'default' : 'secondary'}>{b.format}</Badge></TableCell>
+                <TableCell><Badge variant={b.format === 'full' ? 'default' : 'secondary'}>{b.format}</Badge></TableCell>
                 <TableCell>{formatBytes(b.size)}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">{formatTime(b.modTime)}</TableCell>
                 <TableCell>
@@ -368,17 +389,17 @@ export function BackupView({ token }: { token: string }) {
           <h2 className="text-sm font-semibold flex items-center gap-2"><FileUp className="h-4 w-4" /> Restore (Pemulihan)</h2>
           <p className="text-xs text-muted-foreground">
             {isPG ? (
-              <>Unggah file backup <code>.sql</code> atau backup terenkripsi <code>.sql.enc</code>. Restore PostgreSQL <strong>diterapkan langsung</strong> ke database tanpa restart.</>
+              <>Unggah backup lengkap <code>.tar.gz.enc</code> untuk memulihkan database dan unggahan, atau <code>.sql</code>/<code>.sql.enc</code> untuk database saja. Restore PostgreSQL database diterapkan langsung.</>
             ) : (
-              <>Unggah file backup <code>.db</code>, <code>.sql</code>, atau versi terenkripsinya (<code>.db.enc</code>/<code>.sql.enc</code>). Restore diterapkan pada <strong>restart server berikutnya</strong> — DB saat ini otomatis disalin ke <code>backups/pre-restore-*</code> sebagai pengaman.</>
+              <>Unggah backup lengkap <code>.tar.gz.enc</code> untuk memulihkan database dan unggahan, atau <code>.db</code>/<code>.sql</code> (beserta versi terenkripsinya) untuk database saja. Restore diterapkan pada <strong>restart server berikutnya</strong>.</>
             )}
           </p>
           {!isPG && <p className="text-xs font-medium text-primary">Di production, setelah upload server akan restart otomatis dan restore diterapkan.</p>}
         </div>
         <form className="flex flex-wrap items-end gap-3" onSubmit={uploadRestore}>
           <div className="grid gap-1.5 flex-1 min-w-[240px]">
-            <Label className="text-xs">File backup {isPG ? '(.sql / .sql.enc)' : '(.db / .sql / .enc)'}</Label>
-            <input ref={fileRef} type="file" accept={isPG ? '.sql,.sql.enc' : '.db,.sql,.db.enc,.sql.enc'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
+            <Label className="text-xs">File backup {isPG ? '(.tar.gz.enc / .sql / .sql.enc)' : '(.tar.gz.enc / .db / .sql / .enc)'}</Label>
+            <input ref={fileRef} type="file" accept={isPG ? '.tar.gz.enc,.sql,.sql.enc' : '.tar.gz.enc,.db,.sql,.db.enc,.sql.enc'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
           </div>
           <Button type="submit" disabled={busy === 'restore'}>
             <FileUp className="h-4 w-4" /> {busy === 'restore' ? 'Memproses...' : 'Restore Sekarang'}
@@ -411,11 +432,10 @@ export function BackupView({ token }: { token: string }) {
             <section className="space-y-2">
               <h3 className="text-sm font-semibold">A. Ikhtisar</h3>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Sistem ini mencadangkan <strong>seluruh database</strong> sesuai engine: SQLite memakai snapshot
-                <code>.db</code>/<code>.sql</code>, sedangkan PostgreSQL memakai dump penuh <code>.sql</code> via
-                <code>pg_dump</code>. Backup bisa dibuat manual, terjadwal otomatis (env <code>BACKUP_CRON</code>),
-                atau ditarik dari luar oleh <strong>n8n</strong> via HTTP. Untuk cloud, gunakan endpoint <code>/backup/offsite</code>
-                agar file yang dikirim sudah terenkripsi sebelum masuk Google Drive atau storage S3-compatible.
+                Format <strong>full</strong> membuat arsip terenkripsi <code>.tar.gz.enc</code> yang memuat database
+                dan seluruh unggahan, termasuk RPP, tugas, materi, surat, serta dokumen tutor. Format <code>.db</code>/<code>.sql</code>
+                hanya berisi database. Backup bisa dibuat manual, terjadwal otomatis (env <code>BACKUP_CRON</code>), atau
+                ditarik dari luar oleh <strong>n8n</strong> via HTTP.
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="rounded-lg border border-border bg-secondary/30 p-3 text-xs">
@@ -450,8 +470,8 @@ export function BackupView({ token }: { token: string }) {
               <h3 className="text-sm font-semibold">B. Backup Manual</h3>
               <ol className="list-decimal pl-5 space-y-1 text-xs text-muted-foreground">
                 <li>Buka kartu <strong>"Buat Backup Baru"</strong> di atas.</li>
-                <li>Klik tombol backup sesuai engine. PostgreSQL memakai <strong>"Backup pg_dump (.sql)"</strong>; SQLite menyediakan <strong>"Backup .db (biner)"</strong> dan <strong>"Backup .sql (text)"</strong>.</li>
-                <li>Untuk satu file database lengkap, klik <strong>"Download Database Full"</strong>. File langsung masuk ke folder Download browser.</li>
+                <li>Untuk mencadangkan database dan lampiran, pilih <strong>"Simpan di Server"</strong> atau <strong>"Unduh Backup Lengkap"</strong>.</li>
+                <li>Gunakan backup <code>.db</code>/<code>.sql</code> hanya bila perlu memindahkan database tanpa file unggahan.</li>
                 <li>Unduh file lama via tombol <em>Unduh</em> pada baris tabel; hapus via tombol tong sampah.</li>
               </ol>
             </section>
@@ -463,7 +483,7 @@ export function BackupView({ token }: { token: string }) {
                 Set <code>BACKUP_CRON</code> (cron WIB) di environment server lalu restart. Saat kosong, backup
                 sepenuhnya andalkan n8n (tidak ada penjadwalan internal).
               </p>
-              <CodeBlock copy={copyCode} code={'# Contoh .env / variabel server\nBACKUP_CRON="0 2 * * *"      # tiap 02:00 WIB\nBACKUP_FORMAT="full"      # full | db | sql\nBACKUP_RETENTION="14"     # simpan 14 backup otomatis terbaru\nBACKUP_DIR="backups"'} />
+              <CodeBlock copy={copyCode} code={'# Contoh .env / variabel server\nBACKUP_CRON="0 2 * * *"      # tiap 02:00 WIB\nBACKUP_FORMAT="full"      # database + semua uploads (.tar.gz.enc)\nBACKUP_RETENTION="14"     # simpan 14 backup otomatis terbaru\nBACKUP_DIR="backups"'} />
               <div className="text-xs text-muted-foreground">
                 Contoh cron lain: <code>0 2 * * 0</code> (Minggu 02:00), <code>0 */6 * * *</code> (tiap 6 jam). File
                 otomatis diberi label <Badge variant="default">otomatis</Badge> dan di-prune sesuai retensi; file
@@ -489,14 +509,14 @@ export function BackupView({ token }: { token: string }) {
                 <li>Konfigurasi node <strong>HTTP Request</strong>:
                   <ul className="list-disc pl-5 mt-1 space-y-0.5">
                     <li><strong>Method:</strong> <code>GET</code></li>
-                    <li><strong>URL:</strong> <code>https://&lt;domain&gt;/api/backup/offsite?format=full</code> — respons sudah terenkripsi</li>
+                    <li><strong>URL:</strong> <code>https://&lt;domain&gt;/api/backup/offsite?format=full</code> — arsip database + unggahan sudah terenkripsi</li>
                     <li><strong>Header:</strong> <code>X-Backup-Key: YOUR_BACKUP_API_KEY</code> (lebih aman daripada menaruh key di URL)</li>
                     <li><strong>Response:</strong> <code>File</code> (binary) — agar n8n menerima file</li>
                     <li>Workflow lama yang masih memakai <code>?key=</code> tetap kompatibel, tetapi sebaiknya migrasikan ke header.</li>
                   </ul>
                 </li>
                 <li>Hubungkan ke node penyimpanan: <strong>Write Binary File</strong>, <strong>Google Drive</strong>, atau <strong>AWS S3</strong>.</li>
-                <li>Format text: ganti <code>format=db</code> → <code>format=sql</code>.</li>
+                <li>Untuk dump database saja, gunakan <code>format=db</code> atau <code>format=sql</code>; jangan gunakan format ini bila RPP/lampiran perlu ikut.</li>
               </ol>
               <CodeBlock copy={copyCode} code={n8nUrl} />
               <p className="text-xs text-muted-foreground">
@@ -560,7 +580,7 @@ export function BackupView({ token }: { token: string }) {
                   <tbody className="divide-y divide-border">
                     <tr><td className="p-2 font-mono">BACKUP_API_KEY</td><td className="p-2 text-muted-foreground">—</td><td className="p-2 text-muted-foreground">Kunci statis untuk n8n (tanpa JWT). Wajib di-set agar key aktif.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_CRON</td><td className="p-2 text-muted-foreground">— (off)</td><td className="p-2 text-muted-foreground">Cron WIB. Kosong = andalkan n8n/manual.</td></tr>
-                    <tr><td className="p-2 font-mono">BACKUP_FORMAT</td><td className="p-2 text-muted-foreground">full</td><td className="p-2 text-muted-foreground">full | db | sql</td></tr>
+                    <tr><td className="p-2 font-mono">BACKUP_FORMAT</td><td className="p-2 text-muted-foreground">full</td><td className="p-2 text-muted-foreground">full = database + uploads; db/sql = database saja</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_AUTO_RESTART</td><td className="p-2 text-muted-foreground">true (production)</td><td className="p-2 text-muted-foreground">Restart otomatis setelah upload restore.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_MAX_UPLOAD_MB</td><td className="p-2 text-muted-foreground">512</td><td className="p-2 text-muted-foreground">Batas ukuran file restore.</td></tr>
                     <tr><td className="p-2 font-mono">BACKUP_RETENTION</td><td className="p-2 text-muted-foreground">14</td><td className="p-2 text-muted-foreground">Jumlah backup otomatis (-auto-) yang disimpan.</td></tr>

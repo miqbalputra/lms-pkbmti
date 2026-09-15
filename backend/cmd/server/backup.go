@@ -101,17 +101,57 @@ func backupUploadLimit() int {
 	return mb * 1024 * 1024
 }
 
-// normalizeBackupFormat makes the default "full" backup the easiest restore
-// source: SQLite uses its exact binary snapshot, while PostgreSQL uses a full
-// pg_dump SQL file. Explicit sql/db requests remain supported for compatibility.
+const fullBackupArchiveSuffix = ".tar.gz.enc"
+
+// isFullBackupRequest selects the composite archive: a database snapshot plus
+// every regular file in UPLOADS_DIR. Database-only .db/.sql exports remain
+// available for interoperability with database tools.
+func isFullBackupRequest(requested string) bool {
+	format := strings.ToLower(strings.TrimSpace(requested))
+	return format == "" || format == "full"
+}
+
+func isFullBackupArchiveName(name string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), fullBackupArchiveSuffix)
+}
+
+func fullBackupFileName(ts string, automatic bool) string {
+	if automatic {
+		return fmt.Sprintf("pkbm-lms-%s-auto%s", ts, fullBackupArchiveSuffix)
+	}
+	return fmt.Sprintf("pkbm-lms-%s%s", ts, fullBackupArchiveSuffix)
+}
+
+// createFullBackupFile creates one encrypted, self-contained archive in the
+// persistent backup directory. The archive format is identical to an R2
+// archive, so it can be restored directly by the application later.
+func (s *Server) createFullBackupFile(dest string) error {
+	if _, err := deriveBackupKey(os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+		return err
+	}
+	if err := ensureBackupDir(); err != nil {
+		return err
+	}
+	work, err := os.MkdirTemp(backupDir(), ".full-build-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+	archive, _, _, _, err := s.createR2Archive(work)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(archive, dest); err != nil {
+		return err
+	}
+	secureBackupFile(dest)
+	return nil
+}
+
+// normalizeBackupFormat chooses only a database-file representation. Full
+// archives are handled by isFullBackupRequest before this helper is called.
 func normalizeBackupFormat(requested string) string {
 	format := strings.ToLower(strings.TrimSpace(requested))
-	if format == "" || format == "full" {
-		if isSQLite() {
-			return "db"
-		}
-		return "sql"
-	}
 	if isSQLite() {
 		if format == "sql" {
 			return "sql"
@@ -484,7 +524,9 @@ func listBackupFiles() ([]backupInfo, error) {
 			continue
 		}
 		fmt2 := "db"
-		if strings.HasSuffix(name, ".sql") {
+		if isFullBackupArchiveName(name) {
+			fmt2 = "full"
+		} else if strings.HasSuffix(name, ".sql") {
 			fmt2 = "sql"
 		} else if !strings.HasSuffix(name, ".db") {
 			continue // pre-restore-* etc. are excluded by the prefix check anyway
@@ -570,12 +612,24 @@ func (s *Server) runScheduledBackup() {
 		s.scheduledBackupFailure("prepare")
 		return
 	}
-	format := normalizeBackupFormat(env("BACKUP_FORMAT", "full"))
+	requestedFormat := env("BACKUP_FORMAT", "full")
+	fullArchive := isFullBackupRequest(requestedFormat)
+	format := normalizeBackupFormat(requestedFormat)
 	ts := wibTimeFormat(time.Now(), "20060102-150405")
 	name := fmt.Sprintf("pkbm-lms-%s-auto.%s", ts, format)
+	if fullArchive {
+		name = fullBackupFileName(ts, true)
+	}
 	dest := filepath.Join(backupDir(), name)
 	var d string
-	if isSQLite() {
+	if fullArchive {
+		if err := s.createFullBackupFile(dest); err != nil {
+			fmt.Printf("scheduled backup: full archive failed: %v\n", err)
+			s.scheduledBackupFailure("archive")
+			return
+		}
+		d = dest
+	} else if isSQLite() {
 		if format == "sql" {
 			f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 			if err != nil {
@@ -962,11 +1016,30 @@ func (s *Server) listBackupsHandler(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"dir": filepath.Base(filepath.Clean(backupDir())), "backups": files, "dialect": dialect()})
 }
 
-// GET /backup/download?format=db|sql — generate a fresh full backup and stream
-// it. For SQLite: db → binary snapshot (VACUUM INTO); sql → text dump.
-// For PostgreSQL: always produces a .sql dump via pg_dump. (backupReadAuth)
+// GET /backup/download?format=full|db|sql — stream a freshly generated
+// backup. format=full is an encrypted archive containing the database and all
+// uploads; db/sql are database-only compatibility exports.
 func (s *Server) downloadBackup(c *fiber.Ctx) error {
-	format := normalizeBackupFormat(c.Query("format", "full"))
+	requestedFormat := c.Query("format", "full")
+	if isFullBackupRequest(requestedFormat) {
+		if _, err := deriveBackupKey(os.Getenv("BACKUP_ENCRYPTION_KEY")); err != nil {
+			return fiber.NewError(503, "BACKUP_ENCRYPTION_KEY belum dikonfigurasi untuk backup lengkap")
+		}
+		work, err := os.MkdirTemp("", "pkbm-full-download-")
+		if err != nil {
+			return fiber.NewError(500, "tidak dapat menyiapkan backup lengkap")
+		}
+		defer os.RemoveAll(work)
+		archive, _, _, _, err := s.createR2Archive(work)
+		if err != nil {
+			return fiber.NewError(500, "gagal membuat backup lengkap")
+		}
+		c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fullBackupFileName(wibTimeFormat(time.Now(), "20060102-150405"), false)))
+		c.Set("Content-Type", "application/octet-stream")
+		c.Set("Cache-Control", "no-store")
+		return c.SendFile(archive)
+	}
+	format := normalizeBackupFormat(requestedFormat)
 	ts := wibTimeFormat(time.Now(), "20060102-150405")
 	fname := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
 	if err := ensureBackupDir(); err != nil {
@@ -1010,10 +1083,8 @@ func (s *Server) downloadBackup(c *fiber.Ctx) error {
 }
 
 // GET /backup/offsite?format=full — create a fresh encrypted backup for an
-// automation client. This keeps the legacy plaintext /backup/download endpoint
-// compatible while giving n8n, Google Drive, and S3 workflows a safe default.
-// The response is AES-256-GCM chunk-encrypted and can only be restored with
-// BACKUP_ENCRYPTION_KEY.
+// automation client. format=full includes the database and every upload; the
+// explicit db/sql formats retain the database-only legacy behaviour.
 func (s *Server) downloadOffsiteBackup(c *fiber.Ctx) error {
 	secret := strings.TrimSpace(os.Getenv("BACKUP_ENCRYPTION_KEY"))
 	if _, err := deriveBackupKey(secret); err != nil {
@@ -1024,7 +1095,22 @@ func (s *Server) downloadOffsiteBackup(c *fiber.Ctx) error {
 		return fiber.NewError(500, "tidak dapat menyiapkan backup offsite")
 	}
 	defer os.RemoveAll(work)
-	format := normalizeBackupFormat(c.Query("format", "full"))
+	requestedFormat := c.Query("format", "full")
+	if isFullBackupRequest(requestedFormat) {
+		archive, _, _, _, archiveErr := s.createR2Archive(work)
+		if archiveErr != nil {
+			return fiber.NewError(500, "gagal membuat backup offsite lengkap")
+		}
+		name := fullBackupFileName(wibTimeFormat(time.Now(), "20060102-150405"), false)
+		c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+		c.Set("Content-Type", "application/octet-stream")
+		c.Set("Cache-Control", "no-store")
+		if uid, ok := c.Locals("userID").(string); ok && uid != "" {
+			s.audit(&uid, "backup_offsite_download", "system", "full")
+		}
+		return c.SendFile(archive)
+	}
+	format := normalizeBackupFormat(requestedFormat)
 	plain := filepath.Join(work, "backup."+format)
 	if isSQLite() {
 		if format == "sql" {
@@ -1091,14 +1177,24 @@ func (s *Server) downloadBackupFile(c *fiber.Ctx) error {
 // its metadata. The admin UI uses this; n8n should use GET /backup/offsite for
 // an encrypted cloud-ready payload.
 func (s *Server) createBackupNow(c *fiber.Ctx) error {
-	format := normalizeBackupFormat(c.Query("format", "full"))
+	requestedFormat := c.Query("format", "full")
+	fullArchive := isFullBackupRequest(requestedFormat)
+	format := normalizeBackupFormat(requestedFormat)
 	if err := ensureBackupDir(); err != nil {
 		return fiber.NewError(500, "tidak dapat membuat direktori backup")
 	}
 	ts := wibTimeFormat(time.Now(), "20060102-150405")
 	name := fmt.Sprintf("pkbm-lms-%s.%s", ts, format)
+	if fullArchive {
+		name = fullBackupFileName(ts, false)
+	}
 	dest := filepath.Join(backupDir(), name)
-	if isSQLite() {
+	if fullArchive {
+		if err := s.createFullBackupFile(dest); err != nil {
+			return fiber.NewError(500, "gagal membuat backup lengkap")
+		}
+		format = "full"
+	} else if isSQLite() {
 		if format == "sql" {
 			f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 			if err != nil {
@@ -1139,6 +1235,9 @@ func (s *Server) stageRestore(c *fiber.Ctx) error {
 	fh, err := c.FormFile("file")
 	if err != nil {
 		return fiber.NewError(400, "file backup wajib diunggah (field name=file)")
+	}
+	if isFullBackupArchiveName(fh.Filename) {
+		return s.stageLocalFullRestore(c)
 	}
 	if isSQLite() {
 		tmpPath, ext, err := saveRestoreUploadForRestore(c, fh)
