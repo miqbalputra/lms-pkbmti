@@ -74,6 +74,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'presensi', label: 'Presensi Mingguan', icon: ClipboardCheck, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'jurnal-mengajar', label: 'Jurnal Mengajar', icon: ClipboardList, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'perkembangan-belajar', label: 'Perkembangan Belajar', icon: ClipboardCheck, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'pengumuman', label: 'Pengumuman', icon: BookOpen, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'tugas', label: 'Tugas Siswa', icon: ClipboardList, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'materi', label: 'Materi Pembelajaran', icon: BookOpen, roles: ['admin', 'kepala_sekolah', 'guru'] },

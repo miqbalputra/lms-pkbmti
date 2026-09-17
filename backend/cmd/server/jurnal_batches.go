@@ -65,9 +65,27 @@ func (s *Server) backfillJurnalBatches() error {
 }
 
 type journalLineInput struct {
-	JamKe   int    `json:"jamKe"`
-	MapelID string `json:"mapelId"`
-	Materi  string `json:"materi"`
+	JamKe             int    `json:"jamKe"`
+	MapelID           string `json:"mapelId"`
+	Materi            string `json:"materi"`
+	Kegiatan          string `json:"kegiatan"`
+	Tujuan            string `json:"tujuan"`
+	Metode            string `json:"metode"`
+	Media             string `json:"media"`
+	Keterlibatan      string `json:"keterlibatan"`
+	Asesmen           string `json:"asesmen"`
+	HasilAsesmen      string `json:"hasilAsesmen"`
+	Kendala           string `json:"kendala"`
+	Refleksi          string `json:"refleksi"`
+	TindakLanjut      string `json:"tindakLanjut"`
+	RingkasanOrangTua string `json:"ringkasanOrangTua"`
+	RPPID             string `json:"rppId"`
+	ModulID           string `json:"modulId"`
+	MateriID          string `json:"materiId"`
+	TugasID           string `json:"tugasId"`
+	KompetensiID      string `json:"kompetensiId"`
+	KelasVirtualID    string `json:"kelasVirtualId"`
+	StatusPublikasi   string `json:"statusPublikasi"`
 }
 
 type journalAbsentStudent struct {
@@ -77,18 +95,39 @@ type journalAbsentStudent struct {
 }
 
 type journalSheetLine struct {
-	ID          string  `json:"id"`
-	BatchID     string  `json:"batchId"`
-	JamKe       int     `json:"jamKe"`
-	TutorID     string  `json:"tutorId"`
-	TutorNama   string  `json:"tutorNama"`
-	MapelID     string  `json:"mapelId"`
-	MapelNama   string  `json:"mapelNama"`
-	Materi      string  `json:"materi"`
-	Kegiatan    string  `json:"kegiatan,omitempty"`
-	TandaTangan string  `json:"tandaTangan,omitempty"`
-	FotoPath    *string `json:"fotoPath,omitempty"`
-	CanEdit     bool    `json:"canEdit"`
+	ID                string     `json:"id"`
+	BatchID           string     `json:"batchId"`
+	JamKe             int        `json:"jamKe"`
+	TutorID           string     `json:"tutorId"`
+	TutorNama         string     `json:"tutorNama"`
+	MapelID           string     `json:"mapelId"`
+	MapelNama         string     `json:"mapelNama"`
+	Materi            string     `json:"materi"`
+	Kegiatan          string     `json:"kegiatan,omitempty"`
+	Tujuan            string     `json:"tujuan,omitempty"`
+	Metode            string     `json:"metode,omitempty"`
+	Media             string     `json:"media,omitempty"`
+	Keterlibatan      string     `json:"keterlibatan,omitempty"`
+	Asesmen           string     `json:"asesmen,omitempty"`
+	HasilAsesmen      string     `json:"hasilAsesmen,omitempty"`
+	Kendala           string     `json:"kendala,omitempty"`
+	Refleksi          string     `json:"refleksi,omitempty"`
+	TindakLanjut      string     `json:"tindakLanjut,omitempty"`
+	RingkasanOrangTua string     `json:"ringkasanOrangTua,omitempty"`
+	RPPID             *string    `json:"rppId,omitempty"`
+	ModulID           *string    `json:"modulId,omitempty"`
+	MateriID          *string    `json:"materiId,omitempty"`
+	TugasID           *string    `json:"tugasId,omitempty"`
+	KompetensiID      *string    `json:"kompetensiId,omitempty"`
+	KelasVirtualID    *string    `json:"kelasVirtualId,omitempty"`
+	StatusPublikasi   string     `json:"statusPublikasi"`
+	TandaTangan       string     `json:"tandaTangan,omitempty"`
+	FotoPath          *string    `json:"fotoPath,omitempty"`
+	TanggalRencana    *time.Time `json:"tanggalRencana,omitempty"`
+	AlasanPerubahan   string     `json:"alasanPerubahan,omitempty"`
+	TerkunciAt        *time.Time `json:"terkunciAt,omitempty"`
+	DibatalkanAt      *time.Time `json:"dibatalkanAt,omitempty"`
+	CanEdit           bool       `json:"canEdit"`
 }
 
 type journalSheetResponse struct {
@@ -121,9 +160,6 @@ func (s *Server) activeJournalSemester(now time.Time) (Semester, error) {
 
 func (s *Server) validateJournalDate(t time.Time) error {
 	date := journalDateAtMidnight(t)
-	if date.Weekday() != time.Saturday {
-		return fiber.NewError(fiber.StatusBadRequest, "tanggal jurnal hanya boleh hari Sabtu (WIB)")
-	}
 	today := journalDateAtMidnight(time.Now())
 	if date.After(today) {
 		return fiber.NewError(fiber.StatusBadRequest, "tanggal jurnal tidak boleh melewati hari ini")
@@ -192,6 +228,10 @@ func (s *Server) validateJournalLines(tx *gorm.DB, tutorID, kelasID string, line
 	if len(lines) == 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "minimal satu baris jurnal wajib diisi")
 	}
+	var kelas Kelas
+	if err := tx.First(&kelas, "id = ?", kelasID).Error; err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "kelas tidak ditemukan")
+	}
 	seenPeriods := make(map[int]bool, len(lines))
 	for _, line := range lines {
 		if line.JamKe <= 0 {
@@ -204,6 +244,12 @@ func (s *Server) validateJournalLines(tx *gorm.DB, tutorID, kelasID string, line
 		if strings.TrimSpace(line.MapelID) == "" || strings.TrimSpace(line.Materi) == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "mata pelajaran dan materi wajib diisi")
 		}
+		if line.StatusPublikasi == "" {
+			line.StatusPublikasi = statusPublikasiDraf
+		}
+		if !validPublicationStatus(line.StatusPublikasi) {
+			return fiber.NewError(fiber.StatusBadRequest, "status publikasi jurnal tidak valid")
+		}
 		if !preservedLineKeys[journalLineKey(line.JamKe, line.MapelID)] {
 			var assignment PenugasanGuruMapel
 			if err := tx.Preload("Mapel").Where("tutor_id = ? AND kelas_id = ? AND mapel_id = ?", tutorID, kelasID, line.MapelID).First(&assignment).Error; err != nil {
@@ -212,6 +258,9 @@ func (s *Server) validateJournalLines(tx *gorm.DB, tutorID, kelasID string, line
 			if assignment.Mapel == nil || !assignment.Mapel.IsActive {
 				return fiber.NewError(fiber.StatusBadRequest, "mata pelajaran tidak aktif")
 			}
+		}
+		if err := s.validateJournalLineReferences(tx, kelas, line); err != nil {
+			return err
 		}
 	}
 	periods := make([]int, 0, len(lines))
@@ -271,6 +320,18 @@ func (s *Server) createJournalBatch(c *fiber.Ctx) error {
 	if err := s.validateJournalDate(tanggal); err != nil {
 		return journalMutationError(err)
 	}
+	tanggalRencana, err := parseOptionalWIBDate(c.FormValue("tanggalRencana"))
+	if err != nil {
+		return err
+	}
+	if tanggalRencana != nil {
+		if err := s.validateJournalDate(*tanggalRencana); err != nil {
+			return journalMutationError(err)
+		}
+		if !sameWIBDay(*tanggalRencana, tanggal) && strings.TrimSpace(c.FormValue("alasanPerubahan")) == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "alasan perubahan jadwal wajib diisi bila tanggal pelaksanaan berbeda")
+		}
+	}
 	lines, err := parseJournalLines(c)
 	if err != nil {
 		return err
@@ -287,7 +348,7 @@ func (s *Server) createJournalBatch(c *fiber.Ctx) error {
 	if fotoPath != "" {
 		photo = &fotoPath
 	}
-	batch := JurnalBatch{TutorID: tutorID, KelasID: kelasID, Tanggal: journalDateAtMidnight(tanggal), TandaTangan: signature, FotoPath: photo}
+	batch := JurnalBatch{TutorID: tutorID, KelasID: kelasID, Tanggal: journalDateAtMidnight(tanggal), TanggalRencana: tanggalRencana, AlasanPerubahan: strings.TrimSpace(c.FormValue("alasanPerubahan")), TandaTangan: signature, FotoPath: photo}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.validateJournalLines(tx, tutorID, kelasID, lines, batch.Tanggal, "", nil); err != nil {
 			return err
@@ -296,7 +357,15 @@ func (s *Server) createJournalBatch(c *fiber.Ctx) error {
 			return err
 		}
 		for _, line := range lines {
-			row := JurnalMengajar{BatchID: &batch.ID, JamKe: line.JamKe, TutorID: tutorID, KelasID: kelasID, MapelID: line.MapelID, Tanggal: batch.Tanggal, Materi: strings.TrimSpace(line.Materi), Status: "disetujui"}
+			statusPublikasi := strings.TrimSpace(line.StatusPublikasi)
+			if statusPublikasi == "" {
+				statusPublikasi = statusPublikasiDraf
+			}
+			row := JurnalMengajar{BatchID: &batch.ID, JamKe: line.JamKe, TutorID: tutorID, KelasID: kelasID, MapelID: line.MapelID, Tanggal: batch.Tanggal, Materi: strings.TrimSpace(line.Materi), Kegiatan: strings.TrimSpace(line.Kegiatan), Tujuan: strings.TrimSpace(line.Tujuan), Metode: strings.TrimSpace(line.Metode), Media: strings.TrimSpace(line.Media), Keterlibatan: strings.TrimSpace(line.Keterlibatan), Asesmen: strings.TrimSpace(line.Asesmen), HasilAsesmen: strings.TrimSpace(line.HasilAsesmen), Kendala: strings.TrimSpace(line.Kendala), Refleksi: strings.TrimSpace(line.Refleksi), TindakLanjut: strings.TrimSpace(line.TindakLanjut), RingkasanOrangTua: strings.TrimSpace(line.RingkasanOrangTua), RPPID: formPtr(line.RPPID), ModulID: formPtr(line.ModulID), MateriID: formPtr(line.MateriID), TugasID: formPtr(line.TugasID), KompetensiID: formPtr(line.KompetensiID), KelasVirtualID: formPtr(line.KelasVirtualID), StatusPublikasi: statusPublikasi, Status: "disetujui"}
+			if statusPublikasi == statusPublikasiDipublikasikan {
+				now, uid := time.Now(), c.Locals("userID").(string)
+				row.DipublikasikanAt, row.DipublikasikanOlehUserID = &now, &uid
+			}
 			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
@@ -317,6 +386,12 @@ func (s *Server) journalBatchForEdit(c *fiber.Ctx, batchID string) (JurnalBatch,
 	var batch JurnalBatch
 	if err := s.db.Preload("Lines").First(&batch, "id = ?", batchID).Error; err != nil {
 		return batch, fiber.NewError(fiber.StatusNotFound, "jurnal tidak ditemukan")
+	}
+	if batch.DibatalkanAt != nil {
+		return batch, fiber.NewError(fiber.StatusBadRequest, "jurnal yang dibatalkan tidak dapat diubah")
+	}
+	if batch.TerkunciAt != nil {
+		return batch, fiber.NewError(fiber.StatusLocked, "jurnal telah dikunci")
 	}
 	role := c.Locals("role").(string)
 	if role == "admin" {
@@ -351,6 +426,26 @@ func (s *Server) updateJournalBatch(c *fiber.Ctx) error {
 	if err := s.validateJournalDate(tanggal); err != nil {
 		return err
 	}
+	tanggalRencana := batch.TanggalRencana
+	if raw := strings.TrimSpace(c.FormValue("tanggalRencana")); raw != "" || c.FormValue("tanggalRencanaCleared") == "1" {
+		var parseErr error
+		tanggalRencana, parseErr = parseOptionalWIBDate(raw)
+		if parseErr != nil {
+			return parseErr
+		}
+	}
+	alasanPerubahan := strings.TrimSpace(c.FormValue("alasanPerubahan"))
+	if alasanPerubahan == "" {
+		alasanPerubahan = batch.AlasanPerubahan
+	}
+	if tanggalRencana != nil {
+		if err := s.validateJournalDate(*tanggalRencana); err != nil {
+			return err
+		}
+		if !sameWIBDay(*tanggalRencana, tanggal) && alasanPerubahan == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "alasan perubahan jadwal wajib diisi bila tanggal pelaksanaan berbeda")
+		}
+	}
 	lines, err := parseJournalLines(c)
 	if err != nil {
 		return err
@@ -380,7 +475,7 @@ func (s *Server) updateJournalBatch(c *fiber.Ctx) error {
 		if err := tx.Unscoped().Where("batch_id = ?", batch.ID).Delete(&JurnalMengajar{}).Error; err != nil {
 			return err
 		}
-		batch.KelasID, batch.Tanggal, batch.TandaTangan = kelasID, journalDateAtMidnight(tanggal), signature
+		batch.KelasID, batch.Tanggal, batch.TanggalRencana, batch.AlasanPerubahan, batch.TandaTangan = kelasID, journalDateAtMidnight(tanggal), tanggalRencana, alasanPerubahan, signature
 		if fotoPath != "" {
 			batch.FotoPath = &fotoPath
 		}
@@ -390,7 +485,15 @@ func (s *Server) updateJournalBatch(c *fiber.Ctx) error {
 			return err
 		}
 		for _, line := range lines {
-			row := JurnalMengajar{BatchID: &batch.ID, JamKe: line.JamKe, TutorID: batch.TutorID, KelasID: kelasID, MapelID: line.MapelID, Tanggal: batch.Tanggal, Materi: strings.TrimSpace(line.Materi), Status: "disetujui"}
+			statusPublikasi := strings.TrimSpace(line.StatusPublikasi)
+			if statusPublikasi == "" {
+				statusPublikasi = statusPublikasiDraf
+			}
+			row := JurnalMengajar{BatchID: &batch.ID, JamKe: line.JamKe, TutorID: batch.TutorID, KelasID: kelasID, MapelID: line.MapelID, Tanggal: batch.Tanggal, Materi: strings.TrimSpace(line.Materi), Kegiatan: strings.TrimSpace(line.Kegiatan), Tujuan: strings.TrimSpace(line.Tujuan), Metode: strings.TrimSpace(line.Metode), Media: strings.TrimSpace(line.Media), Keterlibatan: strings.TrimSpace(line.Keterlibatan), Asesmen: strings.TrimSpace(line.Asesmen), HasilAsesmen: strings.TrimSpace(line.HasilAsesmen), Kendala: strings.TrimSpace(line.Kendala), Refleksi: strings.TrimSpace(line.Refleksi), TindakLanjut: strings.TrimSpace(line.TindakLanjut), RingkasanOrangTua: strings.TrimSpace(line.RingkasanOrangTua), RPPID: formPtr(line.RPPID), ModulID: formPtr(line.ModulID), MateriID: formPtr(line.MateriID), TugasID: formPtr(line.TugasID), KompetensiID: formPtr(line.KompetensiID), KelasVirtualID: formPtr(line.KelasVirtualID), StatusPublikasi: statusPublikasi, Status: "disetujui"}
+			if statusPublikasi == statusPublikasiDipublikasikan {
+				now, uid := time.Now(), c.Locals("userID").(string)
+				row.DipublikasikanAt, row.DipublikasikanOlehUserID = &now, &uid
+			}
 			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
@@ -411,24 +514,7 @@ func (s *Server) updateJournalBatch(c *fiber.Ctx) error {
 }
 
 func (s *Server) deleteJournalBatch(c *fiber.Ctx) error {
-	batch, err := s.journalBatchForEdit(c, id(c))
-	if err != nil {
-		return err
-	}
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Unscoped().Where("batch_id = ?", batch.ID).Delete(&JurnalMengajar{}).Error; err != nil {
-			return err
-		}
-		return tx.Delete(&batch).Error
-	}); err != nil {
-		return err
-	}
-	if batch.FotoPath != nil {
-		removeUpload(*batch.FotoPath)
-	}
-	uid := c.Locals("userID").(string)
-	s.audit(&uid, "delete", "jurnal_batch", batch.ID)
-	return c.SendStatus(fiber.StatusNoContent)
+	return s.cancelJournalBatch(c)
 }
 
 func journalClassLabel(k Kelas) string {
@@ -453,7 +539,12 @@ func (s *Server) buildJournalSheet(c *fiber.Ctx, kelasID string, tanggal time.Ti
 		AttendanceStatus: "belum_ada", AbsentStudents: []journalAbsentStudent{}, Lines: []journalSheetLine{},
 	}
 	var rows []JurnalMengajar
-	if err := s.db.Preload("Tutor").Preload("Mapel").Preload("Batch").Where("kelas_id = ? AND tanggal = ?", kelasID, date).
+	query := s.db.Preload("Tutor").Preload("Mapel").Preload("Batch").Where("kelas_id = ? AND tanggal = ?", kelasID, date)
+	query, err = s.journalTutorScope(c, query)
+	if err != nil {
+		return response, err
+	}
+	if err := query.
 		Order("jam_ke, created_at, id").Find(&rows).Error; err != nil {
 		return response, err
 	}
@@ -467,16 +558,25 @@ func (s *Server) buildJournalSheet(c *fiber.Ctx, kelasID string, tanggal time.Ti
 	}
 	for _, row := range rows {
 		batchID, signature, photo := "", "", row.FotoPath
+		var terkunciAt, dibatalkanAt, tanggalRencana *time.Time
+		alasanPerubahan := ""
 		if row.BatchID != nil {
 			batchID = *row.BatchID
 		}
 		if row.Batch != nil {
+			if row.Batch.DibatalkanAt != nil {
+				continue
+			}
 			signature, photo = row.Batch.TandaTangan, row.Batch.FotoPath
+			terkunciAt, dibatalkanAt = row.Batch.TerkunciAt, row.Batch.DibatalkanAt
+			tanggalRencana, alasanPerubahan = row.Batch.TanggalRencana, row.Batch.AlasanPerubahan
 		}
 		response.Lines = append(response.Lines, journalSheetLine{
 			ID: row.ID, BatchID: batchID, JamKe: row.JamKe, TutorID: row.TutorID, TutorNama: row.Tutor.Nama,
-			MapelID: row.MapelID, MapelNama: row.Mapel.NamaMapel, Materi: row.Materi, Kegiatan: row.Kegiatan,
-			TandaTangan: signature, FotoPath: photo, CanEdit: role == "admin" || (role == "guru" && row.TutorID == userTutorID),
+			MapelID: row.MapelID, MapelNama: row.Mapel.NamaMapel, Materi: row.Materi, Kegiatan: row.Kegiatan, Tujuan: row.Tujuan, Metode: row.Metode, Media: row.Media, Keterlibatan: row.Keterlibatan, Asesmen: row.Asesmen, HasilAsesmen: row.HasilAsesmen, Kendala: row.Kendala, Refleksi: row.Refleksi, TindakLanjut: row.TindakLanjut, RingkasanOrangTua: row.RingkasanOrangTua, RPPID: row.RPPID, ModulID: row.ModulID, MateriID: row.MateriID, TugasID: row.TugasID, KompetensiID: row.KompetensiID, KelasVirtualID: row.KelasVirtualID, StatusPublikasi: row.StatusPublikasi,
+			TandaTangan: signature, FotoPath: photo, CanEdit: terkunciAt == nil && (role == "admin" || (role == "guru" && row.TutorID == userTutorID)),
+			TerkunciAt: terkunciAt, DibatalkanAt: dibatalkanAt,
+			TanggalRencana: tanggalRencana, AlasanPerubahan: alasanPerubahan,
 		})
 	}
 	var meeting Presensi
@@ -559,7 +659,7 @@ func (s *Server) exportJournalPDF(c *fiber.Ctx, sheet journalSheetResponse) erro
 	pdf.SetFont("Helvetica", "B", 15)
 	pdf.CellFormat(277, 8, "PKBM Tunas Ilmu - Jurnal Mengajar", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 10)
-	pdf.CellFormat(277, 6, sheet.KelasLabel+" | Sabtu, "+sheet.Tanggal, "", 1, "C", false, 0, "")
+	pdf.CellFormat(277, 6, sheet.KelasLabel+" | "+sheet.Tanggal, "", 1, "C", false, 0, "")
 	pdf.CellFormat(277, 6, "Peserta didik tidak hadir: "+journalAbsenceText(sheet.AbsentStudents), "", 1, "L", false, 0, "")
 	pdf.Ln(3)
 	widths := []float64{12, 38, 45, 82, 60, 40}
@@ -627,7 +727,7 @@ func (s *Server) exportJournalDOCX(c *fiber.Ctx, sheet journalSheetResponse) err
 	title.AddText("PKBM Tunas Ilmu - Jurnal Mengajar")
 	title.Properties().SetBold(true)
 	title.Properties().SetSize(15 * measurement.Point)
-	doc.AddParagraph().AddRun().AddText(sheet.KelasLabel + " | Sabtu, " + sheet.Tanggal)
+	doc.AddParagraph().AddRun().AddText(sheet.KelasLabel + " | " + sheet.Tanggal)
 	doc.AddParagraph().AddRun().AddText("Peserta didik tidak hadir: " + journalAbsenceText(sheet.AbsentStudents))
 	table := doc.AddTable()
 	headers := []string{"Jam Ke", "Nama Tutor", "Mata Pelajaran", "Materi", "Peserta Didik Tidak Hadir", "Paraf"}
@@ -694,7 +794,7 @@ func (s *Server) exportJournalJPG(c *fiber.Ctx, sheet journalSheetResponse) erro
 	if err := journalSetFont(dc, 29); err != nil {
 		return err
 	}
-	dc.DrawStringAnchored(sheet.KelasLabel+" | Sabtu, "+sheet.Tanggal, width/2, 125, .5, .5)
+	dc.DrawStringAnchored(sheet.KelasLabel+" | "+sheet.Tanggal, width/2, 125, .5, .5)
 	dc.DrawString("Peserta didik tidak hadir: "+journalTruncate(journalAbsenceText(sheet.AbsentStudents), 180), 70, 175)
 	columns := []float64{70, 250, 780, 1300, 2150, 2940, 3438}
 	y := 230.0

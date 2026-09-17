@@ -808,7 +808,7 @@ func (s *Server) operationalComplianceJournalDetail(classes []Kelas, start, end 
 	}
 	nextDay := end.AddDate(0, 0, 1)
 	var journals []JurnalMengajar
-	if err := s.db.Preload("Tutor").
+	if err := activeJournalRows(s.db.Preload("Tutor")).
 		Where("kelas_id IN ? AND tanggal >= ? AND tanggal < ?", classIDs, start, nextDay).
 		Order("tanggal desc, created_at desc").Find(&journals).Error; err != nil {
 		return nil, nil, err

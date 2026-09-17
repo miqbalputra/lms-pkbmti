@@ -400,37 +400,110 @@ type Pengumuman struct {
 // sheet may include submissions from several subject tutors.
 type JurnalBatch struct {
 	Base
-	TutorID     string           `gorm:"index" json:"tutorId"`
-	KelasID     string           `gorm:"index" json:"kelasId"`
-	Tanggal     time.Time        `gorm:"index" json:"tanggal"`
-	TandaTangan string           `gorm:"type:text" json:"tandaTangan"`
-	FotoPath    *string          `json:"fotoPath"`
-	Tutor       Tutor            `json:"tutor"`
-	Kelas       Kelas            `json:"kelas"`
-	Lines       []JurnalMengajar `gorm:"foreignKey:BatchID" json:"lines"`
+	TutorID              string           `gorm:"index" json:"tutorId"`
+	KelasID              string           `gorm:"index" json:"kelasId"`
+	Tanggal              time.Time        `gorm:"index" json:"tanggal"`
+	TanggalRencana       *time.Time       `gorm:"index" json:"tanggalRencana"`
+	AlasanPerubahan      string           `gorm:"type:text" json:"alasanPerubahan"`
+	TandaTangan          string           `gorm:"type:text" json:"tandaTangan"`
+	FotoPath             *string          `json:"fotoPath"`
+	TerkunciAt           *time.Time       `gorm:"index" json:"terkunciAt"`
+	TerkunciOlehUserID   *string          `gorm:"index" json:"terkunciOlehUserId"`
+	DibatalkanAt         *time.Time       `gorm:"index" json:"dibatalkanAt"`
+	DibatalkanOlehUserID *string          `gorm:"index" json:"dibatalkanOlehUserId"`
+	AlasanPembatalan     string           `gorm:"type:text" json:"alasanPembatalan"`
+	Tutor                Tutor            `json:"tutor"`
+	Kelas                Kelas            `json:"kelas"`
+	Lines                []JurnalMengajar `gorm:"foreignKey:BatchID" json:"lines"`
 }
 
 // JurnalMengajar is one line on the daily journal sheet. Existing fields are
 // retained for legacy compatibility; BatchID/JamKe provide the new structure.
 type JurnalMengajar struct {
 	Base
-	BatchID         *string       `gorm:"index" json:"batchId"`
-	JamKe           int           `gorm:"default:1" json:"jamKe"`
-	TutorID         string        `gorm:"index" json:"tutorId"`
-	MapelID         string        `gorm:"index" json:"mapelId"`
-	KelasID         string        `gorm:"index" json:"kelasId"`
-	Tanggal         time.Time     `json:"tanggal"`
-	Materi          string        `gorm:"type:text" json:"materi"`
-	Kegiatan        string        `gorm:"type:text" json:"kegiatan"`
-	FotoPath        *string       `json:"fotoPath"`                      // relatif ke ./uploads/jurnal
-	Status          string        `gorm:"default:pending" json:"status"` // "pending"|"disetujui"|"ditolak"
-	CatatanReviewer string        `gorm:"type:text" json:"catatanReviewer"`
-	ReviewedBy      *string       `gorm:"index" json:"reviewedBy"`
-	ReviewedAt      *time.Time    `json:"reviewedAt"`
-	Tutor           Tutor         `json:"tutor"`
-	Mapel           MataPelajaran `json:"mapel"`
-	Kelas           Kelas         `json:"kelas"`
-	Batch           *JurnalBatch  `gorm:"foreignKey:BatchID" json:"batch,omitempty"`
+	BatchID                  *string       `gorm:"index" json:"batchId"`
+	JamKe                    int           `gorm:"default:1" json:"jamKe"`
+	TutorID                  string        `gorm:"index" json:"tutorId"`
+	MapelID                  string        `gorm:"index" json:"mapelId"`
+	KelasID                  string        `gorm:"index" json:"kelasId"`
+	Tanggal                  time.Time     `json:"tanggal"`
+	Materi                   string        `gorm:"type:text" json:"materi"`
+	Kegiatan                 string        `gorm:"type:text" json:"kegiatan"`
+	Tujuan                   string        `gorm:"type:text" json:"tujuan"`
+	Metode                   string        `gorm:"type:text" json:"metode"`
+	Media                    string        `gorm:"type:text" json:"media"`
+	Keterlibatan             string        `gorm:"type:text" json:"keterlibatan"`
+	Asesmen                  string        `gorm:"type:text" json:"asesmen"`
+	HasilAsesmen             string        `gorm:"type:text" json:"hasilAsesmen"`
+	Kendala                  string        `gorm:"type:text" json:"kendala"`
+	Refleksi                 string        `gorm:"type:text" json:"refleksi"`
+	TindakLanjut             string        `gorm:"type:text" json:"tindakLanjut"`
+	RingkasanOrangTua        string        `gorm:"type:text" json:"ringkasanOrangTua"`
+	RPPID                    *string       `gorm:"index" json:"rppId"`
+	ModulID                  *string       `gorm:"index" json:"modulId"`
+	MateriID                 *string       `gorm:"index" json:"materiId"`
+	TugasID                  *string       `gorm:"index" json:"tugasId"`
+	KompetensiID             *string       `gorm:"index" json:"kompetensiId"`
+	KelasVirtualID           *string       `gorm:"index" json:"kelasVirtualId"`
+	StatusPublikasi          string        `gorm:"index;default:draf" json:"statusPublikasi"`
+	DipublikasikanAt         *time.Time    `gorm:"index" json:"dipublikasikanAt"`
+	DipublikasikanOlehUserID *string       `gorm:"index" json:"dipublikasikanOlehUserId"`
+	FotoPath                 *string       `json:"fotoPath"`                      // relatif ke ./uploads/jurnal
+	Status                   string        `gorm:"default:pending" json:"status"` // "pending"|"disetujui"|"ditolak"
+	CatatanReviewer          string        `gorm:"type:text" json:"catatanReviewer"`
+	ReviewedBy               *string       `gorm:"index" json:"reviewedBy"`
+	ReviewedAt               *time.Time    `json:"reviewedAt"`
+	Tutor                    Tutor         `json:"tutor"`
+	Mapel                    MataPelajaran `json:"mapel"`
+	Kelas                    Kelas         `json:"kelas"`
+	Batch                    *JurnalBatch  `gorm:"foreignKey:BatchID" json:"batch,omitempty"`
+}
+
+// PortofolioBelajar menyimpan bukti belajar per anak. Berkas tidak pernah
+// disajikan sebagai URL publik; semua unduhan melalui handler berotorisasi.
+type PortofolioBelajar struct {
+	Base
+	PesertaDidikID           string        `gorm:"index" json:"pesertaDidikId"`
+	JurnalID                 *string       `gorm:"index" json:"jurnalId"`
+	MapelID                  string        `gorm:"index" json:"mapelId"`
+	KompetensiID             *string       `gorm:"index" json:"kompetensiId"`
+	Judul                    string        `gorm:"not null" json:"judul"`
+	TipeBukti                string        `gorm:"index" json:"tipeBukti"`
+	FilePath                 string        `gorm:"not null" json:"-"`
+	FileName                 string        `json:"fileName"`
+	KomentarTutor            string        `gorm:"type:text" json:"komentarTutor"`
+	Rubrik                   string        `gorm:"type:text" json:"rubrik"`
+	StatusPublikasi          string        `gorm:"index;default:draf" json:"statusPublikasi"`
+	DipublikasikanAt         *time.Time    `gorm:"index" json:"dipublikasikanAt"`
+	DipublikasikanOlehUserID *string       `gorm:"index" json:"dipublikasikanOlehUserId"`
+	DibuatOlehUserID         string        `gorm:"index" json:"dibuatOlehUserId"`
+	PesertaDidik             PesertaDidik  `json:"pesertaDidik"`
+	Mapel                    MataPelajaran `json:"mapel"`
+	Kompetensi               *Kompetensi   `gorm:"foreignKey:KompetensiID" json:"kompetensi,omitempty"`
+}
+
+// TindakLanjutBelajar mencatat ketuntasan, penguatan, atau remedial seorang
+// anak yang muncul dari sesi jurnal dan dapat diringkas bagi orang tua.
+type TindakLanjutBelajar struct {
+	Base
+	PesertaDidikID           string        `gorm:"index" json:"pesertaDidikId"`
+	JurnalID                 *string       `gorm:"index" json:"jurnalId"`
+	MapelID                  string        `gorm:"index" json:"mapelId"`
+	KompetensiID             *string       `gorm:"index" json:"kompetensiId"`
+	StatusKetuntasan         string        `gorm:"index" json:"statusKetuntasan"`
+	Rencana                  string        `gorm:"type:text" json:"rencana"`
+	PenanggungJawab          string        `json:"penanggungJawab"`
+	Tenggat                  *time.Time    `gorm:"index" json:"tenggat"`
+	Hasil                    string        `gorm:"type:text" json:"hasil"`
+	SelesaiAt                *time.Time    `gorm:"index" json:"selesaiAt"`
+	RingkasanOrangTua        string        `gorm:"type:text" json:"ringkasanOrangTua"`
+	StatusPublikasi          string        `gorm:"index;default:draf" json:"statusPublikasi"`
+	DipublikasikanAt         *time.Time    `gorm:"index" json:"dipublikasikanAt"`
+	DipublikasikanOlehUserID *string       `gorm:"index" json:"dipublikasikanOlehUserId"`
+	DibuatOlehUserID         string        `gorm:"index" json:"dibuatOlehUserId"`
+	PesertaDidik             PesertaDidik  `json:"pesertaDidik"`
+	Mapel                    MataPelajaran `json:"mapel"`
+	Kompetensi               *Kompetensi   `gorm:"foreignKey:KompetensiID" json:"kompetensi,omitempty"`
 }
 
 // Modul C — Tugas Siswa (prd_fitur_simpkbm.md). Tutor membuat tugas per mapel+kelas
@@ -1359,7 +1432,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {

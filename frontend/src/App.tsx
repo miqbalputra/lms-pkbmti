@@ -59,6 +59,7 @@ const ClassesView = lazy(() => import('./OperationalViews').then((m) => ({ defau
 const StudentsView = lazy(() => import('./OperationalViews').then((m) => ({ default: m.StudentsView })))
 const BukuKelasView = lazy(() => import('./pages/BukuKelasView').then((m) => ({ default: m.BukuKelasView })))
 const JurnalMengajarView = lazy(() => import('./pages/JurnalMengajarView').then((m) => ({ default: m.JurnalMengajarView })))
+const PerkembanganBelajarView = lazy(() => import('./pages/PerkembanganBelajarView').then((m) => ({ default: m.PerkembanganBelajarView })))
 const KelasVirtualView = lazy(() => import('./pages/KelasVirtualView').then((m) => ({ default: m.KelasVirtualView })))
 const MateriView = lazy(() => import('./pages/MateriView').then((m) => ({ default: m.MateriView })))
 const RppView = lazy(() => import('./pages/RppView').then((m) => ({ default: m.RppView })))
@@ -331,6 +332,7 @@ function Workspace({
   if (page === 'rekap-buku') return <RekapBuku token={token} />
   if (page === 'pengumuman') return <PengumumanView token={token} user={user} readOnly={user.role !== 'admin' && user.role !== 'guru'} />
   if (page === 'jurnal-mengajar') return <JurnalMengajarView token={token} user={user} readOnly={user.role !== 'admin' && user.role !== 'guru'} />
+  if (page === 'perkembangan-belajar') return <PerkembanganBelajarView token={token} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'tugas') return <TugasView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'materi') return <MateriView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'rpp') return <RppView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />

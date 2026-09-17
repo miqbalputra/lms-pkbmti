@@ -174,19 +174,29 @@ func TestJournalBatchSheetAttendanceAndExports(t *testing.T) {
 	}
 }
 
-func TestJournalBatchRejectsInvalidDateAndUnauthorizedSubject(t *testing.T) {
+func TestJournalBatchAllowsFlexibleDateAndRejectsUnauthorizedSubject(t *testing.T) {
 	s, app, _, guruToken, kelas, mapelA, _, day := setupJournalBatchFixture(t)
 	lines, _ := json.Marshal([]journalLineInput{{JamKe: 1, MapelID: mapelA.ID, Materi: "Materi"}})
 	weekday := day.AddDate(0, 0, -1)
-	invalidDate, err := app.Test(journalBatchRequest(http.MethodPost, "/api/jurnal/batches", guruToken, url.Values{"kelasId": {kelas.ID}, "tanggal": {wibTimeFormat(weekday, "2006-01-02")}, "tandaTangan": {validPngSignature}, "lines": {string(lines)}}), -1)
+	flexibleDate, err := app.Test(journalBatchRequest(http.MethodPost, "/api/jurnal/batches", guruToken, url.Values{"kelasId": {kelas.ID}, "tanggal": {wibTimeFormat(weekday, "2006-01-02")}, "tandaTangan": {validPngSignature}, "lines": {string(lines)}}), -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if invalidDate.StatusCode != http.StatusBadRequest {
-		invalidDate.Body.Close()
-		t.Fatalf("weekday journal: want 400, got %d", invalidDate.StatusCode)
+	if flexibleDate.StatusCode != http.StatusCreated {
+		flexibleDate.Body.Close()
+		t.Fatalf("weekday journal: want 201, got %d", flexibleDate.StatusCode)
 	}
-	invalidDate.Body.Close()
+	flexibleDate.Body.Close()
+
+	missingReason, err := app.Test(journalBatchRequest(http.MethodPost, "/api/jurnal/batches", guruToken, url.Values{"kelasId": {kelas.ID}, "tanggal": {wibTimeFormat(day, "2006-01-02")}, "tanggalRencana": {wibTimeFormat(weekday, "2006-01-02")}, "tandaTangan": {validPngSignature}, "lines": {string(lines)}}), -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingReason.StatusCode != http.StatusBadRequest {
+		missingReason.Body.Close()
+		t.Fatalf("shifted journal without reason: want 400, got %d", missingReason.StatusCode)
+	}
+	missingReason.Body.Close()
 
 	mapelTanpaTugas := MataPelajaran{NamaMapel: "Mapel Tanpa Penugasan", KodeMapel: "JBC", IsActive: true}
 	if err := s.db.Create(&mapelTanpaTugas).Error; err != nil {

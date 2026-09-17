@@ -57,6 +57,7 @@ export const PAGE_IDS = [
   'arsip',
   'presensi',
   'jurnal-mengajar',
+  'perkembangan-belajar',
   'pengumuman',
   'tugas',
   'materi',

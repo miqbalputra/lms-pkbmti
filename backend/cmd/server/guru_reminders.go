@@ -272,7 +272,7 @@ func (s *Server) guruPendingJurnal(tutorID, academicYearID string, semester Seme
 		}
 		for date := firstSaturdayOnOrAfter(start); !date.After(end); date = date.AddDate(0, 0, 7) {
 			var count int64
-			if err := s.db.Model(&JurnalMengajar{}).Where("tutor_id = ? AND kelas_id = ? AND mapel_id = ? AND tanggal = ?", tutorID, assignment.KelasID, assignment.MapelID, date).Count(&count).Error; err != nil {
+			if err := activeJournalRows(s.db.Model(&JurnalMengajar{})).Where("tutor_id = ? AND kelas_id = ? AND mapel_id = ? AND tanggal = ?", tutorID, assignment.KelasID, assignment.MapelID, date).Count(&count).Error; err != nil {
 				return nil, err
 			}
 			if count == 0 {

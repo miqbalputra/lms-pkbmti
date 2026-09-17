@@ -110,12 +110,24 @@ func (s *Server) routes(api fiber.Router) {
 	// approve/reject role-checked inside handler (admin||kepala_sekolah, NOT
 	// canManageKelas which rejects kepala).
 	api.Get("/jurnal", s.listJurnal)
+	api.Get("/jurnal/referensi", s.journalReferences)
 	api.Get("/jurnal/sheet", s.getJournalSheet)
 	api.Get("/jurnal/export", s.exportJournal)
 	api.Post("/jurnal/batches", s.createJournalBatch)
 	api.Put("/jurnal/batches/:id", s.updateJournalBatch)
 	api.Delete("/jurnal/batches/:id", s.deleteJournalBatch)
+	api.Post("/jurnal/batches/:id/kunci", s.journalBatchLock)
+	api.Post("/jurnal/batches/:id/buka-kunci", s.journalBatchUnlock)
 	api.Get("/jurnal/:id/foto", s.jurnalFoto)
+	api.Get("/portofolio", s.listPortofolio)
+	api.Post("/portofolio", s.createPortofolio)
+	api.Put("/portofolio/:id", s.updatePortofolio)
+	api.Delete("/portofolio/:id", s.deletePortofolio)
+	api.Get("/portofolio/:id/download", s.downloadPortofolio)
+	api.Get("/tindak-lanjut-belajar", s.listTindakLanjut)
+	api.Post("/tindak-lanjut-belajar", s.createTindakLanjut)
+	api.Put("/tindak-lanjut-belajar/:id", s.updateTindakLanjut)
+	api.Get("/tindak-lanjut-belajar/dashboard", s.journalFollowUpDashboard)
 
 	// Modul C — Tugas Siswa (prd_fitur_simpkbm.md). Tutor membuat tugas per mapel+kelas
 	// (lampiran opsional); pengumpulan & nilai dicatat tutor (canManageKelas). Admin
@@ -199,6 +211,10 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/orang-tua/anak/:id/ujian-skor", s.getUjianSkorAnak)
 	api.Get("/orang-tua/anak/:id/tugas", s.getTugasAnak)
 	api.Get("/orang-tua/anak/:id/materi", s.getMateriAnak)
+	api.Get("/orang-tua/anak/:id/jurnal", s.getJurnalAnak)
+	api.Get("/orang-tua/anak/:id/portofolio", s.getPortofolioAnak)
+	api.Get("/orang-tua/anak/:id/portofolio/:portofolioId/download", s.downloadPortofolioAnak)
+	api.Get("/orang-tua/anak/:id/tindak-lanjut", s.getTindakLanjutAnak)
 	api.Get("/orang-tua/anak/:id/peminjaman", s.getPeminjamanAnak)
 	api.Get("/orang-tua/anak/:id/chat", s.listChatAnak)
 	api.Post("/orang-tua/anak/:id/chat", s.sendChatAnak)
@@ -1624,6 +1640,8 @@ func (s *Server) deleteMapel(c *fiber.Ctx) error {
 		{"penugasan_guru_mapels", &PenugasanGuruMapel{}},
 		{"temas", &Tema{}},
 		{"jurnal_mengajars", &JurnalMengajar{}},
+		{"portofolio_belajars", &PortofolioBelajar{}},
+		{"tindak_lanjut_belajars", &TindakLanjutBelajar{}},
 		{"tugas", &Tugas{}},
 		{"materis", &Materi{}},
 		{"r_p_p_s", &RPP{}},
@@ -3520,6 +3538,8 @@ func (s *Server) deleteSiswa(c *fiber.Ctx) error {
 		deleteReference{&CatatanPerilaku{}, "peserta_didik_id", "catatan perilaku"},
 		deleteReference{&CatatanRapor{}, "peserta_didik_id", "catatan rapor"},
 		deleteReference{&NilaiKompetensi{}, "peserta_didik_id", "nilai kompetensi"},
+		deleteReference{&PortofolioBelajar{}, "peserta_didik_id", "portofolio belajar"},
+		deleteReference{&TindakLanjutBelajar{}, "peserta_didik_id", "tindak lanjut belajar"},
 		deleteReference{&Peminjaman{}, "peserta_didik_id", "peminjaman buku"},
 	)
 }
@@ -4296,15 +4316,17 @@ func (s *Server) updatePengumuman(c *fiber.Ctx) error {
 }
 
 // ---------------------------------------------------------------------------
-// Modul K — Jurnal Mengajar (prd_fitur_simpkbm.md). Guru mencatat kegiatan harian
-// (foto bukti opsional). Jurnal LANGSUNG final (status=disetujui) saat dicatat —
-// tanpa alur approve/reject. Edit/hapus oleh pemilik (TutorID) kapan saja; admin
-// bebas. canManageKelas dipakai utk cek wali kelas (menolak kepala, tapi kepala
-// read-only di frontend).
+// Modul K — Jurnal Pembelajaran. Guru mencatat kegiatan harian beserta tujuan,
+// asesmen, refleksi, dan ringkasan orang tua. Data baru berstatus draf kecuali
+// tutor memilih publikasi. Batch yang sudah dikunci atau dibatalkan tidak dapat
+// diubah; kepala sekolah tetap baca-saja di frontend.
 // ---------------------------------------------------------------------------
 
 func (s *Server) listJurnal(c *fiber.Ctx) error {
-	q := s.db.Preload("Tutor").Preload("Mapel").Preload("Kelas").Order("tanggal desc")
+	if err := journalStaff(c); err != nil {
+		return err
+	}
+	q := activeJournalRows(s.db.Preload("Tutor").Preload("Mapel").Preload("Kelas").Order("tanggal desc"))
 	if v := c.Query("tutorId"); v != "" {
 		q = q.Where("tutor_id = ?", v)
 	}
@@ -4314,12 +4336,10 @@ func (s *Server) listJurnal(c *fiber.Ctx) error {
 	if v := c.Query("status"); v != "" {
 		q = q.Where("status = ?", v)
 	}
-	if role := c.Locals("role").(string); role == "guru" {
-		var u User
-		if s.db.First(&u, "id = ?", c.Locals("userID")).Error != nil || u.TutorID == nil {
-			return fiber.NewError(403, "no tutor profile")
-		}
-		q = q.Where("tutor_id = ?", *u.TutorID)
+	var err error
+	q, err = s.journalTutorScope(c, q)
+	if err != nil {
+		return err
 	}
 	var rows []JurnalMengajar
 	if e := q.Find(&rows).Error; e != nil {
@@ -4498,6 +4518,9 @@ func (s *Server) validateJurnalReferences(tutorID, mapelID, kelasID string) erro
 }
 
 func (s *Server) jurnalFoto(c *fiber.Ctx) error {
+	if err := journalStaff(c); err != nil {
+		return err
+	}
 	var j JurnalMengajar
 	if e := s.db.Preload("Batch").First(&j, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "record not found")
@@ -4507,6 +4530,9 @@ func (s *Server) jurnalFoto(c *fiber.Ctx) error {
 		var u User
 		if s.db.First(&u, "id = ?", c.Locals("userID")).Error != nil || u.TutorID == nil || j.TutorID != *u.TutorID {
 			return fiber.NewError(403, "not permitted")
+		}
+		if err := s.canManageKelasMapel(c, j.KelasID, j.MapelID); err != nil {
+			return err
 		}
 	}
 	photoPath := j.FotoPath
@@ -5087,6 +5113,13 @@ func (s *Server) deleteMateri(c *fiber.Ctx) error {
 	if c.Locals("role") != "admin" && m.DibuatOlehUserID != uid {
 		return fiber.NewError(403, "hanya pembuat atau admin yang dapat menghapus")
 	}
+	var journalCount int64
+	if err := s.db.Model(&JurnalMengajar{}).Where("materi_id = ?", m.ID).Count(&journalCount).Error; err != nil {
+		return err
+	}
+	if journalCount > 0 {
+		return fiber.NewError(409, "materi masih dipakai oleh jurnal pembelajaran")
+	}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("materi_id = ?", m.ID).Delete(&KomentarMateri{}).Error; err != nil {
 			return err
@@ -5555,6 +5588,13 @@ func (s *Server) deleteRPP(c *fiber.Ctx) error {
 	uid := c.Locals("userID").(string)
 	if c.Locals("role") != "admin" && r.DibuatOlehUserID != uid {
 		return fiber.NewError(403, "hanya pembuat atau admin yang dapat menghapus")
+	}
+	var journalCount int64
+	if err := s.db.Model(&JurnalMengajar{}).Where("rpp_id = ?", r.ID).Count(&journalCount).Error; err != nil {
+		return err
+	}
+	if journalCount > 0 {
+		return fiber.NewError(409, "RPP masih dipakai oleh jurnal pembelajaran")
 	}
 	if e := s.db.Delete(&r).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -6126,6 +6166,13 @@ func (s *Server) deleteKelasVirtual(c *fiber.Ctx) error {
 	uid := c.Locals("userID").(string)
 	if c.Locals("role") != "admin" && kv.DibuatOlehUserID != uid {
 		return fiber.NewError(403, "hanya pembuat atau admin yang dapat menghapus")
+	}
+	var journalCount int64
+	if err := s.db.Model(&JurnalMengajar{}).Where("kelas_virtual_id = ?", kv.ID).Count(&journalCount).Error; err != nil {
+		return err
+	}
+	if journalCount > 0 {
+		return fiber.NewError(409, "kelas virtual masih dipakai oleh jurnal pembelajaran")
 	}
 	if e := s.db.Delete(&kv).Error; e != nil {
 		return e
@@ -7666,11 +7713,21 @@ func (s *Server) updateModulBelajar(c *fiber.Ctx) error {
 
 func (s *Server) deleteModulBelajar(c *fiber.Ctx) error {
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
+		var journalCount int64
+		if err := tx.Model(&JurnalMengajar{}).Where("modul_id = ?", id(c)).Count(&journalCount).Error; err != nil {
+			return err
+		}
+		if journalCount > 0 {
+			return fiber.NewError(409, "modul tidak dapat dihapus karena masih dipakai jurnal pembelajaran")
+		}
 		if err := tx.Where("modul_id = ?", id(c)).Delete(&CapaianModul{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&ModulBelajar{}, "id = ?", id(c)).Error
 	}); e != nil {
+		if fiberError, ok := e.(*fiber.Error); ok {
+			return fiberError
+		}
 		return fiber.NewError(400, e.Error())
 	}
 	uid := c.Locals("userID").(string)
@@ -7942,6 +7999,18 @@ func (s *Server) updateKompetensi(c *fiber.Ctx) error {
 func (s *Server) deleteKompetensi(c *fiber.Ctx) error {
 	if _, _, err := s.tutorCanEditKompetensi(c, id(c)); err != nil {
 		return err
+	}
+	for _, reference := range []struct {
+		model any
+		label string
+	}{{&JurnalMengajar{}, "jurnal pembelajaran"}, {&PortofolioBelajar{}, "portofolio belajar"}, {&TindakLanjutBelajar{}, "tindak lanjut belajar"}} {
+		var count int64
+		if err := s.db.Model(reference.model).Where("kompetensi_id = ?", id(c)).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return fiber.NewError(409, "kompetensi masih dipakai oleh "+reference.label)
+		}
 	}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("kompetensi_id = ?", id(c)).Delete(&CapaianKompetensi{}).Error; err != nil {

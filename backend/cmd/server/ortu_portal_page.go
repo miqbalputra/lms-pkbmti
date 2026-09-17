@@ -191,6 +191,7 @@ const TABS=[
   {id:'ujian',label:'Ujian',icon:'📝'},
   {id:'tugas',label:'Tugas',icon:'📋'},
   {id:'materi',label:'Materi',icon:'📚'},
+  {id:'belajar',label:'Belajar',icon:'🌱'},
   {id:'kalender',label:'Kalender',icon:'📅'},
   {id:'notif',label:'Notifikasi',icon:'🔔'},
   {id:'chat',label:'Chat',icon:'💬'},
@@ -216,6 +217,7 @@ document.addEventListener('click',e=>{
     case 'select-child':void selectAnak(el.dataset.id||'');break;
     case 'show-tab':showTab(el.dataset.tab||'',el);break;
     case 'download-surat':void downloadSurat(el.dataset.id||'');break;
+    case 'download-portofolio':void downloadPortofolio(el.dataset.id||'');break;
     case 'download-identitas':void downloadIdentitas();break;
     case 'send-chat':void sendChat();break;
   }
@@ -276,7 +278,7 @@ function showTab(tab,el){
   c.innerHTML='<div class="empty-state">Memuat...</div>';
   const m={
     identitas:loadIdentitas,surat:loadSurat,performa:loadPerforma,perilaku:loadPerilaku,ujian:loadUjian,tugas:loadTugas,
-    materi:loadMateri,kalender:loadKalender,notif:loadNotif,chat:loadChat,buku:loadBuku
+    materi:loadMateri,belajar:loadBelajar,kalender:loadKalender,notif:loadNotif,chat:loadChat,buku:loadBuku
   };
   if(m[tab])m[tab](c);
 }
@@ -456,6 +458,37 @@ async function loadMateri(c){
     if(!Array.isArray(d)||!d.length){c.innerHTML='<div class="empty-state">Belum ada materi</div>';return}
     c.innerHTML=d.map(m=>'<div style="padding:10px 0;border-bottom:1px solid var(--border)"><div style="font-weight:600;font-size:13px">'+esc(m.judul)+'</div><div style="font-size:12px;color:var(--muted-foreground)">'+esc(m.mapel?.namaMapel||'')+' &middot; '+String(m.createdAt||'').slice(0,10)+'</div></div>').join('');
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
+}
+
+async function loadBelajar(c){
+  try{
+    const base=API+'/orang-tua/anak/'+state.anakId;
+    const [jurnalRes,portfolioRes,followRes]=await Promise.all([
+      fetch(base+'/jurnal',{headers:hdr()}),fetch(base+'/portofolio',{headers:hdr()}),fetch(base+'/tindak-lanjut',{headers:hdr()})
+    ]);
+    const [jurnal,portofolio,tindak]=await Promise.all([jurnalRes.json(),portfolioRes.json(),followRes.json()]);
+    if(!jurnalRes.ok)throw new Error(jurnal.error||'Gagal memuat kegiatan belajar');
+    if(!portfolioRes.ok)throw new Error(portofolio.error||'Gagal memuat portofolio');
+    if(!followRes.ok)throw new Error(tindak.error||'Gagal memuat tindak lanjut');
+    let html='<div class="card"><div class="card-header"><h1>Kegiatan Belajar</h1><p class="desc">Ringkasan kegiatan yang telah diterbitkan tutor.</p></div><div class="card-content">';
+    if(!Array.isArray(jurnal)||!jurnal.length){html+='<div class="empty-state">Belum ada ringkasan kegiatan yang diterbitkan.</div>'}
+    else html+=jurnal.map(j=>'<div style="padding:12px 0;border-bottom:1px solid var(--border)"><div style="display:flex;justify-content:space-between;gap:12px"><strong>'+esc(j.mapel||'Kegiatan belajar')+'</strong><span style="font-size:11px;color:var(--muted-foreground)">'+String(j.tanggal||'').slice(0,10)+'</span></div>'+(j.tujuan?'<div style="font-size:12px;margin-top:7px"><strong>Tujuan:</strong> '+esc(j.tujuan)+'</div>':'')+(j.materi?'<div style="font-size:12px;margin-top:5px"><strong>Materi:</strong> '+esc(j.materi)+'</div>':'')+(j.kegiatan?'<div style="font-size:12px;margin-top:5px"><strong>Kegiatan:</strong> '+esc(j.kegiatan)+'</div>':'')+(j.ringkasan?'<div style="font-size:12px;margin-top:7px;color:var(--muted-foreground)">'+esc(j.ringkasan)+'</div>':'')+'<div style="font-size:11px;margin-top:8px;color:var(--muted-foreground)">Kehadiran: '+esc(j.kehadiran||'Belum dicatat')+(j.tugasJudul?' · Tugas '+esc(j.tugasJudul)+': '+esc(j.statusTugas||'Belum dicatat'):'')+'</div>'+(j.tindakLanjut?'<div style="font-size:12px;margin-top:6px"><strong>Tindak lanjut:</strong> '+esc(j.tindakLanjut)+'</div>':'')+'</div>').join('');
+    html+='</div></div><div class="card"><div class="card-header"><h1>Portofolio Belajar</h1><p class="desc">Karya dan bukti belajar yang dibagikan tutor.</p></div><div class="card-content">';
+    if(!Array.isArray(portofolio)||!portofolio.length){html+='<div class="empty-state">Belum ada portofolio yang diterbitkan.</div>'}
+    else html+=portofolio.map(p=>'<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)"><div><strong style="font-size:13px">'+esc(p.judul)+'</strong><div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">'+esc(p.mapel||'')+' · '+esc(p.tipeBukti||'Berkas')+'</div>'+(p.komentarTutor?'<div style="font-size:12px;margin-top:6px">'+esc(p.komentarTutor)+'</div>':'')+(p.rubrik?'<div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">Penilaian: '+esc(p.rubrik)+'</div>':'')+'</div><button class="btn btn-primary btn-sm" data-action="download-portofolio" data-id="'+esc(p.id)+'">Unduh</button></div>').join('');
+    html+='</div></div><div class="card"><div class="card-header"><h1>Dukungan Belajar</h1><p class="desc">Tindak lanjut yang perlu diperhatikan bersama.</p></div><div class="card-content">';
+    if(!Array.isArray(tindak)||!tindak.length){html+='<div class="empty-state">Belum ada tindak lanjut yang diterbitkan.</div>'}
+    else html+=tindak.map(t=>'<div style="padding:12px 0;border-bottom:1px solid var(--border)"><span class="badge '+(t.statusKetuntasan==='tuntas'?'badge-success':t.statusKetuntasan==='remedial'?'badge-destructive':'badge-warning')+'">'+esc(t.statusKetuntasan||'penguatan')+'</span><div style="font-size:13px;margin-top:7px">'+esc(t.ringkasan||t.rencana||'')+'</div>'+(t.penanggungJawab?'<div style="font-size:11px;color:var(--muted-foreground);margin-top:5px">Pendamping: '+esc(t.penanggungJawab)+'</div>':'')+(t.tenggat?'<div style="font-size:11px;color:var(--muted-foreground);margin-top:3px">Target: '+String(t.tenggat).slice(0,10)+'</div>':'')+'</div>').join('');
+    html+='</div></div>';c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
+}
+
+async function downloadPortofolio(portofolioId){
+  try{
+    const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/portofolio/'+encodeURIComponent(portofolioId)+'/download',{headers:hdr()});
+    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Portofolio gagal diunduh')}
+    const blob=await r.blob();const cd=r.headers.get('Content-Disposition')||'';const match=/filename="?([^";]+)"?/.exec(cd);const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=match?.[1]||'portofolio';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+  }catch(e){alert(e.message||'Portofolio gagal diunduh')}
 }
 
 async function loadKalender(c){
