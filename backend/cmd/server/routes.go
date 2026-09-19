@@ -191,6 +191,10 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/ujian/:id/export", s.exportUjianResults)
 	api.Get("/ujian-online/monitor/:ujianId", s.monitorUjianOnline)
 
+	// Modul Simulasi ANBK/TKA SD owns a separate schema/routes so historical
+	// Bank Soal and Ujian data keeps its original behaviour.
+	registerSimulasiRoutes(api, s)
+
 	// Modul Notifikasi — CRUD notifikasi user.
 	api.Get("/notifikasi", s.listNotifikasi)
 	api.Get("/notifikasi/unread-count", s.unreadNotifikasiCount)
@@ -412,22 +416,30 @@ func list[T any](db *gorm.DB, c *fiber.Ctx, preload ...string) error {
 // back to their username because they do not have a separate name field.
 func (s *Server) fillUserNames(users ...*User) error {
 	ids := make([]string, 0, len(users))
+	studentIDs := make([]string, 0, len(users))
 	seen := make(map[string]struct{})
+	seenStudents := make(map[string]struct{})
 	for _, user := range users {
 		if user == nil {
 			continue
 		}
 		user.Nama = user.Username
-		if user.Role != "guru" || user.TutorID == nil || strings.TrimSpace(*user.TutorID) == "" {
-			continue
+		if user.Role == "guru" && user.TutorID != nil && strings.TrimSpace(*user.TutorID) != "" {
+			tutorID := strings.TrimSpace(*user.TutorID)
+			if _, ok := seen[tutorID]; !ok {
+				seen[tutorID] = struct{}{}
+				ids = append(ids, tutorID)
+			}
 		}
-		tutorID := strings.TrimSpace(*user.TutorID)
-		if _, ok := seen[tutorID]; !ok {
-			seen[tutorID] = struct{}{}
-			ids = append(ids, tutorID)
+		if user.Role == "siswa" && user.PesertaDidikID != nil && strings.TrimSpace(*user.PesertaDidikID) != "" {
+			studentID := strings.TrimSpace(*user.PesertaDidikID)
+			if _, ok := seenStudents[studentID]; !ok {
+				seenStudents[studentID] = struct{}{}
+				studentIDs = append(studentIDs, studentID)
+			}
 		}
 	}
-	if len(ids) == 0 {
+	if len(ids) == 0 && len(studentIDs) == 0 {
 		return nil
 	}
 	var tutors []Tutor
@@ -438,12 +450,26 @@ func (s *Server) fillUserNames(users ...*User) error {
 	for _, tutor := range tutors {
 		names[tutor.ID] = strings.TrimSpace(tutor.Nama)
 	}
+	studentNames := make(map[string]string, len(studentIDs))
+	if len(studentIDs) > 0 {
+		var students []PesertaDidik
+		if err := s.db.Select("id, nama").Where("id IN ?", studentIDs).Find(&students).Error; err != nil {
+			return err
+		}
+		for _, student := range students {
+			studentNames[student.ID] = strings.TrimSpace(student.Nama)
+		}
+	}
 	for _, user := range users {
-		if user == nil || user.TutorID == nil {
+		if user == nil {
 			continue
 		}
-		if name := names[strings.TrimSpace(*user.TutorID)]; name != "" {
+		if user.TutorID != nil && names[strings.TrimSpace(*user.TutorID)] != "" {
+			name := names[strings.TrimSpace(*user.TutorID)]
 			user.Nama = name
+		}
+		if user.PesertaDidikID != nil && studentNames[strings.TrimSpace(*user.PesertaDidikID)] != "" {
+			user.Nama = studentNames[strings.TrimSpace(*user.PesertaDidikID)]
 		}
 	}
 	return nil
@@ -2047,6 +2073,7 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 		Username, Email, Password, Role string
 		TutorID                         *string `json:"tutorId"`
 		OrangTuaID                      *string `json:"orangTuaId"`
+		PesertaDidikID                  *string `json:"pesertaDidikId"`
 		IsActive                        bool    `json:"isActive"`
 	}
 	if e := c.BodyParser(&in); e != nil {
@@ -2054,14 +2081,17 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	}
 	in.Username = strings.TrimSpace(in.Username)
 	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
-	if len(in.Password) < 8 || !validRole(in.Role) || in.Username == "" || (in.Role != "guru" && in.Email == "") {
-		return fiber.NewError(400, "username, email (wajib selain tutor), peran yang valid, dan kata sandi minimal 8 karakter wajib diisi")
+	if len(in.Password) < 8 || !validRole(in.Role) || in.Username == "" || (in.Role != "guru" && in.Role != "siswa" && in.Email == "") {
+		return fiber.NewError(400, "username, email (wajib selain tutor/siswa), peran yang valid, dan kata sandi minimal 8 karakter wajib diisi")
 	}
 	if in.Role == "guru" && in.TutorID == nil {
 		return fiber.NewError(400, "guru account requires a tutor")
 	}
 	if in.Role == "orang_tua" && in.OrangTuaID == nil {
 		return fiber.NewError(400, "orang_tua account requires an orangTuaId")
+	}
+	if in.Role == "siswa" && (in.PesertaDidikID == nil || strings.TrimSpace(*in.PesertaDidikID) == "") {
+		return fiber.NewError(400, "akun siswa harus dihubungkan ke peserta didik")
 	}
 	// Relasi ini adalah bagian dari model otorisasi, bukan sekadar metadata.
 	// Jangan biarkan perubahan role meninggalkan relasi lama atau mengizinkan
@@ -2072,11 +2102,14 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	if in.Role != "orang_tua" {
 		in.OrangTuaID = nil
 	}
+	if in.Role != "siswa" {
+		in.PesertaDidikID = nil
+	}
 	h, hashErr := bcryptHash(in.Password)
 	if hashErr != nil {
 		return fiber.NewError(400, "kata sandi tidak valid atau terlalu panjang")
 	}
-	u := User{Username: in.Username, Email: in.Email, PasswordHash: h, Role: in.Role, TutorID: in.TutorID, OrangTuaID: in.OrangTuaID, IsActive: in.IsActive}
+	u := User{Username: in.Username, Email: in.Email, PasswordHash: h, Role: in.Role, TutorID: in.TutorID, OrangTuaID: in.OrangTuaID, PesertaDidikID: in.PesertaDidikID, IsActive: in.IsActive}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
 		if in.TutorID != nil {
 			var tutor Tutor
@@ -2108,6 +2141,18 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 				return err
 			}
 		}
+		if in.PesertaDidikID != nil {
+			var student PesertaDidik
+			if err := tx.Where("id = ? AND status = ?", *in.PesertaDidikID, "aktif").First(&student).Error; err != nil {
+				return fiber.NewError(400, "peserta didik tidak ditemukan atau tidak aktif")
+			}
+			var duplicate User
+			if err := tx.Where("peserta_didik_id = ?", *in.PesertaDidikID).First(&duplicate).Error; err == nil {
+				return fiber.NewError(400, "peserta didik sudah terhubung ke akun lain")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
 		if err := tx.Create(&u).Error; err != nil {
 			return fiber.NewError(400, err.Error())
 		}
@@ -2123,7 +2168,7 @@ func (s *Server) createUser(c *fiber.Ctx) error {
 	return c.Status(201).JSON(u)
 }
 func validRole(role string) bool {
-	return role == "admin" || role == "kepala_sekolah" || role == "guru" || role == "orang_tua"
+	return role == "admin" || role == "kepala_sekolah" || role == "guru" || role == "orang_tua" || role == "siswa"
 }
 
 func isGmailAddress(value string) bool {
@@ -2210,6 +2255,7 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 		Username, Email, Password, Role string
 		TutorID                         *string `json:"tutorId"`
 		OrangTuaID                      *string `json:"orangTuaId"`
+		PesertaDidikID                  *string `json:"pesertaDidikId"`
 		IsActive                        bool    `json:"isActive"`
 	}
 	if e := c.BodyParser(&in); e != nil || !validRole(in.Role) || strings.TrimSpace(in.Username) == "" {
@@ -2217,14 +2263,17 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 	}
 	in.Username = strings.TrimSpace(in.Username)
 	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
-	if in.Role != "guru" && in.Email == "" {
-		return fiber.NewError(400, "email wajib diisi selain untuk tutor")
+	if in.Role != "guru" && in.Role != "siswa" && in.Email == "" {
+		return fiber.NewError(400, "email wajib diisi selain untuk tutor dan siswa")
 	}
 	if in.Role == "guru" && in.TutorID == nil {
 		return fiber.NewError(400, "guru account requires a tutor")
 	}
 	if in.Role == "orang_tua" && in.OrangTuaID == nil {
 		return fiber.NewError(400, "orang_tua account requires an orangTuaId")
+	}
+	if in.Role == "siswa" && (in.PesertaDidikID == nil || strings.TrimSpace(*in.PesertaDidikID) == "") {
+		return fiber.NewError(400, "akun siswa harus dihubungkan ke peserta didik")
 	}
 	// Relasi ini adalah bagian dari model otorisasi, bukan sekadar metadata.
 	// Jangan biarkan perubahan role meninggalkan relasi lama atau mengizinkan
@@ -2234,6 +2283,9 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 	}
 	if in.Role != "orang_tua" {
 		in.OrangTuaID = nil
+	}
+	if in.Role != "siswa" {
+		in.PesertaDidikID = nil
 	}
 	uid := c.Locals("userID").(string)
 	targetID := id(c)
@@ -2249,7 +2301,7 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 			return fiber.NewError(409, "tidak dapat mengubah: minimal satu admin aktif harus tersisa")
 		}
 	}
-	u.Username, u.Email, u.Role, u.TutorID, u.OrangTuaID, u.IsActive = in.Username, in.Email, in.Role, in.TutorID, in.OrangTuaID, in.IsActive
+	u.Username, u.Email, u.Role, u.TutorID, u.OrangTuaID, u.PesertaDidikID, u.IsActive = in.Username, in.Email, in.Role, in.TutorID, in.OrangTuaID, in.PesertaDidikID, in.IsActive
 	if in.Password != "" {
 		if len(in.Password) < 8 {
 			return fiber.NewError(400, "password must be at least 8 characters")
@@ -2283,6 +2335,18 @@ func (s *Server) updateUser(c *fiber.Ctx) error {
 			var dup User
 			if err := tx.Where("orang_tua_id = ? AND id <> ?", *in.OrangTuaID, u.ID).First(&dup).Error; err == nil {
 				return fiber.NewError(400, "orang tua is already linked to another user account")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+		if in.PesertaDidikID != nil {
+			var student PesertaDidik
+			if err := tx.Where("id = ? AND status = ?", *in.PesertaDidikID, "aktif").First(&student).Error; err != nil {
+				return fiber.NewError(400, "peserta didik tidak ditemukan atau tidak aktif")
+			}
+			var duplicate User
+			if err := tx.Where("peserta_didik_id = ? AND id <> ?", *in.PesertaDidikID, u.ID).First(&duplicate).Error; err == nil {
+				return fiber.NewError(400, "peserta didik sudah terhubung ke akun lain")
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
@@ -9505,6 +9569,7 @@ func (s *Server) startScheduler() {
 		for {
 			time.Sleep(30 * time.Second)
 			s.autoFinishUjianSessions()
+			s.autoFinishSimulasiSessions()
 		}
 	}()
 }

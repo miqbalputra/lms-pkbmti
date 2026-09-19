@@ -75,6 +75,7 @@ export const PAGE_IDS = [
   'ujian',
   'ujian-online',
   'ujian-monitor',
+  'simulasi',
   'portal-ortu',
   'sertifikat',
   'kartu-pelajar',

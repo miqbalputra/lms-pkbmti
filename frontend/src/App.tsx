@@ -86,6 +86,8 @@ const RelasiOrangTua = lazy(() => import('./pages/RelasiOrangTua').then((m) => (
 const BackupView = lazy(() => import('./pages/BackupView').then((m) => ({ default: m.BackupView })))
 const UjianOnlineView = lazy(() => import('./pages/UjianOnlineView').then((m) => ({ default: m.UjianOnlineView })))
 const UjianMonitorView = lazy(() => import('./pages/UjianMonitorView').then((m) => ({ default: m.UjianMonitorView })))
+const SimulasiView = lazy(() => import('./pages/SimulasiView').then((m) => ({ default: m.SimulasiView })))
+const SimulasiSiswaView = lazy(() => import('./pages/SimulasiSiswaView').then((m) => ({ default: m.SimulasiSiswaView })))
 const NotifikasiView = lazy(() => import('./pages/NotifikasiView').then((m) => ({ default: m.NotifikasiView })))
 const KalenderView = lazy(() => import('./pages/KalenderView').then((m) => ({ default: m.KalenderView })))
 const AnalyticsView = lazy(() => import('./pages/AnalyticsView').then((m) => ({ default: m.AnalyticsView })))
@@ -94,7 +96,7 @@ const DashboardCharts = lazy(() =>
   import('./DashboardCharts').then((m) => ({ default: m.DashboardCharts }))
 )
 
-export type User = { id: string; username: string; role: string; tutorId?: string; email?: string; nama?: string }
+export type User = { id: string; username: string; role: string; tutorId?: string; pesertaDidikId?: string; email?: string; nama?: string }
 
 function PageFallback() {
   return (
@@ -220,6 +222,13 @@ export default function App() {
             }}
             requestFn={request}
           />
+        </>
+      ) : user.role === 'siswa' ? (
+        <>
+          <Toaster position="top-right" />
+          <Suspense fallback={<PageFallback />}>
+            <SimulasiSiswaView token={token} onLogout={handleLogout} />
+          </Suspense>
         </>
       ) : (
         <BrowserRouter>
@@ -355,6 +364,7 @@ function Workspace({
   if (page === 'backup') return user.role === 'admin' ? <BackupView token={token} /> : <Restricted />
   if (page === 'ujian-online') return <UjianOnlineView token={token} />
   if (page === 'ujian-monitor') return <UjianMonitorView token={token} />
+  if (page === 'simulasi') return <SimulasiView token={token} user={user} />
   if (page === 'notifikasi') return <NotifikasiView token={token} />
   if (page === 'kalender') return <KalenderView token={token} readOnly={user.role === 'kepala_sekolah' || user.role === 'guru'} />
   if (page === 'analytics') return <AnalyticsView token={token} />

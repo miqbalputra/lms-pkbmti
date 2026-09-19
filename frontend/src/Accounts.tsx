@@ -18,12 +18,14 @@ const roleLabels: Record<string, string> = {
   guru: 'Tutor',
   kepala_sekolah: 'Kepala Sekolah',
   orang_tua: 'Orang Tua',
+  siswa: 'Siswa',
 }
 
 export function Accounts({ token }: { token: string }) {
   const [users, setUsers] = useState<Row[]>([])
   const [tutors, setTutors] = useState<Row[]>([])
   const [orangTuaList, setOrangTuaList] = useState<Row[]>([])
+  const [students, setStudents] = useState<Row[]>([])
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Row | null>(null)
   const [formRole, setFormRole] = useState('guru')
@@ -35,11 +37,13 @@ export function Accounts({ token }: { token: string }) {
       request('/users', token),
       request('/tutor', token),
       request('/orang-tua', token).catch(() => []),
+      request('/peserta-didik', token).catch(() => []),
     ])
-      .then(([u, t, o]) => {
+      .then(([u, t, o, s]) => {
         setUsers(u)
         setTutors(t)
         if (Array.isArray(o)) setOrangTuaList(o)
+        if (Array.isArray(s)) setStudents(s)
       })
       .catch((e) => setError(String(e))),
     [token]
@@ -56,6 +60,7 @@ export function Accounts({ token }: { token: string }) {
     const body: Record<string, unknown> = { ...form, isActive: form.isActive === 'true' }
     if (body.role !== 'guru') body.tutorId = null
     if (body.role !== 'orang_tua') body.orangTuaId = null
+    if (body.role !== 'siswa') body.pesertaDidikId = null
     if (!body.password) delete body.password
     try {
       await request('/users' + (editing ? '/' + editing.id : ''), token, editing ? 'PUT' : 'POST', body)
@@ -77,6 +82,7 @@ export function Accounts({ token }: { token: string }) {
         role: user.role,
         tutorId: user.tutorId || null,
         orangTuaId: user.orangTuaId || null,
+        pesertaDidikId: user.pesertaDidikId || null,
         isActive: !user.isActive,
       })
       void load()
@@ -117,8 +123,8 @@ export function Accounts({ token }: { token: string }) {
                 name="email"
                 type="email"
                 defaultValue={String(editing?.email || '')}
-                placeholder={formRole === 'guru' ? 'Diisi tutor setelah login (opsional)' : 'nama@contoh.com'}
-                required={formRole !== 'guru'}
+                placeholder={formRole === 'guru' || formRole === 'siswa' ? 'Opsional untuk akun ini' : 'nama@contoh.com'}
+                required={formRole !== 'guru' && formRole !== 'siswa'}
               />
             </Field>
             <Field label={editing ? 'Kata sandi baru (opsional)' : 'Kata sandi'}>
@@ -130,6 +136,7 @@ export function Accounts({ token }: { token: string }) {
                 <option value="admin">Admin</option>
                 <option value="kepala_sekolah">Kepala Sekolah</option>
                 <option value="orang_tua">Orang Tua</option>
+                <option value="siswa">Siswa</option>
               </Select>
             </Field>
             <Field label="Tutor">
@@ -145,6 +152,16 @@ export function Accounts({ token }: { token: string }) {
                 <option value="">Pilih orang tua</option>
                 {orangTuaList.map((o: Row) => (
                   <option key={o.id} value={o.id}>{String(o.namaIbu || o.namaBapak || o.id)}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Peserta Didik">
+              <Select name="pesertaDidikId" defaultValue={String(editing?.pesertaDidikId || '')} disabled={formRole !== 'siswa'} required={formRole === 'siswa'}>
+                <option value="">Pilih peserta didik</option>
+                {students.map((student) => (
+                  <option key={student.id} value={student.id}>
+                    {String(student.nama || student.id)} {student.nisn ? `(${String(student.nisn)})` : ''}
+                  </option>
                 ))}
               </Select>
             </Field>

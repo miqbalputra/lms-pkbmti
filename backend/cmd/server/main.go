@@ -61,10 +61,13 @@ type User struct {
 	// OrangTuaID diisi untuk role="orang_tua" (Portal Orang Tua) — akun login
 	// penuh yang melihat data anak-anak terhubung. Nullable agar akun staf
 	// lama tetap valid (backward compatible).
-	OrangTuaID   *string    `gorm:"index" json:"orangTuaId"`
-	IsActive     bool       `gorm:"default:true" json:"isActive"`
-	FailedLogins int        `json:"-"`
-	LockedUntil  *time.Time `json:"-"`
+	OrangTuaID *string `gorm:"index" json:"orangTuaId"`
+	// PesertaDidikID links the student portal account to exactly one learner.
+	// It is nullable so existing staff and parent accounts remain compatible.
+	PesertaDidikID *string    `gorm:"uniqueIndex" json:"pesertaDidikId"`
+	IsActive       bool       `gorm:"default:true" json:"isActive"`
+	FailedLogins   int        `json:"-"`
+	LockedUntil    *time.Time `json:"-"`
 }
 type RefreshToken struct {
 	Base
@@ -673,6 +676,118 @@ type UjianJawaban struct {
 	Benar          *bool    `json:"benar"`
 	Nilai          float64  `gorm:"type:decimal(6,2)" json:"nilai"`
 	Soal           BankSoal `gorm:"foreignKey:SoalID" json:"soal"`
+}
+
+// Simulasi ANBK/TKA SD is separate from the legacy BankSoal and Ujian models
+// so existing luring and public-online examination history stays unchanged.
+type SimulasiSoal struct {
+	Base
+	MapelID          *string            `gorm:"index" json:"mapelId,omitempty"`
+	Jenjang          string             `gorm:"index;not null" json:"jenjang"`
+	KelasFase        string             `json:"kelasFase"`
+	Mode             string             `gorm:"index;not null" json:"mode"`
+	Domain           string             `json:"domain"`
+	Topik            string             `json:"topik"`
+	Kompetensi       string             `gorm:"type:text" json:"kompetensi"`
+	LevelKognitif    string             `json:"levelKognitif"`
+	TingkatKesulitan string             `json:"tingkatKesulitan"`
+	Tags             string             `gorm:"type:text" json:"tags"`
+	Tipe             string             `gorm:"index;not null" json:"tipe"`
+	Pertanyaan       string             `gorm:"type:text;not null" json:"pertanyaan"`
+	Konfigurasi      string             `gorm:"type:text;not null" json:"-"`
+	Pembahasan       string             `gorm:"type:text" json:"-"`
+	Bobot            float64            `gorm:"type:decimal(8,2);default:1" json:"bobot"`
+	Status           string             `gorm:"index;default:draf" json:"status"`
+	DibuatOlehUserID string             `gorm:"index;not null" json:"dibuatOlehUserId"`
+	Mapel            *MataPelajaran     `json:"mapel,omitempty"`
+	Stimulus         []SimulasiStimulus `gorm:"foreignKey:SoalID" json:"stimulus,omitempty"`
+	DeletedAt        gorm.DeletedAt     `gorm:"index" json:"-"`
+}
+
+type SimulasiStimulus struct {
+	Base
+	SoalID  string `gorm:"index;not null" json:"soalId"`
+	Jenis   string `gorm:"not null" json:"jenis"` // text, table, image, media_link
+	Konten  string `gorm:"type:text;not null" json:"konten"`
+	AltText string `json:"altText"`
+	Urutan  int    `json:"urutan"`
+}
+
+type SimulasiPaket struct {
+	Base
+	Nama                string         `gorm:"not null" json:"nama"`
+	Deskripsi           string         `gorm:"type:text" json:"deskripsi"`
+	Mode                string         `gorm:"index;not null" json:"mode"`
+	Jenjang             string         `gorm:"index;not null" json:"jenjang"`
+	MapelID             *string        `gorm:"index" json:"mapelId,omitempty"`
+	DurasiMenit         int            `json:"durasiMenit"`
+	Instruksi           string         `gorm:"type:text" json:"instruksi"`
+	NilaiLulus          *float64       `gorm:"type:decimal(8,2)" json:"nilaiLulus,omitempty"`
+	WaktuPublikasi      *time.Time     `json:"waktuPublikasi,omitempty"`
+	WaktuMulai          *time.Time     `gorm:"index" json:"waktuMulai,omitempty"`
+	WaktuSelesai        *time.Time     `gorm:"index" json:"waktuSelesai,omitempty"`
+	MaksPercobaan       int            `gorm:"default:1" json:"maksPercobaan"`
+	AcakUrutan          bool           `json:"acakUrutan"`
+	TampilkanNilai      bool           `json:"tampilkanNilai"`
+	TampilkanRingkasan  bool           `json:"tampilkanRingkasan"`
+	TampilkanPembahasan bool           `json:"tampilkanPembahasan"`
+	Status              string         `gorm:"index;default:draf" json:"status"`
+	DibuatOlehUserID    string         `gorm:"index;not null" json:"dibuatOlehUserId"`
+	Mapel               *MataPelajaran `json:"mapel,omitempty"`
+}
+
+// SnapshotJSON freezes stem, stimulus, configuration/key and rubric on publish.
+type SimulasiPaketSoal struct {
+	Base
+	PaketID      string  `gorm:"index;uniqueIndex:simulasi_paket_urutan" json:"paketId"`
+	SoalID       *string `gorm:"index" json:"soalId,omitempty"`
+	Urutan       int     `gorm:"uniqueIndex:simulasi_paket_urutan" json:"urutan"`
+	Bobot        float64 `gorm:"type:decimal(8,2)" json:"bobot"`
+	SnapshotJSON string  `gorm:"type:text;not null" json:"-"`
+}
+
+type SimulasiPenugasan struct {
+	Base
+	PaketID          string `gorm:"index;uniqueIndex:simulasi_penugasan" json:"paketId"`
+	PesertaDidikID   string `gorm:"index;uniqueIndex:simulasi_penugasan" json:"pesertaDidikId"`
+	KelasIDSaatTugas string `gorm:"index" json:"kelasIdSaatTugas"`
+}
+
+type SimulasiUpaya struct {
+	Base
+	PaketID        string        `gorm:"index;uniqueIndex:simulasi_upaya_nomor" json:"paketId"`
+	PesertaDidikID string        `gorm:"index;uniqueIndex:simulasi_upaya_nomor" json:"pesertaDidikId"`
+	Nomor          int           `gorm:"uniqueIndex:simulasi_upaya_nomor" json:"nomor"`
+	Status         string        `gorm:"index;not null" json:"status"`
+	Mulai          *time.Time    `json:"mulai,omitempty"`
+	BatasWaktu     *time.Time    `gorm:"index" json:"batasWaktu,omitempty"`
+	Selesai        *time.Time    `json:"selesai,omitempty"`
+	SeedUrutan     string        `gorm:"not null" json:"seedUrutan"`
+	SkorOtomatis   float64       `gorm:"type:decimal(8,2)" json:"skorOtomatis"`
+	SkorAkhir      *float64      `gorm:"type:decimal(8,2)" json:"skorAkhir,omitempty"`
+	Paket          SimulasiPaket `gorm:"foreignKey:PaketID" json:"paket,omitempty"`
+	PesertaDidik   PesertaDidik  `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik,omitempty"`
+}
+
+type SimulasiUpayaSoal struct {
+	Base
+	UpayaID      string `gorm:"index;uniqueIndex:simulasi_upaya_soal" json:"upayaId"`
+	PaketSoalID  string `gorm:"index;uniqueIndex:simulasi_upaya_soal" json:"paketSoalId"`
+	UrutanTampil int    `gorm:"index" json:"urutanTampil"`
+	Ditandai     bool   `json:"ditandai"`
+}
+
+type SimulasiJawaban struct {
+	Base
+	UpayaSoalID       string     `gorm:"uniqueIndex" json:"upayaSoalId"`
+	JawabanJSON       string     `gorm:"type:text" json:"jawabanJson"`
+	Benar             *bool      `json:"benar,omitempty"`
+	SkorOtomatis      float64    `gorm:"type:decimal(8,2)" json:"skorOtomatis"`
+	SkorManual        *float64   `gorm:"type:decimal(8,2)" json:"skorManual,omitempty"`
+	SkorAkhir         float64    `gorm:"type:decimal(8,2)" json:"skorAkhir"`
+	KomentarGuru      string     `gorm:"type:text" json:"komentarGuru"`
+	DinilaiOlehUserID *string    `gorm:"index" json:"dinilaiOlehUserId,omitempty"`
+	DinilaiPada       *time.Time `json:"dinilaiPada,omitempty"`
 }
 
 // Notifikasi — push notification internal untuk user.
@@ -1424,6 +1539,19 @@ func (s *Server) migrate() error {
 			}
 		}
 	}
+	// Simulasi is seeded independently from the broad dummy fixture so an
+	// operator can turn it off without affecting other local development data.
+	// In production it is opt-in only, preventing sample assessments from being
+	// created in a real tenant.
+	seedSimulasi := s.cfg.Env != "production"
+	if configured, exists := os.LookupEnv("SEED_SIMULASI_ON_START"); exists {
+		seedSimulasi = strings.EqualFold(strings.TrimSpace(configured), "true")
+	}
+	if seedSimulasi && !pendingRestoreApplied {
+		if err := s.seedSimulasiSamples(); err != nil {
+			fmt.Printf("auto-seed simulasi FAILED: %v\n", err)
+		}
+	}
 	return nil
 }
 
@@ -1432,7 +1560,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &SimulasiSoal{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {
@@ -1797,8 +1925,17 @@ func (s *Server) auth(c *fiber.Ctx) error {
 	// role changes effective immediately instead of waiting for the access token
 	// TTL, while keeping the existing JWT format and refresh flow unchanged.
 	var u User
-	if err := s.db.Select("id, role, is_active").First(&u, "id = ?", uid).Error; err != nil || !u.IsActive || !validRole(u.Role) {
+	if err := s.db.Select("id, role, is_active, peserta_didik_id").First(&u, "id = ?", uid).Error; err != nil || !u.IsActive || !validRole(u.Role) {
 		return fiber.NewError(401, "sesi tidak lagi aktif")
+	}
+	if u.Role == "siswa" {
+		if u.PesertaDidikID == nil {
+			return fiber.NewError(401, "akun siswa belum dihubungkan")
+		}
+		var student PesertaDidik
+		if err := s.db.Select("id, status").First(&student, "id = ?", *u.PesertaDidikID).Error; err != nil || student.Status != "aktif" {
+			return fiber.NewError(401, "data peserta didik tidak lagi aktif")
+		}
 	}
 	c.Locals("userID", uid)
 	c.Locals("role", u.Role)
