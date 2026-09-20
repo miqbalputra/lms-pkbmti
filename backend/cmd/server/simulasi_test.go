@@ -72,6 +72,106 @@ func TestSimulasiQuestionValidationAllTypes(t *testing.T) {
 	}
 }
 
+func TestSimulasiBuilderAutosavePublishesDraftSources(t *testing.T) {
+	s, app := setupE2EServer(t)
+	adminToken, _ := getAdminToken(t, app)
+	student, _ := simulasiStudent(t, s, "builder-student")
+	payload := map[string]any{
+		"paket":           map[string]any{"nama": "", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 30, "maksPercobaan": 1, "acakUrutan": true, "tampilkanNilai": true, "tampilkanRingkasan": true},
+		"items":           []map[string]any{{"bobot": 1, "soal": map[string]any{"jenjang": "SD/MI", "mode": "anbk_akm", "tipe": simulasiTipePG, "pertanyaan": "2 + 2 = ?", "bobot": 1, "konfigurasi": map[string]any{"choices": []map[string]string{{"id": "a", "text": "3"}, {"id": "b", "text": "4"}}, "correctIds": []string{"b"}}}}},
+		"pesertaDidikIds": []string{student.ID},
+	}
+	response, err := makeRequest(app, http.MethodPost, "/api/simulasi/paket/builder", adminToken, payload, "")
+	if err != nil || response.StatusCode != http.StatusOK {
+		if response != nil {
+			response.Body.Close()
+		}
+		t.Fatalf("create builder draft: %v", err)
+	}
+	var body struct {
+		Paket SimulasiPaket `json:"paket"`
+		Items []struct {
+			SoalID string `json:"soalId"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if body.Paket.Nama != "Paket tanpa judul" || len(body.Items) != 1 || body.Items[0].SoalID == "" {
+		t.Fatalf("unexpected autosaved builder response: %+v", body)
+	}
+	publish, err := makeRequest(app, http.MethodPost, "/api/simulasi/paket/"+body.Paket.ID+"/publikasi", adminToken, nil, "")
+	if err != nil || publish.StatusCode != http.StatusOK {
+		if publish != nil {
+			publish.Body.Close()
+		}
+		t.Fatalf("publish builder packet: %v", err)
+	}
+	publish.Body.Close()
+	var source SimulasiSoal
+	if err := s.db.First(&source, "id = ?", body.Items[0].SoalID).Error; err != nil || source.Status != "terbit" {
+		t.Fatalf("draft source was not promoted: %v, status=%s", err, source.Status)
+	}
+}
+
+func TestSimulasiWorkspaceBahanLegacyCopyAndRevision(t *testing.T) {
+	s, app := setupE2EServer(t)
+	adminToken, adminID := getAdminToken(t, app)
+	legacy := BankSoal{MapelID: "", Tipe: "pg", Pertanyaan: "Berapakah 3 + 3?", Opsi: `["5","6"]`, Kunci: "1", Poin: 2, DibuatOlehUserID: adminID}
+	if err := s.db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	copied, err := makeRequest(app, http.MethodPost, "/api/simulasi/soal/from-bank/"+legacy.ID, adminToken, nil, "")
+	if err != nil || copied.StatusCode != http.StatusCreated {
+		if copied != nil {
+			copied.Body.Close()
+		}
+		t.Fatalf("legacy copy: %v", err)
+	}
+	var copiedBody map[string]any
+	if err := json.NewDecoder(copied.Body).Decode(&copiedBody); err != nil {
+		copied.Body.Close()
+		t.Fatal(err)
+	}
+	copied.Body.Close()
+	if copiedBody["legacySourceId"] != legacy.ID || copiedBody["status"] != "draf" {
+		t.Fatalf("unexpected copied question: %#v", copiedBody)
+	}
+
+	bahan, err := makeRequest(app, http.MethodPost, "/api/simulasi/bahan", adminToken, map[string]any{"judul": "Bacaan energi", "jenis": "text", "konten": "Energi membantu benda bergerak.", "status": "draf"}, "")
+	if err != nil || bahan.StatusCode != http.StatusCreated {
+		if bahan != nil {
+			bahan.Body.Close()
+		}
+		t.Fatalf("create bahan: %v", err)
+	}
+	var bahanBody SimulasiBahan
+	if err := json.NewDecoder(bahan.Body).Decode(&bahanBody); err != nil {
+		bahan.Body.Close()
+		t.Fatal(err)
+	}
+	bahan.Body.Close()
+	if bahanBody.Revision != 1 {
+		t.Fatalf("initial bahan revision = %d", bahanBody.Revision)
+	}
+	stale, _ := makeRequest(app, http.MethodPut, "/api/simulasi/bahan/"+bahanBody.ID, adminToken, map[string]any{"judul": "Usang", "jenis": "text", "konten": "Versi lama", "revision": 1}, "")
+	if stale.StatusCode != http.StatusOK {
+		stale.Body.Close()
+		t.Fatalf("first revision update got %d", stale.StatusCode)
+	}
+	var updated SimulasiBahan
+	_ = json.NewDecoder(stale.Body).Decode(&updated)
+	stale.Body.Close()
+	second, _ := makeRequest(app, http.MethodPut, "/api/simulasi/bahan/"+bahanBody.ID, adminToken, map[string]any{"judul": "Stale", "jenis": "text", "konten": "Konflik", "revision": 1}, "")
+	if second.StatusCode != http.StatusConflict {
+		second.Body.Close()
+		t.Fatalf("stale revision got %d", second.StatusCode)
+	}
+	second.Body.Close()
+}
+
 func TestSimulasiStudentWorkflowProtectsKeysAndIsIdempotent(t *testing.T) {
 	s, app := setupE2EServer(t)
 	adminToken, _ := getAdminToken(t, app)

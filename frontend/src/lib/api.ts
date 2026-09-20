@@ -17,6 +17,8 @@ export type AuthSession = {
   user: Record<string, unknown>
 }
 
+export type ApiError = Error & { status?: number; payload?: unknown }
+
 export function setOnUnauthorized(fn: (() => void) | null) { onUnauthorized = fn }
 export function setOnTokenRefreshed(fn: ((session: AuthSession) => void) | null) { onTokenRefreshed = fn }
 
@@ -107,11 +109,10 @@ export async function request(
   if (!r.ok) {
     if (r.status === 401 && onUnauthorized && !isAuthEndpoint(path)) onUnauthorized()
     const x = await r.json().catch(() => ({}))
-    throw new Error(
-      x.error ||
-        x.message ||
-        fallbackRequestError(r.status),
-    )
+    const error = new Error(x.error || x.message || fallbackRequestError(r.status)) as ApiError
+    error.status = r.status
+    error.payload = x
+    throw error
   }
   return r.status === 204 ? null : r.json()
 }

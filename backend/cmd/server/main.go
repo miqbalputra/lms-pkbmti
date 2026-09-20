@@ -699,9 +699,31 @@ type SimulasiSoal struct {
 	Bobot            float64            `gorm:"type:decimal(8,2);default:1" json:"bobot"`
 	Status           string             `gorm:"index;default:draf" json:"status"`
 	DibuatOlehUserID string             `gorm:"index;not null" json:"dibuatOlehUserId"`
+	LegacySourceID   *string            `gorm:"index" json:"legacySourceId,omitempty"`
+	Revision         int                `gorm:"not null;default:1" json:"revision"`
 	Mapel            *MataPelajaran     `json:"mapel,omitempty"`
 	Stimulus         []SimulasiStimulus `gorm:"foreignKey:SoalID" json:"stimulus,omitempty"`
 	DeletedAt        gorm.DeletedAt     `gorm:"index" json:"-"`
+}
+
+// SimulasiBahan adalah blok stimulus yang dapat dipakai ulang oleh banyak
+// soal. Konten tetap disajikan melalui endpoint terautentikasi; tidak ada
+// bahan guru yang menjadi aset publik hanya karena dipakai di editor.
+type SimulasiBahan struct {
+	Base
+	Judul            string         `gorm:"not null" json:"judul"`
+	Jenis            string         `gorm:"index;not null" json:"jenis"` // text, table, image, media_link
+	Konten           string         `gorm:"type:text;not null" json:"konten"`
+	AltText          string         `json:"altText"`
+	MediaURL         string         `json:"mediaUrl"`
+	Jenjang          string         `gorm:"index" json:"jenjang"`
+	KelasFase        string         `json:"kelasFase"`
+	Topik            string         `json:"topik"`
+	Tags             string         `gorm:"type:text" json:"tags"`
+	Status           string         `gorm:"index;default:draf" json:"status"`
+	DibuatOlehUserID string         `gorm:"index;not null" json:"dibuatOlehUserId"`
+	Revision         int            `gorm:"not null;default:1" json:"revision"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type SimulasiStimulus struct {
@@ -733,6 +755,7 @@ type SimulasiPaket struct {
 	TampilkanPembahasan bool           `json:"tampilkanPembahasan"`
 	Status              string         `gorm:"index;default:draf" json:"status"`
 	DibuatOlehUserID    string         `gorm:"index;not null" json:"dibuatOlehUserId"`
+	Revision            int            `gorm:"not null;default:1" json:"revision"`
 	Mapel               *MataPelajaran `json:"mapel,omitempty"`
 }
 
@@ -1560,7 +1583,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &SimulasiSoal{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {

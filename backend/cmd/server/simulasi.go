@@ -27,8 +27,9 @@ const (
 )
 
 type simulasiChoice struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
+	ID      string `json:"id"`
+	Text    string `json:"text"`
+	ImageID string `json:"imageId,omitempty"`
 }
 type simulasiStatement struct {
 	ID      string `json:"id"`
@@ -67,6 +68,7 @@ type simulasiQuestionInput struct {
 	Bobot            float64              `json:"bobot"`
 	Status           string               `json:"status"`
 	Stimulus         []simulasiStimulusIn `json:"stimulus"`
+	Revision         int                  `json:"revision"`
 }
 type simulasiStimulusIn struct {
 	Jenis   string `json:"jenis"`
@@ -91,6 +93,35 @@ type simulasiPaketInput struct {
 	TampilkanRingkasan  bool       `json:"tampilkanRingkasan"`
 	TampilkanPembahasan bool       `json:"tampilkanPembahasan"`
 }
+
+// simulasiBuilderInput is deliberately separate from the legacy package APIs.
+// A canvas may be incomplete while the teacher is composing it, but publishing
+// still performs the same complete validation and snapshotting as before.
+type simulasiBuilderItemInput struct {
+	SoalID string                 `json:"soalId"`
+	Bobot  float64                `json:"bobot"`
+	Soal   *simulasiQuestionInput `json:"soal,omitempty"`
+}
+type simulasiBuilderInput struct {
+	Paket           simulasiPaketInput         `json:"paket"`
+	Items           []simulasiBuilderItemInput `json:"items"`
+	PesertaDidikIDs []string                   `json:"pesertaDidikIds"`
+	Revision        int                        `json:"revision"`
+}
+
+type simulasiBahanInput struct {
+	Judul     string `json:"judul"`
+	Jenis     string `json:"jenis"`
+	Konten    string `json:"konten"`
+	AltText   string `json:"altText"`
+	MediaURL  string `json:"mediaUrl"`
+	Jenjang   string `json:"jenjang"`
+	KelasFase string `json:"kelasFase"`
+	Topik     string `json:"topik"`
+	Tags      string `json:"tags"`
+	Status    string `json:"status"`
+	Revision  int    `json:"revision"`
+}
 type simulasiSnapshot struct {
 	SoalID      string             `json:"soalId"`
 	Tipe        string             `json:"tipe"`
@@ -103,6 +134,13 @@ type simulasiSnapshot struct {
 
 func registerSimulasiRoutes(api fiber.Router, s *Server) {
 	// Static routes must precede :id routes under Fiber.
+	api.Get("/simulasi/workspace", s.simulasiWorkspaceSummary)
+	api.Get("/simulasi/bahan", s.simulasiListBahan)
+	api.Post("/simulasi/bahan", s.simulasiCreateBahan)
+	api.Put("/simulasi/bahan/:id", s.simulasiUpdateBahan)
+	api.Delete("/simulasi/bahan/:id", s.simulasiArchiveBahan)
+	api.Post("/simulasi/media", s.simulasiUploadMedia)
+	api.Post("/simulasi/soal/from-bank/:id", s.simulasiCopyLegacyQuestion)
 	api.Get("/simulasi/soal/template", s.simulasiTemplate)
 	api.Get("/simulasi/soal/export", s.simulasiExportSoal)
 	api.Post("/simulasi/soal/import", s.simulasiImportSoal)
@@ -112,12 +150,16 @@ func registerSimulasiRoutes(api fiber.Router, s *Server) {
 	api.Put("/simulasi/soal/:id", s.simulasiUpdateSoal)
 	api.Delete("/simulasi/soal/:id", s.simulasiArchiveSoal)
 	api.Post("/simulasi/soal/:id/stimulus/gambar", s.simulasiUploadStimulusImage)
+	api.Post("/simulasi/soal/:id/opsi/:choiceId/gambar", s.simulasiUploadChoiceImage)
 	// Image files are served through an authenticated endpoint rather than a
 	// public uploads directory.  A student must still have the package assigned.
 	api.Get("/simulasi/stimulus/:id/file", s.simulasiStimulusFile)
 
 	api.Get("/simulasi/paket", s.simulasiListPaket)
+	api.Post("/simulasi/paket/builder", s.simulasiCreateBuilderPaket)
 	api.Post("/simulasi/paket", s.simulasiCreatePaket)
+	api.Get("/simulasi/paket/:id/builder", s.simulasiGetBuilderPaket)
+	api.Put("/simulasi/paket/:id/builder", s.simulasiSaveBuilderPaket)
 	api.Get("/simulasi/paket/:id", s.simulasiGetPaket)
 	api.Put("/simulasi/paket/:id", s.simulasiUpdatePaket)
 	api.Post("/simulasi/paket/:id/duplikasi", s.simulasiDuplicatePaket)
@@ -143,6 +185,238 @@ func registerSimulasiRoutes(api fiber.Router, s *Server) {
 	api.Put("/simulasi/saya/upaya/:id/soal/:upayaSoalId/tandai", s.simulasiTandai)
 	api.Post("/simulasi/saya/upaya/:id/kirim", s.simulasiKirim)
 	api.Get("/simulasi/saya/upaya/:id/hasil", s.simulasiHasilSiswa)
+}
+
+func validateSimulasiBahan(in simulasiBahanInput) error {
+	in.Judul, in.Jenis, in.Konten = strings.TrimSpace(in.Judul), strings.TrimSpace(in.Jenis), strings.TrimSpace(in.Konten)
+	if in.Judul == "" || in.Konten == "" {
+		return fiber.NewError(400, "judul dan isi bahan wajib diisi")
+	}
+	if in.Jenis != "text" && in.Jenis != "table" && in.Jenis != "image" && in.Jenis != "media_link" {
+		return fiber.NewError(400, "jenis bahan tidak valid")
+	}
+	if in.Jenis == "media_link" {
+		u, err := url.Parse(in.Konten)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return fiber.NewError(400, "tautan bahan harus HTTPS")
+		}
+	}
+	if in.MediaURL != "" {
+		u, err := url.Parse(in.MediaURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return fiber.NewError(400, "tautan media harus HTTPS")
+		}
+	}
+	if in.Status == "" {
+		in.Status = "draf"
+	}
+	if in.Status != "draf" && in.Status != "terbit" {
+		return fiber.NewError(400, "status bahan harus draf atau terbit")
+	}
+	return nil
+}
+
+func (s *Server) simulasiWorkspaceSummary(c *fiber.Ctx) error {
+	if err := simulasiStaff(c, false); err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	questionQuery, packageQuery, bahanQuery := s.db.Model(&SimulasiSoal{}), s.db.Model(&SimulasiPaket{}), s.db.Model(&SimulasiBahan{})
+	if c.Locals("role") == "guru" {
+		questionQuery = questionQuery.Where("dibuat_oleh_user_id = ?", uid)
+		packageQuery = packageQuery.Where("dibuat_oleh_user_id = ?", uid)
+		bahanQuery = bahanQuery.Where("dibuat_oleh_user_id = ?", uid)
+	}
+	var questions, packages, bahan int64
+	if err := questionQuery.Count(&questions).Error; err != nil {
+		return err
+	}
+	if err := packageQuery.Count(&packages).Error; err != nil {
+		return err
+	}
+	if err := bahanQuery.Count(&bahan).Error; err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"questions": questions, "packages": packages, "bahan": bahan, "offlineDrafts": true})
+}
+
+func (s *Server) simulasiListBahan(c *fiber.Ctx) error {
+	if err := simulasiStaff(c, false); err != nil {
+		return err
+	}
+	q := s.db.Order("created_at desc")
+	if c.Locals("role") == "guru" {
+		q = q.Where("dibuat_oleh_user_id = ?", c.Locals("userID"))
+	}
+	if jenis := c.Query("jenis"); jenis != "" {
+		q = q.Where("jenis = ?", jenis)
+	}
+	if status := c.Query("status"); status != "" {
+		q = q.Where("status = ?", status)
+	}
+	if search := strings.TrimSpace(c.Query("q")); search != "" {
+		term := "%" + strings.ToLower(search) + "%"
+		q = q.Where("lower(judul) LIKE ? OR lower(topik) LIKE ? OR lower(tags) LIKE ?", term, term, term)
+	}
+	var rows []SimulasiBahan
+	if err := q.Find(&rows).Error; err != nil {
+		return err
+	}
+	return c.JSON(rows)
+}
+
+func (s *Server) simulasiCreateBahan(c *fiber.Ctx) error {
+	if err := simulasiStaff(c, true); err != nil {
+		return err
+	}
+	var in simulasiBahanInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "isi bahan tidak valid")
+	}
+	if in.Status == "" {
+		in.Status = "draf"
+	}
+	if err := validateSimulasiBahan(in); err != nil {
+		return err
+	}
+	row := SimulasiBahan{Judul: strings.TrimSpace(in.Judul), Jenis: strings.TrimSpace(in.Jenis), Konten: strings.TrimSpace(in.Konten), AltText: strings.TrimSpace(in.AltText), MediaURL: strings.TrimSpace(in.MediaURL), Jenjang: strings.TrimSpace(in.Jenjang), KelasFase: strings.TrimSpace(in.KelasFase), Topik: strings.TrimSpace(in.Topik), Tags: strings.TrimSpace(in.Tags), Status: in.Status, DibuatOlehUserID: c.Locals("userID").(string), Revision: 1}
+	if err := s.db.Create(&row).Error; err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "create", "simulasi_bahan", row.ID)
+	return c.Status(201).JSON(row)
+}
+
+func (s *Server) simulasiUpdateBahan(c *fiber.Ctx) error {
+	var row SimulasiBahan
+	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
+		return fiber.NewError(404, "bahan tidak ditemukan")
+	}
+	if err := simulasiStaff(c, true); err != nil {
+		return err
+	}
+	if c.Locals("role") == "guru" && row.DibuatOlehUserID != c.Locals("userID") {
+		return fiber.NewError(403, "bahan hanya dapat dikelola pembuatnya")
+	}
+	var in simulasiBahanInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "isi bahan tidak valid")
+	}
+	if in.Status == "" {
+		in.Status = "draf"
+	}
+	if in.Revision > 0 && row.Revision > 0 && in.Revision != row.Revision {
+		return fiber.NewError(409, "bahan sudah berubah di perangkat lain; muat versi terbaru atau simpan sebagai salinan")
+	}
+	if err := validateSimulasiBahan(in); err != nil {
+		return err
+	}
+	row.Judul, row.Jenis, row.Konten = strings.TrimSpace(in.Judul), strings.TrimSpace(in.Jenis), strings.TrimSpace(in.Konten)
+	row.AltText, row.MediaURL, row.Jenjang, row.KelasFase = strings.TrimSpace(in.AltText), strings.TrimSpace(in.MediaURL), strings.TrimSpace(in.Jenjang), strings.TrimSpace(in.KelasFase)
+	row.Topik, row.Tags, row.Status = strings.TrimSpace(in.Topik), strings.TrimSpace(in.Tags), in.Status
+	if row.Revision <= 0 {
+		row.Revision = 1
+	}
+	row.Revision++
+	if err := s.db.Save(&row).Error; err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "update", "simulasi_bahan", row.ID)
+	return c.JSON(row)
+}
+
+func (s *Server) simulasiArchiveBahan(c *fiber.Ctx) error {
+	var row SimulasiBahan
+	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
+		return fiber.NewError(404, "bahan tidak ditemukan")
+	}
+	if err := simulasiStaff(c, true); err != nil {
+		return err
+	}
+	if c.Locals("role") == "guru" && row.DibuatOlehUserID != c.Locals("userID") {
+		return fiber.NewError(403, "bahan hanya dapat dikelola pembuatnya")
+	}
+	if err := s.db.Delete(&row).Error; err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "archive", "simulasi_bahan", row.ID)
+	return c.SendStatus(204)
+}
+
+func (s *Server) simulasiUploadMedia(c *fiber.Ctx) error {
+	if err := simulasiStaff(c, true); err != nil {
+		return err
+	}
+	path, err := s.saveUpload(c, "file", "simulasi-bahan", 5*1024*1024, []string{"png", "jpg", "jpeg", "webp"})
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fiber.NewError(400, "file media wajib diunggah")
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "upload", "simulasi_media", path)
+	return c.Status(201).JSON(fiber.Map{"path": path, "altText": strings.TrimSpace(c.FormValue("altText"))})
+}
+
+func (s *Server) simulasiCopyLegacyQuestion(c *fiber.Ctx) error {
+	if err := simulasiStaff(c, true); err != nil {
+		return err
+	}
+	var source BankSoal
+	if err := s.db.First(&source, "id = ?", c.Params("id")).Error; err != nil {
+		return fiber.NewError(404, "soal lama tidak ditemukan")
+	}
+	uid := c.Locals("userID").(string)
+	if c.Locals("role") == "guru" && source.DibuatOlehUserID != uid {
+		return fiber.NewError(403, "soal lama hanya dapat disalin pembuatnya")
+	}
+	config := simulasiConfig{}
+	if source.Tipe == "pg" {
+		var options []string
+		if err := json.Unmarshal([]byte(source.Opsi), &options); err != nil || len(options) < 2 {
+			return fiber.NewError(400, "opsi soal lama tidak valid")
+		}
+		for index, option := range options {
+			config.Choices = append(config.Choices, simulasiChoice{ID: fmt.Sprintf("opsi-%d", index+1), Text: option})
+		}
+		idx, _ := strconv.Atoi(strings.TrimSpace(source.Kunci))
+		if idx < 0 || idx >= len(config.Choices) {
+			idx = 0
+		}
+		config.CorrectIDs = []string{config.Choices[idx].ID}
+	} else if source.Tipe == "essay" {
+		max := source.Poin
+		if max <= 0 {
+			max = 1
+		}
+		config.Rubrik = []simulasiRubrik{{Kriteria: "Kualitas jawaban", Maks: max}}
+	} else {
+		return fiber.NewError(400, "tipe soal lama tidak didukung")
+	}
+	var mapelID *string
+	if source.MapelID != "" {
+		value := source.MapelID
+		mapelID = &value
+	}
+	tipe := simulasiTipePG
+	if source.Tipe == "essay" {
+		tipe = simulasiTipeUraian
+	}
+	encoded, _ := json.Marshal(config)
+	bobot := source.Poin
+	if bobot <= 0 {
+		bobot = 1
+	}
+	row := SimulasiSoal{MapelID: mapelID, Jenjang: "SD/MI", Mode: "anbk_akm", Tipe: tipe, Pertanyaan: strings.TrimSpace(source.Pertanyaan), Konfigurasi: string(encoded), Bobot: bobot, Status: "draf", DibuatOlehUserID: uid, Revision: 1, LegacySourceID: &source.ID}
+	if err := s.db.Create(&row).Error; err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	s.audit(&uid, "copy_legacy", "simulasi_soal", row.ID)
+	return s.simulasiGetSoalByID(c, row.ID, 201)
 }
 
 func simulasiStaff(c *fiber.Ctx, write bool) error {
@@ -309,12 +583,15 @@ func applyQuestionInput(row *SimulasiSoal, in simulasiQuestionInput) error {
 	row.Domain, row.Topik, row.Kompetensi = strings.TrimSpace(in.Domain), strings.TrimSpace(in.Topik), strings.TrimSpace(in.Kompetensi)
 	row.LevelKognitif, row.TingkatKesulitan, row.Tags = strings.TrimSpace(in.LevelKognitif), strings.TrimSpace(in.TingkatKesulitan), strings.TrimSpace(in.Tags)
 	row.Tipe, row.Pertanyaan, row.Konfigurasi, row.Pembahasan, row.Bobot, row.Status = in.Tipe, strings.TrimSpace(in.Pertanyaan), string(cfg), strings.TrimSpace(in.Pembahasan), in.Bobot, in.Status
+	if row.Revision <= 0 {
+		row.Revision = 1
+	}
 	return nil
 }
 func staffQuestionResponse(row SimulasiSoal) fiber.Map {
 	var cfg simulasiConfig
 	_ = json.Unmarshal([]byte(row.Konfigurasi), &cfg)
-	return fiber.Map{"id": row.ID, "mapelId": row.MapelID, "mapel": row.Mapel, "jenjang": row.Jenjang, "kelasFase": row.KelasFase, "mode": row.Mode, "domain": row.Domain, "topik": row.Topik, "kompetensi": row.Kompetensi, "levelKognitif": row.LevelKognitif, "tingkatKesulitan": row.TingkatKesulitan, "tags": row.Tags, "tipe": row.Tipe, "pertanyaan": row.Pertanyaan, "konfigurasi": cfg, "pembahasan": row.Pembahasan, "bobot": row.Bobot, "status": row.Status, "dibuatOlehUserId": row.DibuatOlehUserID, "stimulus": row.Stimulus, "createdAt": row.CreatedAt, "updatedAt": row.UpdatedAt}
+	return fiber.Map{"id": row.ID, "mapelId": row.MapelID, "mapel": row.Mapel, "jenjang": row.Jenjang, "kelasFase": row.KelasFase, "mode": row.Mode, "domain": row.Domain, "topik": row.Topik, "kompetensi": row.Kompetensi, "levelKognitif": row.LevelKognitif, "tingkatKesulitan": row.TingkatKesulitan, "tags": row.Tags, "tipe": row.Tipe, "pertanyaan": row.Pertanyaan, "konfigurasi": cfg, "pembahasan": row.Pembahasan, "bobot": row.Bobot, "status": row.Status, "dibuatOlehUserId": row.DibuatOlehUserID, "legacySourceId": row.LegacySourceID, "revision": row.Revision, "stimulus": row.Stimulus, "createdAt": row.CreatedAt, "updatedAt": row.UpdatedAt}
 }
 func (s *Server) simulasiListSoal(c *fiber.Ctx) error {
 	if err := simulasiStaff(c, false); err != nil {
@@ -423,9 +700,16 @@ func (s *Server) simulasiUpdateSoal(c *fiber.Ctx) error {
 	if err := c.BodyParser(&in); err != nil {
 		return fiber.NewError(400, "isi soal tidak valid")
 	}
+	if in.Revision > 0 && row.Revision > 0 && in.Revision != row.Revision {
+		return fiber.NewError(409, "soal sudah berubah di perangkat lain; muat versi terbaru atau simpan sebagai salinan")
+	}
+	if row.Revision <= 0 {
+		row.Revision = 1
+	}
 	if err := applyQuestionInput(&row, in); err != nil {
 		return err
 	}
+	row.Revision++
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(&row).Error; err != nil {
 			return err
@@ -490,6 +774,53 @@ func (s *Server) simulasiUploadStimulusImage(c *fiber.Ctx) error {
 	return c.Status(201).JSON(stimulus)
 }
 
+func (s *Server) simulasiUploadChoiceImage(c *fiber.Ctx) error {
+	var row SimulasiSoal
+	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
+		return fiber.NewError(404, "soal simulasi tidak ditemukan")
+	}
+	if err := s.simulasiSoalScope(c, &row, true); err != nil {
+		return err
+	}
+	var cfg simulasiConfig
+	if err := json.Unmarshal([]byte(row.Konfigurasi), &cfg); err != nil {
+		return fiber.NewError(400, "konfigurasi soal tidak valid")
+	}
+	found := false
+	for index := range cfg.Choices {
+		if cfg.Choices[index].ID == c.Params("choiceId") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fiber.NewError(404, "pilihan jawaban tidak ditemukan")
+	}
+	path, err := s.saveUpload(c, "file", "simulasi", 5*1024*1024, []string{"png", "jpg", "jpeg"})
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fiber.NewError(400, "file gambar wajib diunggah")
+	}
+	stimulus := SimulasiStimulus{SoalID: row.ID, Jenis: "image", Konten: path, AltText: strings.TrimSpace(c.FormValue("altText")), Urutan: 0}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&stimulus).Error; err != nil {
+			return err
+		}
+		for index := range cfg.Choices {
+			if cfg.Choices[index].ID == c.Params("choiceId") {
+				cfg.Choices[index].ImageID = stimulus.ID
+			}
+		}
+		raw, _ := json.Marshal(cfg)
+		return tx.Model(&SimulasiSoal{}).Where("id = ?", row.ID).Update("konfigurasi", string(raw)).Error
+	}); err != nil {
+		return err
+	}
+	return c.Status(201).JSON(stimulus)
+}
+
 func (s *Server) simulasiStimulusFile(c *fiber.Ctx) error {
 	var stimulus SimulasiStimulus
 	if err := s.db.First(&stimulus, "id = ? AND jenis = ?", c.Params("id"), "image").Error; err != nil {
@@ -542,6 +873,305 @@ func applyPaketInput(row *SimulasiPaket, in simulasiPaketInput) error {
 	row.DurasiMenit, row.Instruksi, row.NilaiLulus, row.WaktuMulai, row.WaktuSelesai = in.DurasiMenit, strings.TrimSpace(in.Instruksi), in.NilaiLulus, in.WaktuMulai, in.WaktuSelesai
 	row.MaksPercobaan, row.AcakUrutan, row.TampilkanNilai, row.TampilkanRingkasan, row.TampilkanPembahasan = in.MaksPercobaan, in.AcakUrutan, in.TampilkanNilai, in.TampilkanRingkasan, in.TampilkanPembahasan
 	return nil
+}
+
+func applyBuilderPaketInput(row *SimulasiPaket, in simulasiPaketInput) error {
+	if strings.TrimSpace(in.Nama) == "" {
+		in.Nama = "Paket tanpa judul"
+	}
+	if strings.TrimSpace(in.Mode) == "" {
+		in.Mode = "anbk_akm"
+	}
+	if strings.TrimSpace(in.Jenjang) == "" {
+		in.Jenjang = "SD/MI"
+	}
+	if in.DurasiMenit == 0 {
+		in.DurasiMenit = 60
+	}
+	if in.MaksPercobaan == 0 {
+		in.MaksPercobaan = 1
+	}
+	return applyPaketInput(row, in)
+}
+
+func applyBuilderQuestionInput(row *SimulasiSoal, in simulasiQuestionInput, paket *SimulasiPaket) error {
+	if strings.TrimSpace(in.Jenjang) == "" {
+		in.Jenjang = paket.Jenjang
+	}
+	if strings.TrimSpace(in.Mode) == "" {
+		in.Mode = paket.Mode
+	}
+	if strings.TrimSpace(in.Tipe) == "" {
+		in.Tipe = simulasiTipePG
+	}
+	if !validSimulasiMode(strings.TrimSpace(in.Mode)) || !validSimulasiTipe(strings.TrimSpace(in.Tipe)) {
+		return fiber.NewError(400, "mode atau tipe soal tidak valid")
+	}
+	if in.Bobot <= 0 {
+		in.Bobot = 1
+	}
+	config, err := json.Marshal(in.Konfigurasi)
+	if err != nil {
+		return fiber.NewError(400, "konfigurasi soal tidak valid")
+	}
+	row.MapelID, row.Jenjang, row.KelasFase, row.Mode = in.MapelID, strings.TrimSpace(in.Jenjang), strings.TrimSpace(in.KelasFase), strings.TrimSpace(in.Mode)
+	row.Domain, row.Topik, row.Kompetensi, row.LevelKognitif = strings.TrimSpace(in.Domain), strings.TrimSpace(in.Topik), strings.TrimSpace(in.Kompetensi), strings.TrimSpace(in.LevelKognitif)
+	row.TingkatKesulitan, row.Tags, row.Tipe, row.Pertanyaan = strings.TrimSpace(in.TingkatKesulitan), strings.TrimSpace(in.Tags), strings.TrimSpace(in.Tipe), strings.TrimSpace(in.Pertanyaan)
+	row.Konfigurasi, row.Pembahasan, row.Bobot, row.Status = string(config), strings.TrimSpace(in.Pembahasan), in.Bobot, "draf"
+	return nil
+}
+
+func validateBuilderQuestionForPublish(row SimulasiSoal) error {
+	var cfg simulasiConfig
+	if err := json.Unmarshal([]byte(row.Konfigurasi), &cfg); err != nil {
+		return fiber.NewError(400, "konfigurasi soal tidak valid")
+	}
+	return applyQuestionInput(&row, simulasiQuestionInput{MapelID: row.MapelID, Jenjang: row.Jenjang, KelasFase: row.KelasFase, Mode: row.Mode, Domain: row.Domain, Topik: row.Topik, Kompetensi: row.Kompetensi, LevelKognitif: row.LevelKognitif, TingkatKesulitan: row.TingkatKesulitan, Tags: row.Tags, Tipe: row.Tipe, Pertanyaan: row.Pertanyaan, Konfigurasi: cfg, Pembahasan: row.Pembahasan, Bobot: row.Bobot, Status: "terbit"})
+}
+
+func (s *Server) builderStudents(c *fiber.Ctx, tx *gorm.DB, requested []string) ([]PesertaDidik, error) {
+	unique := map[string]bool{}
+	for _, id := range requested {
+		if strings.TrimSpace(id) != "" {
+			unique[id] = true
+		}
+	}
+	ids := make([]string, 0, len(unique))
+	for id := range unique {
+		ids = append(ids, id)
+	}
+	students := []PesertaDidik{}
+	if len(ids) > 0 {
+		if err := tx.Where("id IN ? AND status = ?", ids, "aktif").Find(&students).Error; err != nil {
+			return nil, err
+		}
+		if len(students) != len(ids) {
+			return nil, fiber.NewError(400, "sebagian peserta didik tidak aktif atau tidak ditemukan")
+		}
+	}
+	if c.Locals("role") == "guru" {
+		for _, student := range students {
+			if err := s.canManageKelas(c, student.KelasID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return students, nil
+}
+
+func replaceBuilderStimulus(tx *gorm.DB, soalID string, values []simulasiStimulusIn) error {
+	// Image uploads use the existing hardened upload endpoint after a draft has
+	// received a source-question ID. Keep them while text/table/media cards are
+	// autosaved; the canvas never asks a teacher to serialise image metadata.
+	if err := tx.Where("soal_id = ? AND jenis <> ?", soalID, "image").Delete(&SimulasiStimulus{}).Error; err != nil {
+		return err
+	}
+	for index, value := range values {
+		value.Jenis, value.Konten = strings.TrimSpace(value.Jenis), strings.TrimSpace(value.Konten)
+		if value.Jenis == "image" {
+			continue
+		}
+		if value.Konten == "" {
+			continue
+		}
+		if value.Urutan <= 0 {
+			value.Urutan = index + 1
+		}
+		if err := validateStimulus(value); err != nil {
+			return err
+		}
+		if err := tx.Create(&SimulasiStimulus{SoalID: soalID, Jenis: value.Jenis, Konten: value.Konten, AltText: value.AltText, Urutan: value.Urutan}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) saveBuilderQuestion(c *fiber.Ctx, tx *gorm.DB, paket *SimulasiPaket, item simulasiBuilderItemInput) (SimulasiSoal, error) {
+	if item.Soal == nil {
+		if strings.TrimSpace(item.SoalID) == "" {
+			return SimulasiSoal{}, fiber.NewError(400, "soal paket belum dipilih")
+		}
+		var row SimulasiSoal
+		if err := tx.Preload("Stimulus", func(db *gorm.DB) *gorm.DB { return db.Order("urutan") }).First(&row, "id = ?", item.SoalID).Error; err != nil {
+			return SimulasiSoal{}, fiber.NewError(404, "soal simulasi tidak ditemukan")
+		}
+		if err := s.simulasiSoalScope(c, &row, false); err != nil {
+			return SimulasiSoal{}, err
+		}
+		return row, nil
+	}
+
+	var row SimulasiSoal
+	copySource := false
+	if strings.TrimSpace(item.SoalID) != "" {
+		if err := tx.Preload("Stimulus").First(&row, "id = ?", item.SoalID).Error; err != nil {
+			return SimulasiSoal{}, fiber.NewError(404, "soal simulasi tidak ditemukan")
+		}
+		if err := s.simulasiSoalScope(c, &row, false); err != nil {
+			return SimulasiSoal{}, err
+		}
+		copySource = row.Status != "draf" || row.DibuatOlehUserID != c.Locals("userID")
+	} else {
+		row.DibuatOlehUserID = c.Locals("userID").(string)
+	}
+	if copySource {
+		row = SimulasiSoal{DibuatOlehUserID: c.Locals("userID").(string)}
+	}
+	if err := applyBuilderQuestionInput(&row, *item.Soal, paket); err != nil {
+		return SimulasiSoal{}, err
+	}
+	if row.ID == "" {
+		if err := tx.Create(&row).Error; err != nil {
+			return SimulasiSoal{}, err
+		}
+	} else if err := tx.Save(&row).Error; err != nil {
+		return SimulasiSoal{}, err
+	}
+	if err := replaceBuilderStimulus(tx, row.ID, item.Soal.Stimulus); err != nil {
+		return SimulasiSoal{}, err
+	}
+	if err := tx.Preload("Stimulus", func(db *gorm.DB) *gorm.DB { return db.Order("urutan") }).First(&row, "id = ?", row.ID).Error; err != nil {
+		return SimulasiSoal{}, err
+	}
+	return row, nil
+}
+
+func (s *Server) builderResponse(c *fiber.Ctx, paket *SimulasiPaket) error {
+	var items []SimulasiPaketSoal
+	if err := s.db.Where("paket_id = ?", paket.ID).Order("urutan").Find(&items).Error; err != nil {
+		return err
+	}
+	result := make([]fiber.Map, 0, len(items))
+	for _, item := range items {
+		entry := fiber.Map{"id": item.ID, "soalId": item.SoalID, "bobot": item.Bobot, "urutan": item.Urutan}
+		if item.SoalID != nil {
+			var question SimulasiSoal
+			if err := s.db.Preload("Mapel").Preload("Stimulus", func(db *gorm.DB) *gorm.DB { return db.Order("urutan") }).First(&question, "id = ?", *item.SoalID).Error; err != nil {
+				return err
+			}
+			entry["soal"] = staffQuestionResponse(question)
+		}
+		result = append(result, entry)
+	}
+	var assignments []SimulasiPenugasan
+	if err := s.db.Where("paket_id = ?", paket.ID).Find(&assignments).Error; err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(assignments))
+	for _, assignment := range assignments {
+		ids = append(ids, assignment.PesertaDidikID)
+	}
+	return c.JSON(fiber.Map{"paket": paket, "items": result, "pesertaDidikIds": ids})
+}
+
+func (s *Server) saveBuilderPaket(c *fiber.Ctx, paket *SimulasiPaket, in simulasiBuilderInput, isNew bool) error {
+	if paket.Revision <= 0 {
+		paket.Revision = 1
+	}
+	if !isNew && in.Revision > 0 && in.Revision != paket.Revision {
+		return fiber.NewError(409, "draf paket sudah berubah di perangkat lain; muat versi terbaru atau simpan sebagai salinan")
+	}
+	if err := applyBuilderPaketInput(paket, in.Paket); err != nil {
+		return err
+	}
+	if !isNew {
+		paket.Revision++
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if isNew {
+			if err := tx.Create(paket).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Save(paket).Error; err != nil {
+			return err
+		}
+		students, err := s.builderStudents(c, tx, in.PesertaDidikIDs)
+		if err != nil {
+			return err
+		}
+		if err := tx.Where("paket_id = ?", paket.ID).Delete(&SimulasiPaketSoal{}).Error; err != nil {
+			return err
+		}
+		for index, input := range in.Items {
+			question, err := s.saveBuilderQuestion(c, tx, paket, input)
+			if err != nil {
+				return err
+			}
+			snapshot, err := snapshotFromQuestion(question)
+			if err != nil {
+				return err
+			}
+			weight := input.Bobot
+			if weight <= 0 {
+				weight = question.Bobot
+			}
+			if err := tx.Create(&SimulasiPaketSoal{PaketID: paket.ID, SoalID: &question.ID, Urutan: index + 1, Bobot: weight, SnapshotJSON: snapshot}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("paket_id = ?", paket.ID).Delete(&SimulasiPenugasan{}).Error; err != nil {
+			return err
+		}
+		for _, student := range students {
+			if err := tx.Create(&SimulasiPenugasan{PaketID: paket.ID, PesertaDidikID: student.ID, KelasIDSaatTugas: student.KelasID}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "save_builder", "simulasi_paket", paket.ID)
+	return nil
+}
+
+func (s *Server) simulasiCreateBuilderPaket(c *fiber.Ctx) error {
+	if err := simulasiStaff(c, true); err != nil {
+		return err
+	}
+	var in simulasiBuilderInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "draf pembuat paket tidak valid")
+	}
+	paket := SimulasiPaket{DibuatOlehUserID: c.Locals("userID").(string), Status: "draf"}
+	if err := s.saveBuilderPaket(c, &paket, in, true); err != nil {
+		return err
+	}
+	return s.builderResponse(c, &paket)
+}
+
+func (s *Server) simulasiGetBuilderPaket(c *fiber.Ctx) error {
+	paket, err := s.getSimulasiPaket(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(404, "paket simulasi tidak ditemukan")
+	}
+	if err := s.simulasiPaketScope(c, paket, false); err != nil {
+		return err
+	}
+	return s.builderResponse(c, paket)
+}
+
+func (s *Server) simulasiSaveBuilderPaket(c *fiber.Ctx) error {
+	paket, err := s.getSimulasiPaket(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(404, "paket simulasi tidak ditemukan")
+	}
+	if err := s.simulasiPaketScope(c, paket, true); err != nil {
+		return err
+	}
+	if err := s.paketCanChange(paket); err != nil {
+		return err
+	}
+	var in simulasiBuilderInput
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(400, "draf pembuat paket tidak valid")
+	}
+	if err := s.saveBuilderPaket(c, paket, in, false); err != nil {
+		return err
+	}
+	return s.builderResponse(c, paket)
 }
 func (s *Server) simulasiListPaket(c *fiber.Ctx) error {
 	if err := simulasiStaff(c, false); err != nil {
@@ -969,6 +1599,35 @@ func (s *Server) simulasiPublishPaket(c *fiber.Ctx) error {
 	}
 	now := time.Now()
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var items []SimulasiPaketSoal
+		if err := tx.Where("paket_id = ?", paket.ID).Find(&items).Error; err != nil {
+			return err
+		}
+		for _, item := range items {
+			if item.SoalID == nil {
+				return fiber.NewError(400, "setiap item paket harus memiliki soal")
+			}
+			var question SimulasiSoal
+			if err := tx.Preload("Stimulus", func(db *gorm.DB) *gorm.DB { return db.Order("urutan") }).First(&question, "id = ?", *item.SoalID).Error; err != nil {
+				return err
+			}
+			if err := validateBuilderQuestionForPublish(question); err != nil {
+				return err
+			}
+			for _, stimulus := range question.Stimulus {
+				if err := validateStimulus(simulasiStimulusIn{Jenis: stimulus.Jenis, Konten: stimulus.Konten, AltText: stimulus.AltText, Urutan: stimulus.Urutan}); err != nil {
+					return err
+				}
+			}
+			if question.Status == "draf" {
+				if c.Locals("role") == "guru" && question.DibuatOlehUserID != c.Locals("userID") {
+					return fiber.NewError(403, "soal draf hanya dapat diterbitkan oleh pembuatnya")
+				}
+				if err := tx.Model(&SimulasiSoal{}).Where("id = ? AND status = ?", question.ID, "draf").Update("status", "terbit").Error; err != nil {
+					return err
+				}
+			}
+		}
 		if err := s.refreshPaketSnapshots(tx, paket.ID); err != nil {
 			return err
 		}

@@ -98,11 +98,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     groupLabel: 'UJIAN & SERTIFIKAT',
     items: [
-      { id: 'bank-soal', label: 'Bank Soal', icon: BookOpen, roles: ['admin', 'kepala_sekolah', 'guru'] },
+      { id: 'simulasi', label: 'Simulasi & Bank Soal', icon: ClipboardCheck, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'ujian', label: 'Ujian (Luring)', icon: ClipboardList, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'ujian-online', label: 'Ujian Online', icon: Monitor, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'ujian-monitor', label: 'Monitor Ujian', icon: Monitor, roles: ['admin', 'kepala_sekolah', 'guru'] },
-      { id: 'simulasi', label: 'Simulasi ANBK/TKA SD', icon: ClipboardCheck, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'portal-ortu', label: 'Portal Orang Tua', icon: Users, roles: ['admin', 'kepala_sekolah'] },
       { id: 'sertifikat', label: 'Sertifikat', icon: Award, roles: ['admin', 'kepala_sekolah'] },
       { id: 'kartu-pelajar', label: 'Kartu Pelajar', icon: IdCard, roles: ['admin', 'kepala_sekolah', 'guru'] },
