@@ -69,6 +69,9 @@ func TestPublicExamPagesUseCSPCompatibleHandlers(t *testing.T) {
 	if !strings.Contains(ortuPortalHTML, `data-action="show-tab"`) || !strings.Contains(ortuPortalHTML, `data-action="send-chat"`) {
 		t.Fatal("parent portal is missing delegated interaction handlers")
 	}
+	if !strings.Contains(ortuPortalHTML, `data-action="font-scale"`) || !strings.Contains(ortuPortalHTML, `aria-label="Kontras tinggi"`) {
+		t.Fatal("parent portal is missing accessible text and contrast controls")
+	}
 }
 
 func TestPublicExamSessionCookieAvoidsCredentialQuery(t *testing.T) {
@@ -196,6 +199,56 @@ func TestParentExamResultsDoNotLeakAccessCode(t *testing.T) {
 	}
 	if strings.Contains(body, `"aksesKode"`) || !strings.Contains(body, `"judul":"Ujian selesai"`) {
 		t.Fatalf("parent exam DTO is unsafe or incomplete: %s", body)
+	}
+}
+
+func TestParentSimulationSummaryHonorsResultPolicy(t *testing.T) {
+	db := isolatedTestDB(t, "parent-simulation-summary")
+	if err := db.AutoMigrate(&User{}, &OrangTua{}, &PesertaDidik{}, &SimulasiPaket{}, &SimulasiPenugasan{}, &SimulasiUpaya{}); err != nil {
+		t.Fatal(err)
+	}
+	parent := OrangTua{NamaIbu: "Wali Simulasi"}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatal(err)
+	}
+	student := PesertaDidik{Nama: "Anak Simulasi", NISN: "1234567893", NIK: "nik-simulasi", KelasID: "kelas-simulasi", OrangTuaID: parent.ID, Status: "aktif"}
+	if err := db.Create(&student).Error; err != nil {
+		t.Fatal(err)
+	}
+	user := User{Username: "parent-simulation", Role: "orang_tua", OrangTuaID: &parent.ID, IsActive: true}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	packageRow := SimulasiPaket{Nama: "Literasi aman", Mode: "anbk_akm", Status: "terbit", DurasiMenit: 30, MaksPercobaan: 2, TampilkanNilai: false, TampilkanRingkasan: false}
+	if err := db.Create(&packageRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SimulasiPenugasan{PaketID: packageRow.ID, PesertaDidikID: student.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	score := 91.0
+	if err := db.Create(&SimulasiUpaya{PaketID: packageRow.ID, PesertaDidikID: student.ID, Nomor: 1, Status: "selesai", SkorAkhir: &score, SeedUrutan: "seed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db}
+	app := fiber.New()
+	app.Get("/orang-tua/anak/:id/simulasi", func(c *fiber.Ctx) error {
+		c.Locals("userID", user.ID)
+		return s.getSimulasiAnak(c)
+	})
+	res, err := app.Test(httptest.NewRequest(http.MethodGet, "/orang-tua/anak/"+student.ID+"/simulasi", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAndClose(t, res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("parent simulation result failed: %d %s", res.StatusCode, body)
+	}
+	if strings.Contains(body, "91") || strings.Contains(body, "kunci") {
+		t.Fatalf("parent response leaked hidden result or internal fields: %s", body)
+	}
+	if !strings.Contains(body, `"nama":"Literasi aman"`) || !strings.Contains(body, `"status":"selesai"`) {
+		t.Fatalf("parent response missing safe simulation summary: %s", body)
 	}
 }
 

@@ -1620,6 +1620,98 @@ func (s *Server) getUjianSkorAnak(c *fiber.Ctx) error {
 	return c.JSON(result)
 }
 
+type parentSimulasiAttempt struct {
+	ID           string     `json:"id"`
+	Status       string     `json:"status"`
+	Nomor        int        `json:"nomor"`
+	Mulai        *time.Time `json:"mulai,omitempty"`
+	Selesai      *time.Time `json:"selesai,omitempty"`
+	Skor         *float64   `json:"skor,omitempty"`
+	SkorTersedia bool       `json:"skorTersedia"`
+}
+
+type parentSimulasiSummary struct {
+	ID                 string                  `json:"id"`
+	Nama               string                  `json:"nama"`
+	Deskripsi          string                  `json:"deskripsi"`
+	Mode               string                  `json:"mode"`
+	DurasiMenit        int                     `json:"durasiMenit"`
+	MaksPercobaan      int                     `json:"maksPercobaan"`
+	WaktuMulai         *time.Time              `json:"waktuMulai,omitempty"`
+	WaktuSelesai       *time.Time              `json:"waktuSelesai,omitempty"`
+	TampilkanNilai     bool                    `json:"tampilkanNilai"`
+	TampilkanRingkasan bool                    `json:"tampilkanRingkasan"`
+	Tersedia           bool                    `json:"tersedia"`
+	PercobaanTerpakai  int                     `json:"percobaanTerpakai"`
+	Percobaan          []parentSimulasiAttempt `json:"percobaan"`
+}
+
+// getSimulasiAnak returns only assignment/result summaries. It deliberately
+// never serializes questions, snapshots, answer keys, rubrics, or teacher
+// comments to the parent portal.
+func (s *Server) getSimulasiAnak(c *fiber.Ctx) error {
+	anakID := c.Params("id")
+	if _, err := s.verifyOrangTuaAnak(c, anakID); err != nil {
+		return err
+	}
+	var assignments []SimulasiPenugasan
+	if err := s.db.Where("peserta_didik_id = ?", anakID).Order("created_at desc").Find(&assignments).Error; err != nil {
+		return fiber.NewError(500, "gagal memuat penugasan simulasi anak")
+	}
+	if len(assignments) == 0 {
+		return c.JSON([]parentSimulasiSummary{})
+	}
+	packageIDs := make([]string, 0, len(assignments))
+	for _, assignment := range assignments {
+		packageIDs = append(packageIDs, assignment.PaketID)
+	}
+	var packages []SimulasiPaket
+	if err := s.db.Where("id IN ? AND status = ?", packageIDs, "terbit").Find(&packages).Error; err != nil {
+		return fiber.NewError(500, "gagal memuat paket simulasi anak")
+	}
+	packagesByID := make(map[string]SimulasiPaket, len(packages))
+	for _, paket := range packages {
+		packagesByID[paket.ID] = paket
+	}
+	var attempts []SimulasiUpaya
+	if err := s.db.Where("peserta_didik_id = ? AND paket_id IN ?", anakID, packageIDs).Order("nomor desc").Find(&attempts).Error; err != nil {
+		return fiber.NewError(500, "gagal memuat riwayat simulasi anak")
+	}
+	attemptsByPackage := make(map[string][]SimulasiUpaya)
+	for _, attempt := range attempts {
+		attemptsByPackage[attempt.PaketID] = append(attemptsByPackage[attempt.PaketID], attempt)
+	}
+	now := time.Now()
+	result := make([]parentSimulasiSummary, 0, len(assignments))
+	seen := make(map[string]bool)
+	for _, assignment := range assignments {
+		paket, ok := packagesByID[assignment.PaketID]
+		if !ok || seen[paket.ID] {
+			continue
+		}
+		seen[paket.ID] = true
+		tersedia := (paket.WaktuMulai == nil || !now.Before(*paket.WaktuMulai)) && (paket.WaktuSelesai == nil || !now.After(*paket.WaktuSelesai))
+		rows := attemptsByPackage[paket.ID]
+		entry := parentSimulasiSummary{
+			ID: paket.ID, Nama: paket.Nama, Deskripsi: paket.Deskripsi, Mode: paket.Mode,
+			DurasiMenit: paket.DurasiMenit, MaksPercobaan: paket.MaksPercobaan,
+			WaktuMulai: paket.WaktuMulai, WaktuSelesai: paket.WaktuSelesai,
+			TampilkanNilai: paket.TampilkanNilai, TampilkanRingkasan: paket.TampilkanRingkasan,
+			Tersedia: tersedia, PercobaanTerpakai: len(rows), Percobaan: make([]parentSimulasiAttempt, 0, len(rows)),
+		}
+		for _, attempt := range rows {
+			row := parentSimulasiAttempt{ID: attempt.ID, Status: attempt.Status, Nomor: attempt.Nomor, Mulai: attempt.Mulai, Selesai: attempt.Selesai, SkorTersedia: paket.TampilkanNilai}
+			if paket.TampilkanNilai && attempt.SkorAkhir != nil {
+				score := *attempt.SkorAkhir
+				row.Skor = &score
+			}
+			entry.Percobaan = append(entry.Percobaan, row)
+		}
+		result = append(result, entry)
+	}
+	return c.JSON(result)
+}
+
 // getTugasAnak — GET /orang-tua/anak/:id/tugas
 func (s *Server) getTugasAnak(c *fiber.Ctx) error {
 	anakID := c.Params("id")

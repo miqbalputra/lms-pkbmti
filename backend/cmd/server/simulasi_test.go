@@ -116,6 +116,57 @@ func TestSimulasiBuilderAutosavePublishesDraftSources(t *testing.T) {
 	}
 }
 
+func TestSimulasiBuilderRevisionConflict(t *testing.T) {
+	_, app := setupE2EServer(t)
+	adminToken, _ := getAdminToken(t, app)
+	payload := map[string]any{
+		"paket":           map[string]any{"nama": "Draf konflik", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 30, "maksPercobaan": 1},
+		"items":           []any{},
+		"pesertaDidikIds": []string{},
+		"revision":        0,
+	}
+	created, err := makeRequest(app, http.MethodPost, "/api/simulasi/paket/builder", adminToken, payload, "")
+	if err != nil || created.StatusCode != http.StatusOK {
+		if created != nil {
+			created.Body.Close()
+		}
+		t.Fatalf("create conflict draft: %v", err)
+	}
+	var body struct {
+		Paket SimulasiPaket `json:"paket"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&body); err != nil {
+		created.Body.Close()
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	if body.Paket.Revision != 1 {
+		t.Fatalf("new builder revision = %d, want 1", body.Paket.Revision)
+	}
+	update := map[string]any{
+		"paket":           map[string]any{"nama": "Draf konflik versi satu", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 30, "maksPercobaan": 1},
+		"items":           []any{},
+		"pesertaDidikIds": []string{},
+		"revision":        body.Paket.Revision,
+	}
+	first, err := makeRequest(app, http.MethodPut, "/api/simulasi/paket/"+body.Paket.ID+"/builder", adminToken, update, "")
+	if err != nil || first.StatusCode != http.StatusOK {
+		if first != nil {
+			first.Body.Close()
+		}
+		t.Fatalf("first builder update: %v", err)
+	}
+	first.Body.Close()
+	second, err := makeRequest(app, http.MethodPut, "/api/simulasi/paket/"+body.Paket.ID+"/builder", adminToken, update, "")
+	if err != nil || second.StatusCode != http.StatusConflict {
+		if second != nil {
+			second.Body.Close()
+		}
+		t.Fatalf("stale builder update status = %v, want 409", second)
+	}
+	second.Body.Close()
+}
+
 func TestSimulasiWorkspaceBahanLegacyCopyAndRevision(t *testing.T) {
 	s, app := setupE2EServer(t)
 	adminToken, adminID := getAdminToken(t, app)

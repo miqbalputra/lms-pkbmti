@@ -3,10 +3,12 @@ import {
   Bell,
   ChevronDown,
   Command,
+  Contrast,
   FileText,
   LogOut,
   Search,
   ShieldAlert,
+  Type,
   User as UserIcon,
 } from 'lucide-react'
 import {
@@ -36,6 +38,7 @@ import { apiBase, request } from '../../lib/api'
 import { formatWibDate } from '../../lib/wib'
 import { useNavigate } from 'react-router-dom'
 import { pathFor } from '../../lib/router'
+import { useAccessibility, type FontScale } from '../../context/AccessibilityContext'
 
 interface User {
   id: string
@@ -85,6 +88,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const { toggleSidebar, toggleMobileSidebar, isExpanded } = useSidebar()
+  const { fontScale, highContrast, setFontScale, setHighContrast } = useAccessibility()
   const navigate = useNavigate()
 
   const go = (pageId: string) => navigate(pathFor(pageId))
@@ -341,6 +345,42 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
           {/* Right: theme toggle, notifications, profile */}
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
             <ThemeToggleButton />
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:ring-2 focus-visible:ring-brand-500/30 sm:h-11 sm:w-11 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+                  title="Pengaturan aksesibilitas"
+                  aria-label="Pengaturan aksesibilitas"
+                >
+                  <Type className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64 rounded-xl border-gray-200 p-2 dark:border-gray-800">
+                <DropdownMenuLabel className="text-xs uppercase tracking-wide text-gray-500">Tampilan aksesibilitas</DropdownMenuLabel>
+                <div className="grid grid-cols-4 gap-1 px-1 py-2">
+                  {([1, 1.1, 1.25, 1.5] as FontScale[]).map((scale) => (
+                    <button
+                      key={scale}
+                      type="button"
+                      onClick={() => setFontScale(scale)}
+                      aria-label={`Ukuran teks ${Math.round(scale * 100)} persen`}
+                      aria-pressed={fontScale === scale}
+                      className={`min-h-11 rounded-lg border text-xs font-semibold transition-colors ${fontScale === scale ? 'border-brand-500 bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300' : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/5'}`}
+                    >
+                      {Math.round(scale * 100)}%
+                    </button>
+                  ))}
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setHighContrast(!highContrast)} className="min-h-11 cursor-pointer">
+                  <Contrast className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Kontras tinggi</span>
+                  <span className="text-xs text-gray-500">{highContrast ? 'Aktif' : 'Mati'}</span>
+                </DropdownMenuItem>
+                <p className="px-2 pb-1 text-[11px] leading-relaxed text-gray-500">Pengaturan tersimpan di perangkat ini dan berlaku di semua halaman.</p>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {/* Notifications */}
             <DropdownMenu>

@@ -3,7 +3,9 @@ import {
   Bell,
   CalendarCheck,
   CalendarClock,
+  Contrast,
   School,
+  Type,
   UserCheck,
   Users,
 } from 'lucide-react'
@@ -20,6 +22,7 @@ import { GuruTaskReminder } from './components/GuruTaskReminder'
 import { refreshSession, request, setOnTokenRefreshed, setOnUnauthorized } from './lib/api'
 import { PAGE_IDS, pathFor, pathsFor } from './lib/router'
 import { formatWibDate } from './lib/wib'
+import { useAccessibility, type FontScale } from './context/AccessibilityContext'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null }
@@ -225,6 +228,7 @@ export default function App() {
       ) : user.role === 'siswa' ? (
         <>
           <Toaster position="top-right" />
+          <AccessibilityFloatingControls />
           <Suspense fallback={<PageFallback />}>
             <SimulasiSiswaView token={token} onLogout={handleLogout} />
           </Suspense>
@@ -254,6 +258,18 @@ export default function App() {
       )}
     </>
   )
+}
+
+function AccessibilityFloatingControls() {
+  const { fontScale, highContrast, setFontScale, setHighContrast } = useAccessibility()
+  return <details className="fixed bottom-4 right-3 z-[100] text-slate-900" style={{ fontSize: '1rem' }}>
+    <summary className="grid min-h-11 min-w-11 cursor-pointer list-none place-items-center rounded-full border bg-white p-2 shadow-lg outline-none focus-visible:ring-2 focus-visible:ring-primary dark:bg-slate-900 dark:text-white" aria-label="Pengaturan tampilan aksesibilitas"><Type className="h-5 w-5" /></summary>
+    <div className="mt-2 w-64 rounded-2xl border bg-white p-3 shadow-xl dark:bg-slate-900 dark:text-white">
+      <p className="text-xs font-bold uppercase tracking-wide text-primary">Tampilan</p>
+      <div className="mt-2 grid grid-cols-4 gap-1">{([1, 1.1, 1.25, 1.5] as FontScale[]).map((scale) => <button key={scale} type="button" onClick={() => setFontScale(scale)} aria-pressed={fontScale === scale} className={`min-h-11 rounded-lg border text-xs font-semibold ${fontScale === scale ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200'}`}>{Math.round(scale * 100)}%</button>)}</div>
+      <button type="button" onClick={() => setHighContrast(!highContrast)} className="mt-3 flex min-h-11 w-full items-center gap-2 rounded-lg border px-3 text-left text-sm"><Contrast className="h-4 w-4" />Kontras tinggi<span className="ml-auto text-xs">{highContrast ? 'Aktif' : 'Mati'}</span></button>
+    </div>
+  </details>
 }
 
 // Navigasi berbasis router: setiap halaman punya path sendiri (lihat lib/router),

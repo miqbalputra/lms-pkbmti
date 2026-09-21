@@ -213,6 +213,7 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/orang-tua/anak/:id/presensi", s.getPresensiAnak)
 	api.Get("/orang-tua/anak/:id/rapor", s.getRaporAnak)
 	api.Get("/orang-tua/anak/:id/ujian-skor", s.getUjianSkorAnak)
+	api.Get("/orang-tua/anak/:id/simulasi", s.getSimulasiAnak)
 	api.Get("/orang-tua/anak/:id/tugas", s.getTugasAnak)
 	api.Get("/orang-tua/anak/:id/materi", s.getMateriAnak)
 	api.Get("/orang-tua/anak/:id/jurnal", s.getJurnalAnak)

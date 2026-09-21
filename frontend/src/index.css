@@ -4,6 +4,34 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Accessibility preferences are user-controlled and persisted by
+   AccessibilityProvider. Rem-based typography scales without breaking the
+   responsive layout or changing the underlying Tailwind tokens. */
+html {
+  font-size: calc(16px * var(--app-font-scale, 1));
+  text-size-adjust: 100%;
+}
+
+html.high-contrast {
+  --color-gray-500: #475467;
+  --color-gray-400: #344054;
+  --border: #98a2b3;
+}
+
+:where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ===== TailAdmin React v2.3 — exact @theme tokens ===== */
 @theme {
   --font-*: initial;

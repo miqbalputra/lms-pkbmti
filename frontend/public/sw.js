@@ -1,8 +1,8 @@
-const CACHE_NAME = 'pkbmti-lms-v4';
+const CACHE_NAME = 'pkbmti-lms-v5';
 const APP_SHELL = [
   '/',
   '/index.html',
-  '/manifest.json?v=4',
+  '/manifest.json?v=5',
   '/pkbmti-lms-icon.svg',
   '/pkbmti-lms-book-192.png',
   '/pkbmti-lms-book-512.png',

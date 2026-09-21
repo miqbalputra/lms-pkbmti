@@ -53,7 +53,8 @@ var ortuPortalHTML = `<!DOCTYPE html>
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f4f6fb;color:var(--foreground);min-height:100vh;min-height:100dvh;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
-.wrap{max-width:1120px;margin:0 auto;padding:32px 24px}
+ .wrap{max-width:1120px;margin:0 auto;padding:32px 24px}
+ #portalCard{--portal-zoom:1;zoom:var(--portal-zoom)}
 .login-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:620px;border-radius:18px;border-color:#dfe3eb;box-shadow:0 18px 50px rgba(15,23,42,.10)}
 .login-brand{position:relative;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;padding:52px 48px;background:linear-gradient(135deg,#536dff 0%,#3441ed 56%,#3d42d9 100%);color:#fff}
 .login-brand:before,.login-brand:after{content:"";position:absolute;border-radius:999px;background:rgba(255,255,255,.10);filter:blur(2px);pointer-events:none}
@@ -83,6 +84,12 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 
 .top-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .top-bar h2{font-size:16px;font-weight:600}
+.a11y-controls{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.a11y-controls .btn{min-width:42px;padding:0 10px}
+.a11y-controls .btn.active{background:var(--primary);color:var(--primary-foreground)}
+ .high-contrast{--foreground:#000;--muted-foreground:#334155;--border:#64748b;--input:#475569}
+ html.high-contrast .card,html.high-contrast .tab,html.high-contrast .child-btn,html.high-contrast .btn{border-width:2px}
+ :focus-visible{outline:3px solid #4354f5;outline-offset:2px}
 .child-select{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .child-select::-webkit-scrollbar{display:none}
 .child-btn{padding:6px 14px;border-radius:var(--radius);font-size:12px;font-weight:500;border:1px solid var(--border);background:var(--background);color:var(--foreground);white-space:nowrap;cursor:pointer;flex-shrink:0}
@@ -167,15 +174,15 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 </div>
 
 <!-- Portal Main -->
-<div id="portalCard" class="hidden">
+<main id="portalCard" class="hidden">
   <div class="top-bar">
     <h2>Portal Orang Tua</h2>
-    <button class="btn btn-ghost btn-sm" data-action="logout">Keluar</button>
+    <div class="a11y-controls" aria-label="Pengaturan tampilan"><button class="btn btn-ghost btn-sm" data-action="font-scale" data-scale="100" aria-label="Ukuran teks 100 persen">A</button><button class="btn btn-ghost btn-sm" data-action="font-scale" data-scale="110" aria-label="Ukuran teks 110 persen">A+</button><button class="btn btn-ghost btn-sm" data-action="font-scale" data-scale="125" aria-label="Ukuran teks 125 persen">A++</button><button class="btn btn-ghost btn-sm" data-action="font-scale" data-scale="150" aria-label="Ukuran teks 150 persen">A+++</button><button class="btn btn-ghost btn-sm" data-action="contrast" aria-label="Kontras tinggi">◐</button><button class="btn btn-ghost btn-sm" data-action="logout">Keluar</button></div>
   </div>
   <div class="child-select" id="childSelect"></div>
-  <div class="tabs" id="mainTabs"></div>
-  <div id="tabContent"></div>
-</div>
+  <div class="tabs" id="mainTabs" role="tablist" aria-label="Menu portal orang tua"></div>
+  <div id="tabContent" aria-live="polite"></div>
+</main>
 
 </div>
 
@@ -183,8 +190,18 @@ label{display:block;font-size:13px;font-weight:500;margin-bottom:5px}
 const API='/api';
 let state={token:'',anakId:'',anakList:[],anakData:null,identityPreviewUrl:'',identityPreviewRequest:0};
 let turnstileToken='';
+let fontScale=Number(localStorage.getItem('pkbmti-ortu-font-scale')||100);
+function applyA11y(){
+  if(![100,110,125,150].includes(fontScale))fontScale=100;
+  document.documentElement.style.fontSize='100%';
+  document.documentElement.style.setProperty('--portal-zoom',(fontScale/100).toString());
+  document.documentElement.classList.toggle('high-contrast',localStorage.getItem('pkbmti-ortu-contrast')==='1');
+  document.querySelectorAll('[data-action="font-scale"]').forEach(el=>el.classList.toggle('active',Number(el.dataset.scale)===fontScale));
+}
+applyA11y();
 const TABS=[
   {id:'identitas',label:'Identitas',icon:'👤'},
+  {id:'simulasi',label:'Simulasi',icon:'🎯'},
   {id:'surat',label:'Surat',icon:'📄'},
   {id:'performa',label:'Performa',icon:'📊'},
   {id:'perilaku',label:'Perilaku',icon:'📝'},
@@ -216,6 +233,8 @@ document.addEventListener('click',e=>{
     case 'logout':void doLogout();break;
     case 'select-child':void selectAnak(el.dataset.id||'');break;
     case 'show-tab':showTab(el.dataset.tab||'',el);break;
+    case 'font-scale':fontScale=Number(el.dataset.scale||100);localStorage.setItem('pkbmti-ortu-font-scale',String(fontScale));applyA11y();break;
+    case 'contrast':localStorage.setItem('pkbmti-ortu-contrast',localStorage.getItem('pkbmti-ortu-contrast')==='1'?'0':'1');applyA11y();break;
     case 'download-surat':void downloadSurat(el.dataset.id||'');break;
     case 'download-portofolio':void downloadPortofolio(el.dataset.id||'');break;
     case 'download-identitas':void downloadIdentitas();break;
@@ -267,17 +286,17 @@ async function selectAnak(id){
 }
 
 function renderTabs(){
-  document.getElementById('mainTabs').innerHTML=TABS.map((t,i)=>'<div class="tab'+(i===0?' active':'')+'" data-action="show-tab" data-tab="'+esc(t.id)+'">'+t.icon+' '+t.label+'</div>').join('');
+  document.getElementById('mainTabs').innerHTML=TABS.map((t,i)=>'<button type="button" role="tab" aria-selected="'+(i===0?'true':'false')+'" class="tab'+(i===0?' active':'')+'" data-action="show-tab" data-tab="'+esc(t.id)+'">'+t.icon+' '+t.label+'</button>').join('');
 }
 
 function showTab(tab,el){
   if(tab!=='identitas')clearIdentityPreview();
-  document.querySelectorAll('.tab').forEach(n=>n.classList.remove('active'));
-  if(el)el.classList.add('active');
+  document.querySelectorAll('.tab').forEach(n=>{n.classList.remove('active');n.setAttribute('aria-selected','false')});
+  if(el){el.classList.add('active');el.setAttribute('aria-selected','true')}
   const c=document.getElementById('tabContent');
   c.innerHTML='<div class="empty-state">Memuat...</div>';
   const m={
-    identitas:loadIdentitas,surat:loadSurat,performa:loadPerforma,perilaku:loadPerilaku,ujian:loadUjian,tugas:loadTugas,
+    identitas:loadIdentitas,simulasi:loadSimulasi,surat:loadSurat,performa:loadPerforma,perilaku:loadPerilaku,ujian:loadUjian,tugas:loadTugas,
     materi:loadMateri,belajar:loadBelajar,kalender:loadKalender,notif:loadNotif,chat:loadChat,buku:loadBuku
   };
   if(m[tab])m[tab](c);
@@ -422,6 +441,26 @@ async function loadPerilaku(c){
     html+='</div></div>';
     c.innerHTML=html;
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
+}
+
+async function loadSimulasi(c){
+  try{
+    const r=await fetch(API+'/orang-tua/anak/'+encodeURIComponent(state.anakId)+'/simulasi',{headers:hdr()});
+    const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal memuat simulasi');
+    if(!Array.isArray(d)||!d.length){c.innerHTML='<div class="card"><div class="empty-state">Belum ada simulasi yang ditugaskan.</div></div>';return}
+    let html='<div class="card"><div class="card-header"><h1>Simulasi anak</h1><p class="desc">Pantau jadwal, percobaan, dan nilai sesuai kebijakan paket.</p></div><div class="card-content"><div class="simulasi-list">';
+    html+=d.map(p=>{
+      const mode=p.mode==='tka_sd'?'TKA SD':'ANBK / AKM';
+      const schedule=p.waktuSelesai?'Berakhir '+String(p.waktuSelesai).slice(0,10):(p.waktuMulai?'Mulai '+String(p.waktuMulai).slice(0,10):'Tanpa jadwal');
+      const attempts=Array.isArray(p.percobaan)?p.percobaan:[];
+      const latest=attempts[0];
+      const score=p.tampilkanNilai&&latest&&latest.skor!=null?Number(latest.skor).toFixed(1):'Belum ditampilkan';
+      const status=latest?(latest.status==='menunggu_nilai'?'Menunggu penilaian':latest.status==='selesai'?'Selesai':'Berlangsung'):'Belum mulai';
+      return '<div style="border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start"><div><div style="font-size:14px;font-weight:600;word-break:break-word">'+esc(p.nama||'Simulasi')+'</div><div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">'+esc(mode)+' · '+esc(schedule)+'</div></div><span class="badge '+(latest&&latest.status==='selesai'?'badge-success':'badge-secondary')+'">'+esc(status)+'</span></div><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px;text-align:center"><div style="background:var(--secondary);border-radius:var(--radius);padding:8px"><strong style="display:block;font-size:17px">'+esc(score)+'</strong><span style="font-size:10px;color:var(--muted-foreground)">Nilai</span></div><div style="background:var(--secondary);border-radius:var(--radius);padding:8px"><strong style="display:block;font-size:17px">'+String(p.percobaanTerpakai||0)+'</strong><span style="font-size:10px;color:var(--muted-foreground)">Percobaan</span></div><div style="background:var(--secondary);border-radius:var(--radius);padding:8px"><strong style="display:block;font-size:17px">'+String(p.durasiMenit||0)+'</strong><span style="font-size:10px;color:var(--muted-foreground)">Menit</span></div></div></div>';
+    }).join('');
+    html+='</div></div></div>';
+    c.innerHTML=html;
+  }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message||'Simulasi gagal dimuat')+'</div>'}
 }
 
 async function loadUjian(c){

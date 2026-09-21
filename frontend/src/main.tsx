@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { ThemeProvider } from './context/ThemeContext.tsx'
+import { AccessibilityProvider } from './context/AccessibilityContext.tsx'
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -15,8 +16,10 @@ if ('serviceWorker' in navigator) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider>
-      <App />
-    </ThemeProvider>
+    <AccessibilityProvider>
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    </AccessibilityProvider>
   </StrictMode>,
 )
