@@ -1165,7 +1165,7 @@ func main() {
 			// The two public legacy pages contain small inline UI scripts/styles;
 			// authorize only the per-request nonce instead of enabling arbitrary
 			// inline script execution.
-			c.Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-"+cspNonce+"' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com")
+			c.Set("Content-Security-Policy", productionContentSecurityPolicy(cspNonce))
 		}
 		if strings.HasPrefix(c.Path(), "/api") || c.Path() == "/health" {
 			c.Set("Cache-Control", "no-store")
@@ -1316,6 +1316,13 @@ func main() {
 			_ = sqlDB.Close()
 		}
 	}
+}
+
+// productionContentSecurityPolicy keeps the nonce used by the public pages'
+// inline scripts and styles in one place. Omitting the style nonce causes the
+// pages to render as unstyled HTML in browsers enforcing CSP.
+func productionContentSecurityPolicy(cspNonce string) string {
+	return "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-" + cspNonce + "' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-" + cspNonce + "' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com"
 }
 
 func validateConfig(cfg Config) error {

@@ -62,6 +62,9 @@ func TestPublicExamPagesUseCSPCompatibleHandlers(t *testing.T) {
 		if strings.Contains(page, "onclick=") || strings.Contains(page, "oninput=") || strings.Contains(page, "onkeydown=") {
 			t.Fatalf("%s page still contains inline event handlers blocked by production CSP", name)
 		}
+		if !strings.Contains(page, `<style nonce="{{CSP_NONCE}}">`) || !strings.Contains(page, `<script nonce="{{CSP_NONCE}}">`) {
+			t.Fatalf("%s page must use the per-request CSP nonce for inline style and script", name)
+		}
 	}
 	if !strings.Contains(ujianOnlineHTML, `data-action="answer"`) || !strings.Contains(ujianOnlineHTML, `data-action="text-answer"`) {
 		t.Fatal("public exam page is missing delegated answer handlers")
@@ -71,6 +74,16 @@ func TestPublicExamPagesUseCSPCompatibleHandlers(t *testing.T) {
 	}
 	if !strings.Contains(ortuPortalHTML, `data-action="font-scale"`) || !strings.Contains(ortuPortalHTML, `aria-label="Kontras tinggi"`) {
 		t.Fatal("parent portal is missing accessible text and contrast controls")
+	}
+}
+
+func TestProductionCSPAuthorizesInlinePageStyles(t *testing.T) {
+	policy := productionContentSecurityPolicy("test-csp-nonce")
+	if !strings.Contains(policy, "script-src 'self' 'nonce-test-csp-nonce'") {
+		t.Fatal("production CSP must authorize the inline page script nonce")
+	}
+	if !strings.Contains(policy, "style-src 'self' 'nonce-test-csp-nonce'") {
+		t.Fatal("production CSP must authorize the inline page style nonce")
 	}
 }
 
