@@ -776,6 +776,21 @@ type SimulasiPenugasan struct {
 	KelasIDSaatTugas string `gorm:"index" json:"kelasIdSaatTugas"`
 }
 
+// SimulasiAksesToken is a revocable, hashed link credential for a published
+// package. The raw token is returned only when it is created; later staff
+// responses expose only a short prefix and lifecycle metadata.
+type SimulasiAksesToken struct {
+	Base
+	PaketID          string     `gorm:"index;not null" json:"paketId"`
+	TokenHash        string     `gorm:"uniqueIndex;not null" json:"-"`
+	TokenPrefix      string     `gorm:"index;not null" json:"tokenPrefix"`
+	Label            string     `json:"label"`
+	DibuatOlehUserID string     `gorm:"index;not null" json:"dibuatOlehUserId"`
+	ExpiresAt        *time.Time `gorm:"index" json:"expiresAt,omitempty"`
+	RevokedAt        *time.Time `gorm:"index" json:"revokedAt,omitempty"`
+	LastUsedAt       *time.Time `json:"lastUsedAt,omitempty"`
+}
+
 type SimulasiUpaya struct {
 	Base
 	PaketID        string        `gorm:"index;uniqueIndex:simulasi_upaya_nomor" json:"paketId"`
@@ -1147,7 +1162,7 @@ func main() {
 	app.Use(compress.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     env("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Request-ID",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Request-ID, X-Simulasi-Share-Token",
 		ExposeHeaders:    "X-Request-ID",
 		AllowCredentials: true,
 	}))
@@ -1282,6 +1297,8 @@ func main() {
 	}), s.loginOrangTua)
 	api.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api.Get("/orang-tua/portal", s.serveOrangTuaPortalPage) // backward compat redirect
+	shareSimulasiLimiter := limiter.New(limiter.Config{Max: 120, Expiration: time.Minute})
+	api.Get("/simulasi/share/:token", shareSimulasiLimiter, s.simulasiSharedInfo)
 	// SSE notification stream uses a one-time ticket instead of putting a JWT in
 	// the URL. The ticket endpoint itself requires the normal bearer token.
 	api.Get("/notifikasi/stream-ticket", s.auth, s.issueNotificationStreamTicket)
@@ -1590,7 +1607,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiAksesToken{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {

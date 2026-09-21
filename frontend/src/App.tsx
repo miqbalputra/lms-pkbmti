@@ -89,6 +89,7 @@ const BackupView = lazy(() => import('./pages/BackupView').then((m) => ({ defaul
 const UjianOnlineView = lazy(() => import('./pages/UjianOnlineView').then((m) => ({ default: m.UjianOnlineView })))
 const UjianMonitorView = lazy(() => import('./pages/UjianMonitorView').then((m) => ({ default: m.UjianMonitorView })))
 const SimulasiView = lazy(() => import('./pages/SimulasiView').then((m) => ({ default: m.SimulasiView })))
+const SimulasiPreviewView = lazy(() => import('./pages/SimulasiView').then((m) => ({ default: m.SimulasiPreviewView })))
 const SimulasiSiswaView = lazy(() => import('./pages/SimulasiSiswaView').then((m) => ({ default: m.SimulasiSiswaView })))
 const NotifikasiView = lazy(() => import('./pages/NotifikasiView').then((m) => ({ default: m.NotifikasiView })))
 const KalenderView = lazy(() => import('./pages/KalenderView').then((m) => ({ default: m.KalenderView })))
@@ -230,7 +231,14 @@ export default function App() {
           <Toaster position="top-right" />
           <AccessibilityFloatingControls />
           <Suspense fallback={<PageFallback />}>
-            <SimulasiSiswaView token={token} onLogout={handleLogout} />
+          <SimulasiSiswaView token={token} onLogout={handleLogout} />
+          </Suspense>
+        </>
+      ) : window.location.pathname.startsWith('/simulasi/preview/') ? (
+        <>
+          <Toaster position="top-right" />
+          <Suspense fallback={<PageFallback />}>
+            <SimulasiPreviewView token={token} />
           </Suspense>
         </>
       ) : (

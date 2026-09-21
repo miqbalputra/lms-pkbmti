@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -183,6 +184,127 @@ func TestSimulasiBuilderRevisionConflict(t *testing.T) {
 		t.Fatalf("missing builder revision status = %v, want 409", missingRevision)
 	}
 	missingRevision.Body.Close()
+}
+
+func TestSimulasiShareTokenPreviewAndRevoke(t *testing.T) {
+	s, app := setupE2EServer(t)
+	adminToken, _ := getAdminToken(t, app)
+	student, _ := simulasiStudent(t, s, "share-student")
+	_, _ = simulasiStudent(t, s, "share-student-unassigned")
+
+	created, err := makeRequest(app, http.MethodPost, "/api/simulasi/paket/builder", adminToken, map[string]any{
+		"paket": map[string]any{"nama": "Paket tautan aman", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 20, "maksPercobaan": 1, "tampilkanNilai": true},
+		"items": []map[string]any{{"bobot": 1, "soal": map[string]any{
+			"jenjang": "SD/MI", "mode": "anbk_akm", "tipe": simulasiTipePG, "pertanyaan": "Kunci rahasia?", "bobot": 1,
+			"konfigurasi": map[string]any{"choices": []map[string]string{{"id": "a", "text": "Benar"}, {"id": "b", "text": "Salah"}}, "correctIds": []string{"a"}},
+		}}},
+		"pesertaDidikIds": []string{student.ID},
+	}, "")
+	if err != nil || created.StatusCode != http.StatusOK {
+		if created != nil {
+			created.Body.Close()
+		}
+		t.Fatalf("create shareable builder: status=%v err=%v", created, err)
+	}
+	var draft struct {
+		Paket SimulasiPaket `json:"paket"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&draft); err != nil {
+		created.Body.Close()
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	published, err := makeRequest(app, http.MethodPost, "/api/simulasi/paket/"+draft.Paket.ID+"/publikasi", adminToken, nil, "")
+	if err != nil || published.StatusCode != http.StatusOK {
+		if published != nil {
+			published.Body.Close()
+		}
+		t.Fatalf("publish shareable package: status=%v err=%v", published, err)
+	}
+	published.Body.Close()
+
+	createdToken, err := makeRequest(app, http.MethodPost, "/api/simulasi/paket/"+draft.Paket.ID+"/share-token", adminToken, map[string]any{"label": "Kelas 6A"}, "")
+	if err != nil || createdToken.StatusCode != http.StatusCreated {
+		if createdToken != nil {
+			createdToken.Body.Close()
+		}
+		t.Fatalf("create share token: status=%v err=%v", createdToken, err)
+	}
+	var share struct {
+		ID     string `json:"id"`
+		Token  string `json:"token"`
+		URL    string `json:"url"`
+		Prefix string `json:"tokenPrefix"`
+	}
+	if err := json.NewDecoder(createdToken.Body).Decode(&share); err != nil {
+		createdToken.Body.Close()
+		t.Fatal(err)
+	}
+	createdToken.Body.Close()
+	if share.ID == "" || share.Token == "" || share.URL == "" || share.Prefix == "" {
+		t.Fatalf("share response missing one-time credential fields: %+v", share)
+	}
+	publicApp := fiber.New(fiber.Config{ErrorHandler: apiError})
+	publicApp.Get("/api/simulasi/share/:token", s.simulasiSharedInfo)
+	publicInfo, err := publicApp.Test(httptest.NewRequest(http.MethodGet, "/api/simulasi/share/"+share.Token, nil))
+	if err != nil || publicInfo.StatusCode != http.StatusOK {
+		if publicInfo != nil {
+			publicInfo.Body.Close()
+		}
+		t.Fatalf("public shared info: status=%v err=%v", publicInfo, err)
+	}
+	publicBody, _ := io.ReadAll(publicInfo.Body)
+	publicInfo.Body.Close()
+	if !strings.Contains(string(publicBody), `"requiresLogin":true`) || strings.Contains(string(publicBody), "correctIds") {
+		t.Fatalf("public shared info leaked answer data or omitted login gate: %s", publicBody)
+	}
+
+	// The list endpoint must never return the raw credential again.
+	listed, err := makeRequest(app, http.MethodGet, "/api/simulasi/paket/"+draft.Paket.ID+"/share-token", adminToken, nil, "")
+	if err != nil || listed.StatusCode != http.StatusOK {
+		if listed != nil {
+			listed.Body.Close()
+		}
+		t.Fatalf("list share tokens: status=%v err=%v", listed, err)
+	}
+	listedBody, _ := io.ReadAll(listed.Body)
+	listed.Body.Close()
+	if strings.Contains(string(listedBody), share.Token) || !strings.Contains(string(listedBody), share.Prefix) {
+		t.Fatalf("share list leaked raw token or omitted prefix: %s", listedBody)
+	}
+
+	// A student may use the shared package without a pre-created assignment,
+	// but still needs a normal student login.
+	studentToken := simulasiLogin(t, app, "share-student-unassigned")
+	studentRequest := httptest.NewRequest(http.MethodGet, "/api/simulasi/saya", nil)
+	studentRequest.Header.Set("Authorization", "Bearer "+studentToken)
+	studentRequest.Header.Set("X-Simulasi-Share-Token", share.Token)
+	studentResponse, err := app.Test(studentRequest)
+	if err != nil || studentResponse.StatusCode != http.StatusOK {
+		if studentResponse != nil {
+			studentResponse.Body.Close()
+		}
+		t.Fatalf("student shared list: status=%v err=%v", studentResponse, err)
+	}
+	studentBody, _ := io.ReadAll(studentResponse.Body)
+	studentResponse.Body.Close()
+	if !strings.Contains(string(studentBody), draft.Paket.ID) || strings.Contains(string(studentBody), "correctIds") || strings.Contains(string(studentBody), "pembahasan") {
+		t.Fatalf("student shared payload is wrong or leaks answer data: %s", studentBody)
+	}
+
+	revoked, err := makeRequest(app, http.MethodDelete, "/api/simulasi/paket/"+draft.Paket.ID+"/share-token/"+share.ID, adminToken, nil, "")
+	if err != nil || revoked.StatusCode != http.StatusOK {
+		if revoked != nil {
+			revoked.Body.Close()
+		}
+		t.Fatalf("revoke share token: status=%v err=%v", revoked, err)
+	}
+	revoked.Body.Close()
+	_, invalid, err := s.findValidSimulasiShareToken(share.Token)
+	if err == nil || invalid != nil {
+		t.Fatalf("revoked token remained valid: package=%v err=%v", invalid, err)
+	}
 }
 
 func TestSimulasiWorkspaceBahanLegacyCopyAndRevision(t *testing.T) {

@@ -67,6 +67,7 @@ async function fetchWithToken(
   method: string,
   body: unknown,
   signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ) {
   return fetch(apiBase + path, {
     method,
@@ -74,6 +75,7 @@ async function fetchWithToken(
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(extraHeaders || {}),
     },
     body: body ? JSON.stringify(body) : undefined,
     signal,
@@ -86,8 +88,9 @@ export async function request(
   method = 'GET',
   body?: unknown,
   signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ) {
-  let r = await fetchWithToken(path, token, method, body, signal)
+  let r = await fetchWithToken(path, token, method, body, signal, extraHeaders)
   // A request may have started with an access token that was replaced by the
   // keep-alive refresh. Renew once and replay it before asking the app to log
   // out. Auth endpoints themselves are excluded to avoid refresh recursion.
@@ -96,7 +99,7 @@ export async function request(
     try {
       const session = await refreshSession()
       onTokenRefreshed?.(session)
-      r = await fetchWithToken(path, session.accessToken, method, body, signal)
+      r = await fetchWithToken(path, session.accessToken, method, body, signal, extraHeaders)
     } catch {
       refreshFailed = true
       if (onUnauthorized) onUnauthorized()

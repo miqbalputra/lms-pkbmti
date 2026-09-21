@@ -122,6 +122,11 @@ type simulasiBahanInput struct {
 	Status    string `json:"status"`
 	Revision  int    `json:"revision"`
 }
+
+type simulasiShareTokenInput struct {
+	Label     string     `json:"label"`
+	ExpiresAt *time.Time `json:"expiresAt"`
+}
 type simulasiSnapshot struct {
 	SoalID      string             `json:"soalId"`
 	Tipe        string             `json:"tipe"`
@@ -160,11 +165,15 @@ func registerSimulasiRoutes(api fiber.Router, s *Server) {
 	api.Post("/simulasi/paket", s.simulasiCreatePaket)
 	api.Get("/simulasi/paket/:id/builder", s.simulasiGetBuilderPaket)
 	api.Put("/simulasi/paket/:id/builder", s.simulasiSaveBuilderPaket)
+	api.Get("/simulasi/paket/:id/preview", s.simulasiPreviewPaket)
 	api.Get("/simulasi/paket/:id", s.simulasiGetPaket)
 	api.Put("/simulasi/paket/:id", s.simulasiUpdatePaket)
 	api.Post("/simulasi/paket/:id/duplikasi", s.simulasiDuplicatePaket)
 	api.Post("/simulasi/paket/:id/publikasi", s.simulasiPublishPaket)
 	api.Post("/simulasi/paket/:id/arsip", s.simulasiArchivePaket)
+	api.Get("/simulasi/paket/:id/share-token", s.simulasiListShareTokens)
+	api.Post("/simulasi/paket/:id/share-token", s.simulasiCreateShareToken)
+	api.Delete("/simulasi/paket/:id/share-token/:tokenId", s.simulasiRevokeShareToken)
 	api.Get("/simulasi/paket/:id/soal", s.simulasiListPaketSoal)
 	api.Post("/simulasi/paket/:id/soal", s.simulasiAddPaketSoal)
 	api.Post("/simulasi/paket/:id/soal-acak", s.simulasiAddPaketSoalAcak)
@@ -864,7 +873,19 @@ func (s *Server) simulasiStimulusFile(c *fiber.Ctx) error {
 			return err
 		}
 		if permitted == 0 {
-			return fiber.NewError(403, "gambar stimulus bukan bagian dari simulasi Anda")
+			// A published package may also be opened through a valid share link.
+			// In that case there is intentionally no assignment row, so verify the
+			// frozen snapshot for the package represented by the token instead.
+			_, sharedPackage, shareErr := s.findValidSimulasiShareToken(c.Get("X-Simulasi-Share-Token"))
+			if shareErr != nil {
+				return fiber.NewError(403, "gambar stimulus bukan bagian dari simulasi Anda")
+			}
+			if err := s.db.Table("simulasi_paket_soals").Where("paket_id = ? AND snapshot_json LIKE ?", sharedPackage.ID, needle).Count(&permitted).Error; err != nil {
+				return err
+			}
+			if permitted == 0 {
+				return fiber.NewError(403, "gambar stimulus bukan bagian dari simulasi Anda")
+			}
 		}
 	} else {
 		var question SimulasiSoal
@@ -1245,6 +1266,156 @@ func (s *Server) simulasiGetPaket(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(row)
+}
+
+func hashSimulasiAccessToken(raw string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(raw)))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func shareTokenResponse(row SimulasiAksesToken, packageName string) fiber.Map {
+	status := "aktif"
+	if row.RevokedAt != nil {
+		status = "dicabut"
+	} else if row.ExpiresAt != nil && !time.Now().Before(*row.ExpiresAt) {
+		status = "kedaluwarsa"
+	}
+	return fiber.Map{"id": row.ID, "paketId": row.PaketID, "paketNama": packageName, "tokenPrefix": row.TokenPrefix, "label": row.Label, "expiresAt": row.ExpiresAt, "revokedAt": row.RevokedAt, "lastUsedAt": row.LastUsedAt, "status": status, "createdAt": row.CreatedAt}
+}
+
+func (s *Server) simulasiListShareTokens(c *fiber.Ctx) error {
+	paket, err := s.getSimulasiPaket(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(404, "paket simulasi tidak ditemukan")
+	}
+	if err := s.simulasiPaketScope(c, paket, false); err != nil {
+		return err
+	}
+	var rows []SimulasiAksesToken
+	if err := s.db.Where("paket_id = ?", paket.ID).Order("created_at desc").Find(&rows).Error; err != nil {
+		return err
+	}
+	result := make([]fiber.Map, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, shareTokenResponse(row, paket.Nama))
+	}
+	return c.JSON(result)
+}
+
+func (s *Server) simulasiCreateShareToken(c *fiber.Ctx) error {
+	paket, err := s.getSimulasiPaket(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(404, "paket simulasi tidak ditemukan")
+	}
+	if err := s.simulasiPaketScope(c, paket, true); err != nil {
+		return err
+	}
+	if paket.Status != "terbit" {
+		return fiber.NewError(409, "terbitkan paket terlebih dahulu sebelum membuat tautan pengerjaan")
+	}
+	var in simulasiShareTokenInput
+	if err := c.BodyParser(&in); err != nil && len(c.Body()) > 0 {
+		return fiber.NewError(400, "konfigurasi tautan tidak valid")
+	}
+	if in.ExpiresAt != nil && !in.ExpiresAt.After(time.Now()) {
+		return fiber.NewError(400, "masa berlaku tautan harus berada di masa depan")
+	}
+	var active int64
+	if err := s.db.Model(&SimulasiAksesToken{}).Where("paket_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", paket.ID, time.Now()).Count(&active).Error; err != nil {
+		return err
+	}
+	if active >= 20 {
+		return fiber.NewError(409, "maksimal 20 tautan aktif per paket; cabut tautan lama terlebih dahulu")
+	}
+	raw := uuid.NewString() + uuid.NewString()
+	row := SimulasiAksesToken{PaketID: paket.ID, TokenHash: hashSimulasiAccessToken(raw), TokenPrefix: raw[:12], Label: strings.TrimSpace(in.Label), DibuatOlehUserID: c.Locals("userID").(string), ExpiresAt: in.ExpiresAt}
+	if err := s.db.Create(&row).Error; err != nil {
+		return err
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "create", "simulasi_share_token", row.ID)
+	response := shareTokenResponse(row, paket.Nama)
+	response["token"] = raw
+	response["url"] = publicBase() + "/simulasi?share=" + url.QueryEscape(raw)
+	return c.Status(201).JSON(response)
+}
+
+func (s *Server) simulasiRevokeShareToken(c *fiber.Ctx) error {
+	paket, err := s.getSimulasiPaket(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(404, "paket simulasi tidak ditemukan")
+	}
+	if err := s.simulasiPaketScope(c, paket, true); err != nil {
+		return err
+	}
+	now := time.Now()
+	result := s.db.Model(&SimulasiAksesToken{}).Where("id = ? AND paket_id = ? AND revoked_at IS NULL", c.Params("tokenId"), paket.ID).Updates(map[string]interface{}{"revoked_at": now})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fiber.NewError(404, "tautan tidak ditemukan atau sudah dicabut")
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "revoke", "simulasi_share_token", c.Params("tokenId"))
+	return c.JSON(fiber.Map{"status": "dicabut", "revokedAt": now})
+}
+
+func (s *Server) findValidSimulasiShareToken(raw string) (*SimulasiAksesToken, *SimulasiPaket, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil, fiber.NewError(404, "tautan simulasi tidak valid")
+	}
+	var access SimulasiAksesToken
+	if err := s.db.Where("token_hash = ?", hashSimulasiAccessToken(raw)).First(&access).Error; err != nil {
+		return nil, nil, fiber.NewError(404, "tautan simulasi tidak ditemukan")
+	}
+	if access.RevokedAt != nil || (access.ExpiresAt != nil && !time.Now().Before(*access.ExpiresAt)) {
+		return nil, nil, fiber.NewError(410, "tautan simulasi sudah tidak berlaku")
+	}
+	var paket SimulasiPaket
+	if err := s.db.First(&paket, "id = ? AND status = ?", access.PaketID, "terbit").Error; err != nil {
+		return nil, nil, fiber.NewError(404, "paket simulasi tidak tersedia")
+	}
+	return &access, &paket, nil
+}
+
+// simulasiSharedInfo is intentionally public and student-safe. It lets a
+// shared link show the package identity before login without exposing keys,
+// snapshots, or assignment data.
+func (s *Server) simulasiSharedInfo(c *fiber.Ctx) error {
+	_, paket, err := s.findValidSimulasiShareToken(c.Params("token"))
+	if err != nil {
+		return err
+	}
+	var count int64
+	if err := s.db.Model(&SimulasiPaketSoal{}).Where("paket_id = ?", paket.ID).Count(&count).Error; err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"paket": studentPaketResponse(*paket), "jumlahSoal": count, "requiresLogin": true})
+}
+
+func (s *Server) simulasiPreviewPaket(c *fiber.Ctx) error {
+	paket, err := s.getSimulasiPaket(c.Params("id"))
+	if err != nil {
+		return fiber.NewError(404, "paket simulasi tidak ditemukan")
+	}
+	if err := s.simulasiPaketScope(c, paket, false); err != nil {
+		return err
+	}
+	var items []SimulasiPaketSoal
+	if err := s.db.Where("paket_id = ?", paket.ID).Order("urutan").Find(&items).Error; err != nil {
+		return err
+	}
+	questions := make([]fiber.Map, 0, len(items))
+	for _, item := range items {
+		var snap simulasiSnapshot
+		if err := json.Unmarshal([]byte(item.SnapshotJSON), &snap); err != nil {
+			return fiber.NewError(500, "snapshot soal tidak valid")
+		}
+		questions = append(questions, fiber.Map{"id": item.ID, "urutan": item.Urutan, "bobot": item.Bobot, "soal": fiber.Map{"tipe": snap.Tipe, "pertanyaan": snap.Pertanyaan, "stimulus": snap.Stimulus, "konfigurasi": sanitizedConfig(snap.Tipe, snap.Konfigurasi)}})
+	}
+	return c.JSON(fiber.Map{"paket": studentPaketResponse(*paket), "soal": questions})
 }
 func (s *Server) paketCanChange(row *SimulasiPaket) error {
 	if row.Status != "draf" {
@@ -1680,13 +1851,17 @@ func (s *Server) simulasiSaya(c *fiber.Ctx) error {
 		return err
 	}
 	now := time.Now()
-	var assignments []SimulasiPenugasan
-	if err := s.db.Where("peserta_didik_id = ?", student.ID).Find(&assignments).Error; err != nil {
-		return err
-	}
-	ids := make([]string, 0, len(assignments))
-	for _, assignment := range assignments {
-		ids = append(ids, assignment.PaketID)
+	ids := make([]string, 0)
+	if _, sharedPackage, shareErr := s.findValidSimulasiShareToken(c.Get("X-Simulasi-Share-Token")); shareErr == nil {
+		ids = append(ids, sharedPackage.ID)
+	} else {
+		var assignments []SimulasiPenugasan
+		if err := s.db.Where("peserta_didik_id = ?", student.ID).Find(&assignments).Error; err != nil {
+			return err
+		}
+		for _, assignment := range assignments {
+			ids = append(ids, assignment.PaketID)
+		}
 	}
 	if len(ids) == 0 {
 		return c.JSON([]fiber.Map{})
@@ -1710,10 +1885,13 @@ func (s *Server) simulasiSaya(c *fiber.Ctx) error {
 	}
 	return c.JSON(result)
 }
-func (s *Server) assignedPaketForStudent(paketID, studentID string) (*SimulasiPaket, error) {
+func (s *Server) assignedPaketForStudent(c *fiber.Ctx, paketID, studentID string) (*SimulasiPaket, error) {
 	var assignment SimulasiPenugasan
 	if err := s.db.Where("paket_id = ? AND peserta_didik_id = ?", paketID, studentID).First(&assignment).Error; err != nil {
-		return nil, fiber.NewError(403, "paket tidak ditugaskan kepada Anda")
+		_, sharedPackage, shareErr := s.findValidSimulasiShareToken(c.Get("X-Simulasi-Share-Token"))
+		if shareErr != nil || sharedPackage.ID != paketID {
+			return nil, fiber.NewError(403, "paket tidak ditugaskan kepada Anda")
+		}
 	}
 	paket, err := s.getSimulasiPaket(paketID)
 	if err != nil || paket.Status != "terbit" {
@@ -1736,7 +1914,7 @@ func (s *Server) simulasiInstruksi(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	paket, err := s.assignedPaketForStudent(c.Params("id"), student.ID)
+	paket, err := s.assignedPaketForStudent(c, c.Params("id"), student.ID)
 	if err != nil {
 		return err
 	}
@@ -1759,7 +1937,7 @@ func (s *Server) simulasiMulai(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	paket, err := s.assignedPaketForStudent(c.Params("id"), student.ID)
+	paket, err := s.assignedPaketForStudent(c, c.Params("id"), student.ID)
 	if err != nil {
 		return err
 	}
@@ -1872,7 +2050,7 @@ func (s *Server) ownedUpaya(c *fiber.Ctx) (*SimulasiUpaya, *SimulasiPaket, *Pese
 	if err := s.db.First(&attempt, "id = ? AND peserta_didik_id = ?", c.Params("id"), student.ID).Error; err != nil {
 		return nil, nil, nil, fiber.NewError(404, "upaya tidak ditemukan")
 	}
-	paket, err := s.assignedPaketForStudent(attempt.PaketID, student.ID)
+	paket, err := s.assignedPaketForStudent(c, attempt.PaketID, student.ID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
