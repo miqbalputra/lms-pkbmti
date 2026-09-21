@@ -123,6 +123,101 @@ func TestSimulasiBuilderAutosavePublishesDraftSources(t *testing.T) {
 	}
 }
 
+func TestSimulasiBuilderStimulusCardsPersistAndQuestionArchive(t *testing.T) {
+	_, app := setupE2EServer(t)
+	adminToken, _ := getAdminToken(t, app)
+	question := map[string]any{
+		"jenjang": "SD/MI", "mode": "anbk_akm", "tipe": simulasiTipePG, "pertanyaan": "Pertanyaan stimulus", "bobot": 1,
+		"konfigurasi": map[string]any{"choices": []map[string]string{{"id": "a", "text": "A"}, {"id": "b", "text": "B"}}, "correctIds": []string{"a"}},
+		"stimulus":    []map[string]any{{"jenis": "text", "konten": "", "urutan": 1}},
+	}
+	created, err := makeRequest(app, http.MethodPost, "/api/simulasi/paket/builder", adminToken, map[string]any{
+		"paket": map[string]any{"nama": "Draf stimulus", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 30, "maksPercobaan": 1},
+		"items": []map[string]any{{"bobot": 1, "soal": question}}, "pesertaDidikIds": []string{},
+	}, "")
+	if err != nil || created.StatusCode != http.StatusOK {
+		if created != nil {
+			created.Body.Close()
+		}
+		t.Fatalf("create stimulus draft: status=%v err=%v", created, err)
+	}
+	var body struct {
+		Paket SimulasiPaket `json:"paket"`
+		Items []struct {
+			SoalID string `json:"soalId"`
+			Soal   struct {
+				Stimulus []SimulasiStimulus `json:"stimulus"`
+			} `json:"soal"`
+		}
+	}
+	if err := json.NewDecoder(created.Body).Decode(&body); err != nil {
+		created.Body.Close()
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	if len(body.Items) != 1 || body.Items[0].SoalID == "" || len(body.Items[0].Soal.Stimulus) != 1 {
+		t.Fatalf("empty stimulus card was not persisted: %+v", body.Items)
+	}
+	questionID := body.Items[0].SoalID
+
+	question["stimulus"] = []map[string]any{{"jenis": "table", "konten": "Nama\tNilai", "urutan": 1}, {"jenis": "media_link", "konten": "https://example.com/media", "urutan": 2}}
+	updated, err := makeRequest(app, http.MethodPut, "/api/simulasi/paket/"+body.Paket.ID+"/builder", adminToken, map[string]any{
+		"revision": body.Paket.Revision, "paket": map[string]any{"nama": "Draf stimulus", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 30, "maksPercobaan": 1},
+		"items": []map[string]any{{"soalId": questionID, "bobot": 1, "soal": question}}, "pesertaDidikIds": []string{},
+	}, "")
+	if err != nil || updated.StatusCode != http.StatusOK {
+		if updated != nil {
+			updated.Body.Close()
+		}
+		t.Fatalf("update stimulus draft: status=%v err=%v", updated, err)
+	}
+	var updatedBody struct {
+		Items []struct {
+			Soal struct {
+				Stimulus []SimulasiStimulus `json:"stimulus"`
+			} `json:"soal"`
+		}
+	}
+	if err := json.NewDecoder(updated.Body).Decode(&updatedBody); err != nil {
+		updated.Body.Close()
+		t.Fatal(err)
+	}
+	updated.Body.Close()
+	if len(updatedBody.Items) != 1 || len(updatedBody.Items[0].Soal.Stimulus) != 2 {
+		t.Fatalf("text/table/media stimulus was not saved: %+v", updatedBody)
+	}
+
+	archived, err := makeRequest(app, http.MethodDelete, "/api/simulasi/soal/"+questionID, adminToken, nil, "")
+	if err != nil || archived.StatusCode != http.StatusConflict {
+		if archived != nil {
+			archived.Body.Close()
+		}
+		t.Fatalf("question referenced by draft should be protected: status=%v err=%v", archived, err)
+	}
+	archived.Body.Close()
+
+	// Remove the item from the draft first, then archive the source question.
+	removed, err := makeRequest(app, http.MethodPut, "/api/simulasi/paket/"+body.Paket.ID+"/builder", adminToken, map[string]any{
+		"revision": body.Paket.Revision + 1, "paket": map[string]any{"nama": "Draf stimulus", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 30, "maksPercobaan": 1},
+		"items": []any{}, "pesertaDidikIds": []string{},
+	}, "")
+	if err != nil || removed.StatusCode != http.StatusOK {
+		if removed != nil {
+			removed.Body.Close()
+		}
+		t.Fatalf("remove question from draft: status=%v err=%v", removed, err)
+	}
+	removed.Body.Close()
+	archived, err = makeRequest(app, http.MethodDelete, "/api/simulasi/soal/"+questionID, adminToken, nil, "")
+	if err != nil || archived.StatusCode != http.StatusNoContent {
+		if archived != nil {
+			archived.Body.Close()
+		}
+		t.Fatalf("archive question after removal: status=%v err=%v", archived, err)
+	}
+	archived.Body.Close()
+}
+
 func TestSimulasiBuilderRevisionConflict(t *testing.T) {
 	_, app := setupE2EServer(t)
 	adminToken, _ := getAdminToken(t, app)

@@ -762,6 +762,16 @@ func (s *Server) simulasiArchiveSoal(c *fiber.Ctx) error {
 	if err := s.simulasiSoalScope(c, &row, true); err != nil {
 		return err
 	}
+	var draftReferences int64
+	if err := s.db.Table("simulasi_paket_soals").
+		Joins("JOIN simulasi_pakets ON simulasi_pakets.id = simulasi_paket_soals.paket_id").
+		Where("simulasi_paket_soals.soal_id = ? AND simulasi_pakets.status = ?", row.ID, "draf").
+		Count(&draftReferences).Error; err != nil {
+		return err
+	}
+	if draftReferences > 0 {
+		return fiber.NewError(409, "soal masih dipakai paket draf; hapus dari kanvas paket terlebih dahulu")
+	}
 	if err := s.db.Delete(&row).Error; err != nil {
 		return err
 	}
@@ -1012,11 +1022,21 @@ func replaceBuilderStimulus(tx *gorm.DB, soalID string, values []simulasiStimulu
 		if value.Jenis == "image" {
 			continue
 		}
-		if value.Konten == "" {
-			continue
-		}
 		if value.Urutan <= 0 {
 			value.Urutan = index + 1
+		}
+		// A builder card may be intentionally empty while the teacher is still
+		// typing. Keep that draft row so the card survives autosave and reload;
+		// complete validation is still enforced by publish and by the normal
+		// question CRUD endpoints.
+		if value.Konten == "" {
+			if value.Jenis != "text" && value.Jenis != "table" && value.Jenis != "media_link" {
+				return fiber.NewError(400, "jenis stimulus tidak valid")
+			}
+			if err := tx.Create(&SimulasiStimulus{SoalID: soalID, Jenis: value.Jenis, Konten: "", AltText: value.AltText, Urutan: value.Urutan}).Error; err != nil {
+				return err
+			}
+			continue
 		}
 		if err := validateStimulus(value); err != nil {
 			return err
