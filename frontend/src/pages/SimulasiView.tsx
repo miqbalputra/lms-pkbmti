@@ -395,7 +395,10 @@ function CanvasStimulusEditor({ items, onChange }: { items: Row[]; onChange: (it
 function TableGrid({ value, onChange }: { value: string; onChange: (value: string) => void }) { const rows = (value ? value.split('\n').map((row) => row.split('\t')) : [['', ''], ['', '']]); const columns = Math.max(2, ...rows.map((row) => row.length)); const grid = rows.map((row) => Array.from({ length: columns }, (_, index) => row[index] || '')); const setGrid = (next: string[][]) => onChange(next.map((row) => row.join('\t')).join('\n')); return <div className="space-y-2"><div className="overflow-auto"><table className="min-w-full border-collapse">{grid.map((row, rowIndex) => <tbody key={rowIndex}><tr>{row.map((cell, columnIndex) => <td key={columnIndex} className="border p-1"><Input className="h-8 min-w-28" value={cell} onChange={(event) => { const next = grid.map((copy) => [...copy]); next[rowIndex][columnIndex] = event.target.value; setGrid(next) }} /></td>)}</tr></tbody>)}</table></div><div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setGrid([...grid, Array(columns).fill('')])}>+ Baris</Button><Button type="button" size="sm" variant="outline" onClick={() => setGrid(grid.map((row) => [...row, '']))}>+ Kolom</Button></div></div> }
 function StudentQuestionPreview({ question }: { question: Row }) {
   const cfg = question.konfigurasi || {}
-  const [value, setValue] = useState<any>(question.tipe === 'pg_kompleks' ? [] : question.tipe === 'benar_salah' || question.tipe === 'menjodohkan' ? {} : '')
+  const initialValue = question.tipe === 'pg_kompleks' ? [] : question.tipe === 'benar_salah' || question.tipe === 'menjodohkan' ? {} : ''
+  const [value, setValue] = useState<any>(initialValue)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setValue(initialValue), [question.id, question.tipe])
   const tableRows = (content: string) => (content ? content.split('\\n').map((row) => row.split('\\t')) : [['', '']])
   const updateComplex = (id: string, checked: boolean) => { const selected = Array.isArray(value) ? value : []; setValue(checked ? [...selected, id] : selected.filter((item: string) => item !== id)) }
   return <Card className="border-primary/30 bg-primary/[0.02] p-5">
