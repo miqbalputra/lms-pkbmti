@@ -70,6 +70,12 @@ func TestSimulasiQuestionValidationAllTypes(t *testing.T) {
 	if err := validateSimulasiConfig(simulasiTipePG, simulasiConfig{Choices: []simulasiChoice{{ID: "a", Text: "A"}}, CorrectIDs: []string{"missing"}}); err == nil {
 		t.Fatal("invalid PG key must be rejected")
 	}
+	if protected, err := json.Marshal(sanitizedConfig(simulasiTipeUraian, simulasiConfig{Rubrik: []simulasiRubrik{{Kriteria: "Rahasia", Maks: 2}}})); err != nil || strings.Contains(string(protected), "rubrik") || strings.Contains(string(protected), "Rahasia") {
+		t.Fatalf("student uraian payload exposed rubric: %s (err=%v)", protected, err)
+	}
+	if protected := studentAttemptResponse(SimulasiUpaya{SkorOtomatis: 100, SeedUrutan: "secret-seed", Status: "selesai"}, SimulasiPaket{TampilkanNilai: false}); protected["skor"] != nil || protected["seedUrutan"] != nil {
+		t.Fatalf("student attempt exposed hidden fields: %#v", protected)
+	}
 }
 
 func TestSimulasiBuilderAutosavePublishesDraftSources(t *testing.T) {
@@ -165,6 +171,18 @@ func TestSimulasiBuilderRevisionConflict(t *testing.T) {
 		t.Fatalf("stale builder update status = %v, want 409", second)
 	}
 	second.Body.Close()
+	missingRevision, err := makeRequest(app, http.MethodPut, "/api/simulasi/paket/"+body.Paket.ID+"/builder", adminToken, map[string]any{
+		"paket":           map[string]any{"nama": "Tanpa revision", "mode": "anbk_akm", "jenjang": "SD/MI", "durasiMenit": 30, "maksPercobaan": 1},
+		"items":           []any{},
+		"pesertaDidikIds": []string{},
+	}, "")
+	if err != nil || missingRevision.StatusCode != http.StatusConflict {
+		if missingRevision != nil {
+			missingRevision.Body.Close()
+		}
+		t.Fatalf("missing builder revision status = %v, want 409", missingRevision)
+	}
+	missingRevision.Body.Close()
 }
 
 func TestSimulasiWorkspaceBahanLegacyCopyAndRevision(t *testing.T) {
@@ -310,7 +328,7 @@ func TestSimulasiStudentWorkflowProtectsKeysAndIsIdempotent(t *testing.T) {
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	if strings.Contains(string(workspacePayload), "correctIds") || strings.Contains(string(workspacePayload), "acceptedAnswers") || strings.Contains(string(workspacePayload), "SOURCE MUST NOT LEAK") {
+	if strings.Contains(string(workspacePayload), "correctIds") || strings.Contains(string(workspacePayload), "acceptedAnswers") || strings.Contains(string(workspacePayload), "rubrik") || strings.Contains(string(workspacePayload), "seedUrutan") || strings.Contains(string(workspacePayload), "SOURCE MUST NOT LEAK") {
 		t.Fatalf("student workspace leaked protected data: %s", workspacePayload)
 	}
 	var decoded struct {

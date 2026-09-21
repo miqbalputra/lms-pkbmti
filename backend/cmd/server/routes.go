@@ -674,7 +674,7 @@ func (s *Server) saveUpload(c *fiber.Ctx, field, dir string, maxBytes int64, ext
 	// An extension alone is not a file-type check. Reject obvious renamed
 	// executables/scripts while keeping the existing allowed document formats.
 	if file, openErr := fh.Open(); openErr == nil {
-		header := make([]byte, 8)
+		header := make([]byte, 12)
 		n, readErr := io.ReadFull(file, header)
 		_ = file.Close()
 		if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
@@ -709,6 +709,8 @@ func uploadHeaderMatches(ext string, header []byte) bool {
 		return bytes.HasPrefix(header, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
 	case ".jpg", ".jpeg":
 		return len(header) >= 3 && header[0] == 0xff && header[1] == 0xd8 && header[2] == 0xff
+	case ".webp":
+		return len(header) >= 12 && bytes.Equal(header[0:4], []byte("RIFF")) && bytes.Equal(header[8:12], []byte("WEBP"))
 	case ".zip", ".docx", ".xlsx", ".pptx":
 		return len(header) >= 4 && header[0] == 'P' && header[1] == 'K' && header[2] == 0x03 && header[3] == 0x04
 	case ".doc", ".xls":

@@ -169,3 +169,23 @@ func TestProductionAPIErrorMasksDatabaseDetailsEvenOnBadRequest(t *testing.T) {
 		t.Fatalf("safe validation message was unexpectedly masked: %s", body)
 	}
 }
+
+func TestUploadHeaderMatchesRejectsRenamedWebpAndAcceptsValidWebp(t *testing.T) {
+	valid := append([]byte("RIFF"), make([]byte, 4)...)
+	valid = append(valid, []byte("WEBP")...)
+	if !uploadHeaderMatches(".webp", valid) {
+		t.Fatal("valid WEBP header was rejected")
+	}
+	if uploadHeaderMatches(".webp", []byte("not-an-image")) {
+		t.Fatal("renamed non-image was accepted as WEBP")
+	}
+}
+
+func TestSimulationImagesRequireAlternativeText(t *testing.T) {
+	if err := validateSimulasiBahan(simulasiBahanInput{Judul: "Diagram", Jenis: "image", Konten: "uploads/diagram.webp"}); err == nil {
+		t.Fatal("image material without alt text was accepted")
+	}
+	if err := validateStimulus(simulasiStimulusIn{Jenis: "image", Konten: "uploads/diagram.webp"}); err == nil {
+		t.Fatal("image stimulus without alt text was accepted")
+	}
+}
