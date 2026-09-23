@@ -56,6 +56,7 @@ type publicExamItem struct {
 	AcakSoal         bool            `json:"acakSoal"`
 	Mapel            publicExamMapel `json:"mapel"`
 	SudahMengerjakan bool            `json:"sudahMengerjakan"`
+	Status           string          `json:"status"`
 	Skor             *float64        `json:"skor"`
 }
 
@@ -510,6 +511,7 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 		}
 		if up, ok := sessionByExam[uj.ID]; ok {
 			r.SudahMengerjakan = true
+			r.Status = up.Status
 			r.Skor = up.Skor
 		}
 		res = append(res, r)

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +26,15 @@ const (
 	simulasiTipeMenjodohkan = "menjodohkan"
 	simulasiTipeIsian       = "isian_singkat"
 	simulasiTipeUraian      = "uraian"
+	simulasiTipeDropdown    = "dropdown"
+	simulasiTipeSkala       = "skala_linear"
+	simulasiTipeRating      = "rating"
+	simulasiTipeKisiPG      = "kisi_pg"
+	simulasiTipeKisiPGK     = "kisi_checkbox"
+	simulasiTipeTanggal     = "tanggal"
+	simulasiTipeWaktu       = "waktu"
+	simulasiTipeUrutan      = "susun_urutan"
+	simulasiTipeUnggah      = "unggah_berkas"
 )
 
 type simulasiChoice struct {
@@ -40,15 +51,33 @@ type simulasiRubrik struct {
 	Kriteria string  `json:"kriteria"`
 	Maks     float64 `json:"maks"`
 }
+type simulasiGridRow struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
 type simulasiConfig struct {
-	Choices         []simulasiChoice    `json:"choices,omitempty"`
-	CorrectIDs      []string            `json:"correctIds,omitempty"`
-	Statements      []simulasiStatement `json:"statements,omitempty"`
-	Left            []simulasiChoice    `json:"left,omitempty"`
-	Right           []simulasiChoice    `json:"right,omitempty"`
-	Pairs           map[string]string   `json:"pairs,omitempty"`
-	AcceptedAnswers []string            `json:"acceptedAnswers,omitempty"`
-	Rubrik          []simulasiRubrik    `json:"rubrik,omitempty"`
+	Choices          []simulasiChoice    `json:"choices,omitempty"`
+	CorrectIDs       []string            `json:"correctIds,omitempty"`
+	Statements       []simulasiStatement `json:"statements,omitempty"`
+	Left             []simulasiChoice    `json:"left,omitempty"`
+	Right            []simulasiChoice    `json:"right,omitempty"`
+	Pairs            map[string]string   `json:"pairs,omitempty"`
+	AcceptedAnswers  []string            `json:"acceptedAnswers,omitempty"`
+	Rubrik           []simulasiRubrik    `json:"rubrik,omitempty"`
+	Rows             []simulasiGridRow   `json:"rows,omitempty"`
+	Columns          []simulasiChoice    `json:"columns,omitempty"`
+	GridCorrect      map[string]string   `json:"gridCorrect,omitempty"`
+	GridMultiCorrect map[string][]string `json:"gridMultiCorrect,omitempty"`
+	CorrectOrder     []string            `json:"correctOrder,omitempty"`
+	ScaleMin         int                 `json:"scaleMin,omitempty"`
+	ScaleMax         int                 `json:"scaleMax,omitempty"`
+	ScaleMinLabel    string              `json:"scaleMinLabel,omitempty"`
+	ScaleMaxLabel    string              `json:"scaleMaxLabel,omitempty"`
+	RatingMax        int                 `json:"ratingMax,omitempty"`
+	CorrectNumber    *int                `json:"correctNumber,omitempty"`
+	AllowedFileTypes []string            `json:"allowedFileTypes,omitempty"`
+	MaxFiles         int                 `json:"maxFiles,omitempty"`
+	MaxFileSizeMB    int                 `json:"maxFileSizeMB,omitempty"`
 }
 type simulasiQuestionInput struct {
 	MapelID          *string              `json:"mapelId"`
@@ -63,6 +92,7 @@ type simulasiQuestionInput struct {
 	Tags             string               `json:"tags"`
 	Tipe             string               `json:"tipe"`
 	Pertanyaan       string               `json:"pertanyaan"`
+	WajibDijawab     *bool                `json:"wajibDijawab"`
 	Konfigurasi      simulasiConfig       `json:"konfigurasi"`
 	Pembahasan       string               `json:"pembahasan"`
 	Bobot            float64              `json:"bobot"`
@@ -128,13 +158,14 @@ type simulasiShareTokenInput struct {
 	ExpiresAt *time.Time `json:"expiresAt"`
 }
 type simulasiSnapshot struct {
-	SoalID      string             `json:"soalId"`
-	Tipe        string             `json:"tipe"`
-	Pertanyaan  string             `json:"pertanyaan"`
-	Stimulus    []SimulasiStimulus `json:"stimulus,omitempty"`
-	Konfigurasi simulasiConfig     `json:"konfigurasi"`
-	Pembahasan  string             `json:"pembahasan"`
-	Metadata    map[string]string  `json:"metadata"`
+	SoalID       string             `json:"soalId"`
+	Tipe         string             `json:"tipe"`
+	Pertanyaan   string             `json:"pertanyaan"`
+	WajibDijawab bool               `json:"wajibDijawab"`
+	Stimulus     []SimulasiStimulus `json:"stimulus,omitempty"`
+	Konfigurasi  simulasiConfig     `json:"konfigurasi"`
+	Pembahasan   string             `json:"pembahasan"`
+	Metadata     map[string]string  `json:"metadata"`
 }
 
 func registerSimulasiRoutes(api fiber.Router, s *Server) {
@@ -184,12 +215,16 @@ func registerSimulasiRoutes(api fiber.Router, s *Server) {
 	api.Get("/simulasi/paket/:id/analisis", s.simulasiAnalisis)
 	api.Get("/simulasi/paket/:id/export", s.simulasiExportHasil)
 	api.Get("/simulasi/upaya/:id/detail", s.simulasiDetailUpaya)
+	api.Get("/simulasi/upaya/:id/file/:fileId", s.simulasiStaffDownloadAnswerFile)
 	api.Post("/simulasi/upaya/:id/jawaban/:jawabanId/nilai", s.simulasiNilaiUraian)
 
 	api.Get("/simulasi/saya", s.simulasiSaya)
 	api.Get("/simulasi/saya/paket/:id/instruksi", s.simulasiInstruksi)
 	api.Post("/simulasi/saya/paket/:id/mulai", s.simulasiMulai)
 	api.Get("/simulasi/saya/upaya/:id", s.simulasiWorkspace)
+	api.Post("/simulasi/saya/upaya/:id/file/:upayaSoalId", s.simulasiUploadJawabanFile)
+	api.Get("/simulasi/saya/upaya/:id/file/:fileId", s.simulasiDownloadAnswerFile)
+	api.Delete("/simulasi/saya/upaya/:id/file/:fileId", s.simulasiDeleteAnswerFile)
 	api.Put("/simulasi/saya/upaya/:id/jawaban/:upayaSoalId", s.simulasiSimpanJawaban)
 	api.Put("/simulasi/saya/upaya/:id/soal/:upayaSoalId/tandai", s.simulasiTandai)
 	api.Post("/simulasi/saya/upaya/:id/kirim", s.simulasiKirim)
@@ -378,6 +413,257 @@ func (s *Server) simulasiUploadMedia(c *fiber.Ctx) error {
 	return c.Status(201).JSON(fiber.Map{"path": path, "altText": altText})
 }
 
+type simulasiFileReference struct {
+	ID string `json:"id"`
+}
+
+func decodeSimulasiFileIDs(raw []byte) ([]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return []string{}, nil
+	}
+	var ids []string
+	if err := json.Unmarshal(raw, &ids); err == nil {
+		return ids, nil
+	}
+	var refs []simulasiFileReference
+	if err := json.Unmarshal(raw, &refs); err != nil {
+		return nil, err
+	}
+	ids = make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ids = append(ids, ref.ID)
+	}
+	return ids, nil
+}
+
+func safeSimulasiSubmittedFilename(name string) string {
+	name = filepath.Base(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 || r == '/' || r == '\\' {
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(name)
+	if len([]rune(name)) > 120 {
+		name = string([]rune(name)[:120])
+	}
+	if name == "" || name == "." {
+		return "berkas-jawaban"
+	}
+	return name
+}
+
+func simulasiUploadMIME(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".pdf":
+		return "application/pdf"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func (s *Server) simulasiUploadJawabanFile(c *fiber.Ctx) error {
+	attempt, _, _, err := s.ownedUpaya(c)
+	if err != nil {
+		return err
+	}
+	if attempt.Status != "berlangsung" {
+		return fiber.NewError(409, "upaya sudah tidak dapat diubah")
+	}
+	if attempt.BatasWaktu != nil && time.Now().After(*attempt.BatasWaktu) {
+		_, _ = s.finishSimulasiAttempt(attempt.ID, "kedaluwarsa")
+		return fiber.NewError(409, "waktu simulasi sudah habis")
+	}
+	var link SimulasiUpayaSoal
+	if err := s.db.Where("id = ? AND upaya_id = ?", c.Params("upayaSoalId"), attempt.ID).First(&link).Error; err != nil {
+		return fiber.NewError(404, "soal upaya tidak ditemukan")
+	}
+	var item SimulasiPaketSoal
+	if err := s.db.First(&item, "id = ?", link.PaketSoalID).Error; err != nil {
+		return fiber.NewError(404, "soal paket tidak ditemukan")
+	}
+	var snap simulasiSnapshot
+	if err := json.Unmarshal([]byte(item.SnapshotJSON), &snap); err != nil {
+		return fiber.NewError(500, "snapshot soal tidak valid")
+	}
+	if snap.Tipe != simulasiTipeUnggah {
+		return fiber.NewError(400, "soal ini tidak menerima unggahan")
+	}
+	fh, err := c.FormFile("file")
+	if err != nil || fh == nil {
+		return fiber.NewError(400, "pilih berkas jawaban terlebih dahulu")
+	}
+	allowed := snap.Konfigurasi.AllowedFileTypes
+	if len(allowed) == 0 {
+		allowed = []string{"pdf", "docx", "xlsx", "png", "jpg", "jpeg"}
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(fh.Filename)), ".")
+	allowed = normalizedFileExtensions(allowed)
+	if !containsString(allowed, ext) {
+		return fiber.NewError(400, "jenis berkas ini tidak diizinkan oleh guru")
+	}
+	maxFiles := snap.Konfigurasi.MaxFiles
+	if maxFiles < 1 {
+		maxFiles = 3
+	}
+	maxMB := snap.Konfigurasi.MaxFileSizeMB
+	if maxMB < 1 {
+		maxMB = 10
+	}
+	path, err := s.saveUpload(c, "file", "simulasi-jawaban", int64(maxMB)*1024*1024, allowed)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fiber.NewError(400, "file jawaban wajib diunggah")
+	}
+	uid := c.Locals("userID").(string)
+	file := SimulasiJawabanFile{UpayaSoalID: link.ID, DibuatOlehUserID: uid, FilePath: path, NamaFile: safeSimulasiSubmittedFilename(fh.Filename), ContentType: simulasiUploadMIME(filepath.Ext(fh.Filename)), Ukuran: fh.Size}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&SimulasiJawabanFile{}).Where("upaya_soal_id = ?", link.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= int64(maxFiles) {
+			return fiber.NewError(400, fmt.Sprintf("maksimal %d berkas untuk soal ini", maxFiles))
+		}
+		if err := tx.Create(&file).Error; err != nil {
+			return err
+		}
+		var answer SimulasiJawaban
+		findErr := tx.Where("upaya_soal_id = ?", link.ID).First(&answer).Error
+		ids := []string{}
+		if findErr == nil {
+			ids, err = decodeSimulasiFileIDs([]byte(answer.JawabanJSON))
+			if err != nil {
+				return fiber.NewError(500, "referensi berkas sebelumnya tidak valid")
+			}
+		} else if !errorsIsNotFound(findErr) {
+			return findErr
+		}
+		ids = append(ids, file.ID)
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return err
+		}
+		if findErr == nil {
+			return tx.Model(&answer).Update("jawaban_json", string(encoded)).Error
+		}
+		return tx.Create(&SimulasiJawaban{UpayaSoalID: link.ID, JawabanJSON: string(encoded)}).Error
+	})
+	if err != nil {
+		if resolved, ok := resolveUploadPath(path); ok {
+			_ = os.Remove(resolved)
+		}
+		return err
+	}
+	s.audit(&uid, "upload_answer", "simulasi_jawaban_file", file.ID)
+	return c.Status(201).JSON(fiber.Map{"id": file.ID, "namaFile": file.NamaFile, "contentType": file.ContentType, "ukuran": file.Ukuran})
+}
+
+func normalizedFileExtensions(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		ext := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), ".")
+		if ext != "" && !containsString(result, ext) {
+			result = append(result, ext)
+		}
+	}
+	return result
+}
+
+func (s *Server) simulasiDownloadAnswerFile(c *fiber.Ctx) error {
+	attempt, _, _, err := s.ownedUpaya(c)
+	if err != nil {
+		return err
+	}
+	var file SimulasiJawabanFile
+	if err := s.db.Joins("JOIN simulasi_upaya_soals ON simulasi_upaya_soals.id = simulasi_jawaban_files.upaya_soal_id").Where("simulasi_jawaban_files.id = ? AND simulasi_upaya_soals.upaya_id = ?", c.Params("fileId"), attempt.ID).First(&file).Error; err != nil {
+		return fiber.NewError(404, "berkas tidak ditemukan")
+	}
+	return sendSimulasiAnswerFile(s, c, file)
+}
+
+func (s *Server) simulasiDeleteAnswerFile(c *fiber.Ctx) error {
+	attempt, _, _, err := s.ownedUpaya(c)
+	if err != nil {
+		return err
+	}
+	if attempt.Status != "berlangsung" {
+		return fiber.NewError(409, "berkas hanya dapat diubah saat upaya berlangsung")
+	}
+	if attempt.BatasWaktu != nil && time.Now().After(*attempt.BatasWaktu) {
+		_, _ = s.finishSimulasiAttempt(attempt.ID, "kedaluwarsa")
+		return fiber.NewError(409, "waktu simulasi sudah habis")
+	}
+	var file SimulasiJawabanFile
+	if err := s.db.Joins("JOIN simulasi_upaya_soals ON simulasi_upaya_soals.id = simulasi_jawaban_files.upaya_soal_id").Where("simulasi_jawaban_files.id = ? AND simulasi_upaya_soals.upaya_id = ?", c.Params("fileId"), attempt.ID).First(&file).Error; err != nil {
+		return fiber.NewError(404, "berkas tidak ditemukan")
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var answer SimulasiJawaban
+		if err := tx.Where("upaya_soal_id = ?", file.UpayaSoalID).First(&answer).Error; err != nil {
+			return err
+		}
+		ids, err := decodeSimulasiFileIDs([]byte(answer.JawabanJSON))
+		if err != nil {
+			return err
+		}
+		kept := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if id != file.ID {
+				kept = append(kept, id)
+			}
+		}
+		encoded, err := json.Marshal(kept)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&answer).Update("jawaban_json", string(encoded)).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&file).Error
+	}); err != nil {
+		return err
+	}
+	if path, ok := resolveUploadPath(file.FilePath); ok {
+		_ = os.Remove(path)
+	}
+	uid := c.Locals("userID").(string)
+	s.audit(&uid, "delete_answer_upload", "simulasi_jawaban_file", file.ID)
+	return c.SendStatus(204)
+}
+
+func (s *Server) simulasiStaffDownloadAnswerFile(c *fiber.Ctx) error {
+	var attempt SimulasiUpaya
+	if err := s.db.Preload("Paket").First(&attempt, "id = ?", c.Params("id")).Error; err != nil {
+		return fiber.NewError(404, "upaya tidak ditemukan")
+	}
+	if err := s.simulasiPaketScope(c, &attempt.Paket, false); err != nil {
+		return err
+	}
+	var file SimulasiJawabanFile
+	if err := s.db.Joins("JOIN simulasi_upaya_soals ON simulasi_upaya_soals.id = simulasi_jawaban_files.upaya_soal_id").Where("simulasi_jawaban_files.id = ? AND simulasi_upaya_soals.upaya_id = ?", c.Params("fileId"), attempt.ID).First(&file).Error; err != nil {
+		return fiber.NewError(404, "berkas tidak ditemukan")
+	}
+	return sendSimulasiAnswerFile(s, c, file)
+}
+
+func sendSimulasiAnswerFile(s *Server, c *fiber.Ctx, file SimulasiJawabanFile) error {
+	c.Set(fiber.HeaderContentType, file.ContentType)
+	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%q", file.NamaFile))
+	return s.sendUpload(c, file.FilePath)
+}
+
 func (s *Server) simulasiCopyLegacyQuestion(c *fiber.Ctx) error {
 	if err := simulasiStaff(c, true); err != nil {
 		return err
@@ -460,7 +746,14 @@ func (s *Server) simulasiSiswa(c *fiber.Ctx) (*User, *PesertaDidik, error) {
 
 func validSimulasiMode(v string) bool { return v == "anbk_akm" || v == "tka_sd" }
 func validSimulasiTipe(v string) bool {
-	return v == simulasiTipePG || v == simulasiTipePGK || v == simulasiTipeBenarSalah || v == simulasiTipeMenjodohkan || v == simulasiTipeIsian || v == simulasiTipeUraian
+	switch v {
+	case simulasiTipePG, simulasiTipePGK, simulasiTipeBenarSalah, simulasiTipeMenjodohkan, simulasiTipeIsian, simulasiTipeUraian,
+		simulasiTipeDropdown, simulasiTipeSkala, simulasiTipeRating, simulasiTipeKisiPG, simulasiTipeKisiPGK,
+		simulasiTipeTanggal, simulasiTipeWaktu, simulasiTipeUrutan, simulasiTipeUnggah:
+		return true
+	default:
+		return false
+	}
 }
 func validQuestionStatus(v string) bool { return v == "draf" || v == "terbit" }
 
@@ -487,6 +780,16 @@ func validateSimulasiConfig(tipe string, cfg simulasiConfig) error {
 	case simulasiTipePG:
 		if len(cfg.Choices) < 2 || len(cfg.CorrectIDs) != 1 {
 			return fmt.Errorf("PG tunggal memerlukan minimal dua pilihan dan satu kunci")
+		}
+		if err := ensureChoiceIDs(cfg.Choices); err != nil {
+			return err
+		}
+		if !containsString(choiceIDs(cfg.Choices), cfg.CorrectIDs[0]) {
+			return fmt.Errorf("kunci tidak ditemukan pada pilihan")
+		}
+	case simulasiTipeDropdown:
+		if len(cfg.Choices) < 2 || len(cfg.CorrectIDs) != 1 {
+			return fmt.Errorf("dropdown memerlukan minimal dua pilihan dan satu kunci")
 		}
 		if err := ensureChoiceIDs(cfg.Choices); err != nil {
 			return err
@@ -546,8 +849,117 @@ func validateSimulasiConfig(tipe string, cfg simulasiConfig) error {
 				return fmt.Errorf("rubrik uraian tidak valid")
 			}
 		}
+	case simulasiTipeTanggal, simulasiTipeWaktu:
+		if len(cfg.AcceptedAnswers) == 0 {
+			return fmt.Errorf("tipe %s memerlukan minimal satu jawaban diterima", tipe)
+		}
+		for _, answer := range cfg.AcceptedAnswers {
+			if tipe == simulasiTipeTanggal {
+				if _, err := time.Parse("2006-01-02", answer); err != nil {
+					return fmt.Errorf("jawaban tanggal harus menggunakan format YYYY-MM-DD")
+				}
+			}
+			if tipe == simulasiTipeWaktu {
+				if _, err := time.Parse("15:04", answer); err != nil {
+					return fmt.Errorf("jawaban waktu harus menggunakan format HH:MM")
+				}
+			}
+		}
+	case simulasiTipeSkala, simulasiTipeRating:
+		min, max := cfg.ScaleMin, cfg.ScaleMax
+		if tipe == simulasiTipeRating {
+			min, max = 1, cfg.RatingMax
+		}
+		if min < 0 || max <= min || max-min > 10 {
+			return fmt.Errorf("rentang skala harus berisi maksimal 11 nilai")
+		}
+		if cfg.CorrectNumber == nil || *cfg.CorrectNumber < min || *cfg.CorrectNumber > max {
+			return fmt.Errorf("pilih satu nilai sebagai kunci jawaban")
+		}
+	case simulasiTipeKisiPG, simulasiTipeKisiPGK:
+		if len(cfg.Rows) == 0 || len(cfg.Columns) < 2 {
+			return fmt.Errorf("kisi memerlukan baris dan minimal dua kolom")
+		}
+		if err := ensureGridRows(cfg.Rows); err != nil {
+			return err
+		}
+		if err := ensureChoiceIDs(cfg.Columns); err != nil {
+			return err
+		}
+		columnIDs := choiceIDs(cfg.Columns)
+		if tipe == simulasiTipeKisiPG {
+			if len(cfg.GridCorrect) != len(cfg.Rows) {
+				return fmt.Errorf("setiap baris kisi harus memiliki satu kunci")
+			}
+			for _, row := range cfg.Rows {
+				if !containsString(columnIDs, cfg.GridCorrect[row.ID]) {
+					return fmt.Errorf("kunci kisi tidak valid")
+				}
+			}
+		} else {
+			if len(cfg.GridMultiCorrect) != len(cfg.Rows) {
+				return fmt.Errorf("setiap baris kisi harus memiliki kunci")
+			}
+			for _, row := range cfg.Rows {
+				values := cfg.GridMultiCorrect[row.ID]
+				if len(values) == 0 {
+					return fmt.Errorf("setiap baris kisi harus memiliki kunci")
+				}
+				for _, id := range values {
+					if !containsString(columnIDs, id) {
+						return fmt.Errorf("kunci kisi tidak valid")
+					}
+				}
+			}
+		}
+	case simulasiTipeUrutan:
+		if len(cfg.Choices) < 2 || len(cfg.CorrectOrder) != len(cfg.Choices) {
+			return fmt.Errorf("susun urutan memerlukan minimal dua item dengan urutan kunci lengkap")
+		}
+		if err := ensureChoiceIDs(cfg.Choices); err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for _, id := range cfg.CorrectOrder {
+			if !containsString(choiceIDs(cfg.Choices), id) || seen[id] {
+				return fmt.Errorf("urutan kunci tidak valid")
+			}
+			seen[id] = true
+		}
+	case simulasiTipeUnggah:
+		if cfg.MaxFiles == 0 {
+			cfg.MaxFiles = 3
+		}
+		if cfg.MaxFileSizeMB == 0 {
+			cfg.MaxFileSizeMB = 10
+		}
+		if cfg.MaxFiles < 1 || cfg.MaxFiles > 10 || cfg.MaxFileSizeMB < 1 || cfg.MaxFileSizeMB > 25 {
+			return fmt.Errorf("batas unggahan harus antara 1–10 berkas dan 1–25 MB")
+		}
+		if len(cfg.AllowedFileTypes) == 0 {
+			return fmt.Errorf("pilih minimal satu jenis file yang diizinkan")
+		}
+		validExtensions := map[string]bool{"pdf": true, "docx": true, "xlsx": true, "png": true, "jpg": true, "jpeg": true}
+		seen := map[string]bool{}
+		for _, ext := range cfg.AllowedFileTypes {
+			ext = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+			if !validExtensions[ext] || seen[ext] {
+				return fmt.Errorf("jenis file yang diizinkan tidak valid")
+			}
+			seen[ext] = true
+		}
 	default:
 		return fmt.Errorf("tipe soal tidak valid")
+	}
+	return nil
+}
+func ensureGridRows(rows []simulasiGridRow) error {
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if strings.TrimSpace(row.ID) == "" || strings.TrimSpace(row.Text) == "" || seen[row.ID] {
+			return fmt.Errorf("setiap baris kisi harus memiliki id dan teks unik")
+		}
+		seen[row.ID] = true
 	}
 	return nil
 }
@@ -591,6 +1003,10 @@ func applyQuestionInput(row *SimulasiSoal, in simulasiQuestionInput) error {
 	if in.Bobot <= 0 {
 		in.Bobot = 1
 	}
+	wajibDijawab := true
+	if in.WajibDijawab != nil {
+		wajibDijawab = *in.WajibDijawab
+	}
 	if err := validateSimulasiConfig(in.Tipe, in.Konfigurasi); err != nil {
 		return fiber.NewError(400, err.Error())
 	}
@@ -599,6 +1015,7 @@ func applyQuestionInput(row *SimulasiSoal, in simulasiQuestionInput) error {
 	row.Domain, row.Topik, row.Kompetensi = strings.TrimSpace(in.Domain), strings.TrimSpace(in.Topik), strings.TrimSpace(in.Kompetensi)
 	row.LevelKognitif, row.TingkatKesulitan, row.Tags = strings.TrimSpace(in.LevelKognitif), strings.TrimSpace(in.TingkatKesulitan), strings.TrimSpace(in.Tags)
 	row.Tipe, row.Pertanyaan, row.Konfigurasi, row.Pembahasan, row.Bobot, row.Status = in.Tipe, strings.TrimSpace(in.Pertanyaan), string(cfg), strings.TrimSpace(in.Pembahasan), in.Bobot, in.Status
+	row.WajibDijawab = wajibDijawab
 	if row.Revision <= 0 {
 		row.Revision = 1
 	}
@@ -607,7 +1024,7 @@ func applyQuestionInput(row *SimulasiSoal, in simulasiQuestionInput) error {
 func staffQuestionResponse(row SimulasiSoal) fiber.Map {
 	var cfg simulasiConfig
 	_ = json.Unmarshal([]byte(row.Konfigurasi), &cfg)
-	return fiber.Map{"id": row.ID, "mapelId": row.MapelID, "mapel": row.Mapel, "jenjang": row.Jenjang, "kelasFase": row.KelasFase, "mode": row.Mode, "domain": row.Domain, "topik": row.Topik, "kompetensi": row.Kompetensi, "levelKognitif": row.LevelKognitif, "tingkatKesulitan": row.TingkatKesulitan, "tags": row.Tags, "tipe": row.Tipe, "pertanyaan": row.Pertanyaan, "konfigurasi": cfg, "pembahasan": row.Pembahasan, "bobot": row.Bobot, "status": row.Status, "dibuatOlehUserId": row.DibuatOlehUserID, "legacySourceId": row.LegacySourceID, "revision": row.Revision, "stimulus": row.Stimulus, "createdAt": row.CreatedAt, "updatedAt": row.UpdatedAt}
+	return fiber.Map{"id": row.ID, "mapelId": row.MapelID, "mapel": row.Mapel, "jenjang": row.Jenjang, "kelasFase": row.KelasFase, "mode": row.Mode, "domain": row.Domain, "topik": row.Topik, "kompetensi": row.Kompetensi, "levelKognitif": row.LevelKognitif, "tingkatKesulitan": row.TingkatKesulitan, "tags": row.Tags, "tipe": row.Tipe, "pertanyaan": row.Pertanyaan, "wajibDijawab": row.WajibDijawab, "konfigurasi": cfg, "pembahasan": row.Pembahasan, "bobot": row.Bobot, "status": row.Status, "dibuatOlehUserId": row.DibuatOlehUserID, "legacySourceId": row.LegacySourceID, "revision": row.Revision, "stimulus": row.Stimulus, "createdAt": row.CreatedAt, "updatedAt": row.UpdatedAt}
 }
 func (s *Server) simulasiListSoal(c *fiber.Ctx) error {
 	if err := simulasiStaff(c, false); err != nil {
@@ -969,6 +1386,11 @@ func applyBuilderQuestionInput(row *SimulasiSoal, in simulasiQuestionInput, pake
 	row.Domain, row.Topik, row.Kompetensi, row.LevelKognitif = strings.TrimSpace(in.Domain), strings.TrimSpace(in.Topik), strings.TrimSpace(in.Kompetensi), strings.TrimSpace(in.LevelKognitif)
 	row.TingkatKesulitan, row.Tags, row.Tipe, row.Pertanyaan = strings.TrimSpace(in.TingkatKesulitan), strings.TrimSpace(in.Tags), strings.TrimSpace(in.Tipe), strings.TrimSpace(in.Pertanyaan)
 	row.Konfigurasi, row.Pembahasan, row.Bobot, row.Status = string(config), strings.TrimSpace(in.Pembahasan), in.Bobot, "draf"
+	wajibDijawab := true
+	if in.WajibDijawab != nil {
+		wajibDijawab = *in.WajibDijawab
+	}
+	row.WajibDijawab = wajibDijawab
 	return nil
 }
 
@@ -977,7 +1399,8 @@ func validateBuilderQuestionForPublish(row SimulasiSoal) error {
 	if err := json.Unmarshal([]byte(row.Konfigurasi), &cfg); err != nil {
 		return fiber.NewError(400, "konfigurasi soal tidak valid")
 	}
-	return applyQuestionInput(&row, simulasiQuestionInput{MapelID: row.MapelID, Jenjang: row.Jenjang, KelasFase: row.KelasFase, Mode: row.Mode, Domain: row.Domain, Topik: row.Topik, Kompetensi: row.Kompetensi, LevelKognitif: row.LevelKognitif, TingkatKesulitan: row.TingkatKesulitan, Tags: row.Tags, Tipe: row.Tipe, Pertanyaan: row.Pertanyaan, Konfigurasi: cfg, Pembahasan: row.Pembahasan, Bobot: row.Bobot, Status: "terbit"})
+	wajib := row.WajibDijawab
+	return applyQuestionInput(&row, simulasiQuestionInput{MapelID: row.MapelID, Jenjang: row.Jenjang, KelasFase: row.KelasFase, Mode: row.Mode, Domain: row.Domain, Topik: row.Topik, Kompetensi: row.Kompetensi, LevelKognitif: row.LevelKognitif, TingkatKesulitan: row.TingkatKesulitan, Tags: row.Tags, Tipe: row.Tipe, Pertanyaan: row.Pertanyaan, WajibDijawab: &wajib, Konfigurasi: cfg, Pembahasan: row.Pembahasan, Bobot: row.Bobot, Status: "terbit"})
 }
 
 func (s *Server) builderStudents(c *fiber.Ctx, tx *gorm.DB, requested []string) ([]PesertaDidik, error) {
@@ -1546,7 +1969,7 @@ func snapshotFromQuestion(q SimulasiSoal) (string, error) {
 	if err := json.Unmarshal([]byte(q.Konfigurasi), &cfg); err != nil {
 		return "", err
 	}
-	data, err := json.Marshal(simulasiSnapshot{SoalID: q.ID, Tipe: q.Tipe, Pertanyaan: q.Pertanyaan, Stimulus: q.Stimulus, Konfigurasi: cfg, Pembahasan: q.Pembahasan, Metadata: map[string]string{"domain": q.Domain, "topik": q.Topik, "kompetensi": q.Kompetensi}})
+	data, err := json.Marshal(simulasiSnapshot{SoalID: q.ID, Tipe: q.Tipe, Pertanyaan: q.Pertanyaan, WajibDijawab: q.WajibDijawab, Stimulus: q.Stimulus, Konfigurasi: cfg, Pembahasan: q.Pembahasan, Metadata: map[string]string{"domain": q.Domain, "topik": q.Topik, "kompetensi": q.Kompetensi}})
 	return string(data), err
 }
 func (s *Server) refreshPaketSnapshots(tx *gorm.DB, paketID string) error {
@@ -2013,7 +2436,7 @@ func (s *Server) simulasiMulai(c *fiber.Ctx) error {
 }
 func sanitizedConfig(tipe string, config simulasiConfig) interface{} {
 	switch tipe {
-	case simulasiTipePG, simulasiTipePGK:
+	case simulasiTipePG, simulasiTipePGK, simulasiTipeDropdown, simulasiTipeUrutan:
 		return fiber.Map{"choices": config.Choices}
 	case simulasiTipeBenarSalah:
 		statements := make([]fiber.Map, 0, len(config.Statements))
@@ -2023,6 +2446,25 @@ func sanitizedConfig(tipe string, config simulasiConfig) interface{} {
 		return fiber.Map{"statements": statements}
 	case simulasiTipeMenjodohkan:
 		return fiber.Map{"left": config.Left, "right": config.Right}
+	case simulasiTipeSkala:
+		return fiber.Map{"scaleMin": config.ScaleMin, "scaleMax": config.ScaleMax, "scaleMinLabel": config.ScaleMinLabel, "scaleMaxLabel": config.ScaleMaxLabel}
+	case simulasiTipeRating:
+		return fiber.Map{"ratingMax": config.RatingMax}
+	case simulasiTipeKisiPG, simulasiTipeKisiPGK:
+		return fiber.Map{"rows": config.Rows, "columns": config.Columns}
+	case simulasiTipeUnggah:
+		maxFiles, maxSize := config.MaxFiles, config.MaxFileSizeMB
+		if maxFiles < 1 {
+			maxFiles = 3
+		}
+		if maxSize < 1 {
+			maxSize = 10
+		}
+		allowed := config.AllowedFileTypes
+		if len(allowed) == 0 {
+			allowed = []string{"pdf", "docx", "xlsx", "png", "jpg", "jpeg"}
+		}
+		return fiber.Map{"allowedFileTypes": allowed, "maxFiles": maxFiles, "maxFileSizeMB": maxSize}
 	case simulasiTipeUraian:
 		// Rubrics are staff-only grading guidance. Returning them to students
 		// would reveal the assessment key and undermine the integrity of the
@@ -2130,8 +2572,32 @@ func (s *Server) simulasiWorkspace(c *fiber.Ctx) error {
 		jawaban := json.RawMessage("null")
 		if strings.TrimSpace(answer.JawabanJSON) != "" {
 			jawaban = json.RawMessage(answer.JawabanJSON)
+			if snap.Tipe == simulasiTipeUnggah {
+				ids, decodeErr := decodeSimulasiFileIDs([]byte(answer.JawabanJSON))
+				if decodeErr != nil {
+					return fiber.NewError(500, "referensi berkas jawaban tidak valid")
+				}
+				var refs []fiber.Map
+				if len(ids) > 0 {
+					var files []SimulasiJawabanFile
+					if err := s.db.Where("id IN ? AND upaya_soal_id = ?", ids, link.ID).Find(&files).Error; err != nil {
+						return err
+					}
+					byFileID := map[string]SimulasiJawabanFile{}
+					for _, file := range files {
+						byFileID[file.ID] = file
+					}
+					for _, id := range ids {
+						if file, ok := byFileID[id]; ok {
+							refs = append(refs, fiber.Map{"id": file.ID, "namaFile": file.NamaFile, "contentType": file.ContentType, "ukuran": file.Ukuran})
+						}
+					}
+				}
+				encoded, _ := json.Marshal(refs)
+				jawaban = json.RawMessage(encoded)
+			}
 		}
-		questions = append(questions, fiber.Map{"upayaSoalId": link.ID, "urutan": link.UrutanTampil, "ditandai": link.Ditandai, "bobot": item.Bobot, "soal": fiber.Map{"tipe": snap.Tipe, "pertanyaan": snap.Pertanyaan, "stimulus": snap.Stimulus, "konfigurasi": sanitizedConfig(snap.Tipe, snap.Konfigurasi)}, "jawaban": jawaban})
+		questions = append(questions, fiber.Map{"upayaSoalId": link.ID, "urutan": link.UrutanTampil, "ditandai": link.Ditandai, "bobot": item.Bobot, "soal": fiber.Map{"tipe": snap.Tipe, "pertanyaan": snap.Pertanyaan, "wajibDijawab": snap.WajibDijawab, "stimulus": snap.Stimulus, "konfigurasi": sanitizedConfig(snap.Tipe, snap.Konfigurasi)}, "jawaban": jawaban})
 	}
 	remaining := 0
 	if attempt.BatasWaktu != nil {
@@ -2203,10 +2669,102 @@ func (s *Server) validateStudentAnswer(tx *gorm.DB, link SimulasiUpayaSoal, raw 
 				return fiber.NewError(400, "pasangan tidak valid")
 			}
 		}
-	case simulasiTipeIsian, simulasiTipeUraian:
+	case simulasiTipeDropdown:
+		var value string
+		if json.Unmarshal(raw, &value) != nil || !containsString(choiceIDs(snap.Konfigurasi.Choices), value) {
+			return fiber.NewError(400, "jawaban dropdown tidak valid")
+		}
+	case simulasiTipeSkala, simulasiTipeRating:
+		var value int
+		if json.Unmarshal(raw, &value) != nil {
+			return fiber.NewError(400, "jawaban skala tidak valid")
+		}
+		min, max := snap.Konfigurasi.ScaleMin, snap.Konfigurasi.ScaleMax
+		if snap.Tipe == simulasiTipeRating {
+			min, max = 1, snap.Konfigurasi.RatingMax
+		}
+		if value < min || value > max {
+			return fiber.NewError(400, "nilai jawaban di luar rentang")
+		}
+	case simulasiTipeKisiPG:
+		var values map[string]string
+		if json.Unmarshal(raw, &values) != nil {
+			return fiber.NewError(400, "jawaban kisi tidak valid")
+		}
+		rows, columns := gridRowIDs(snap.Konfigurasi.Rows), choiceIDs(snap.Konfigurasi.Columns)
+		for row, column := range values {
+			if !containsString(rows, row) || !containsString(columns, column) {
+				return fiber.NewError(400, "baris atau kolom kisi tidak valid")
+			}
+		}
+	case simulasiTipeKisiPGK:
+		var values map[string][]string
+		if json.Unmarshal(raw, &values) != nil {
+			return fiber.NewError(400, "jawaban kisi tidak valid")
+		}
+		rows, columns := gridRowIDs(snap.Konfigurasi.Rows), choiceIDs(snap.Konfigurasi.Columns)
+		for row, selected := range values {
+			if !containsString(rows, row) {
+				return fiber.NewError(400, "baris kisi tidak valid")
+			}
+			seen := map[string]bool{}
+			for _, column := range selected {
+				if !containsString(columns, column) || seen[column] {
+					return fiber.NewError(400, "pilihan kisi tidak valid")
+				}
+				seen[column] = true
+			}
+		}
+	case simulasiTipeUnggah:
+		ids, err := decodeSimulasiFileIDs(raw)
+		if err != nil {
+			return fiber.NewError(400, "daftar berkas jawaban tidak valid")
+		}
+		seen := map[string]bool{}
+		for _, id := range ids {
+			if id == "" || seen[id] {
+				return fiber.NewError(400, "referensi berkas tidak valid")
+			}
+			seen[id] = true
+		}
+		if len(ids) > snap.Konfigurasi.MaxFiles && snap.Konfigurasi.MaxFiles > 0 {
+			return fiber.NewError(400, "jumlah berkas melebihi batas soal")
+		}
+		if len(ids) > 0 {
+			var count int64
+			if err := tx.Model(&SimulasiJawabanFile{}).Where("id IN ? AND upaya_soal_id = ?", ids, link.ID).Count(&count).Error; err != nil {
+				return err
+			}
+			if int(count) != len(ids) {
+				return fiber.NewError(400, "berkas tidak terkait dengan soal ini")
+			}
+		}
+	case simulasiTipeUrutan:
+		var values []string
+		if json.Unmarshal(raw, &values) != nil {
+			return fiber.NewError(400, "jawaban urutan tidak valid")
+		}
+		seen := map[string]bool{}
+		for _, id := range values {
+			if !containsString(choiceIDs(snap.Konfigurasi.Choices), id) || seen[id] {
+				return fiber.NewError(400, "item urutan tidak valid")
+			}
+			seen[id] = true
+		}
+	case simulasiTipeTanggal, simulasiTipeWaktu, simulasiTipeIsian, simulasiTipeUraian:
 		var value string
 		if json.Unmarshal(raw, &value) != nil || len([]byte(value)) > 64*1024 {
 			return fiber.NewError(400, "jawaban teks tidak valid")
+		}
+		if value != "" && snap.Tipe == simulasiTipeTanggal {
+			if _, err := time.Parse("2006-01-02", value); err != nil {
+				return fiber.NewError(400, "jawaban tanggal tidak valid")
+			}
+		}
+		if value != "" && snap.Tipe == simulasiTipeWaktu {
+			if _, err := time.Parse("15:04", value); err != nil {
+				return fiber.NewError(400, "jawaban waktu tidak valid")
+			}
 		}
 	}
 	return nil
@@ -2233,19 +2791,39 @@ func (s *Server) simulasiSimpanJawaban(c *fiber.Ctx) error {
 	if err := s.db.Where("id = ? AND upaya_id = ?", c.Params("upayaSoalId"), attempt.ID).First(&link).Error; err != nil {
 		return fiber.NewError(404, "soal upaya tidak ditemukan")
 	}
+	storedJSON := string(in.Jawaban)
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.validateStudentAnswer(tx, link, in.Jawaban); err != nil {
 			return err
 		}
+		var item SimulasiPaketSoal
+		if err := tx.First(&item, "id = ?", link.PaketSoalID).Error; err != nil {
+			return err
+		}
+		var snap simulasiSnapshot
+		if err := json.Unmarshal([]byte(item.SnapshotJSON), &snap); err != nil {
+			return err
+		}
+		if snap.Tipe == simulasiTipeUnggah {
+			ids, err := decodeSimulasiFileIDs(in.Jawaban)
+			if err != nil {
+				return fiber.NewError(400, "daftar berkas jawaban tidak valid")
+			}
+			canonical, err := json.Marshal(ids)
+			if err != nil {
+				return err
+			}
+			storedJSON = string(canonical)
+		}
 		var answer SimulasiJawaban
 		e := tx.Where("upaya_soal_id = ?", link.ID).First(&answer).Error
 		if e == nil {
-			return tx.Model(&answer).Update("jawaban_json", string(in.Jawaban)).Error
+			return tx.Model(&answer).Update("jawaban_json", storedJSON).Error
 		}
 		if !errorsIsNotFound(e) {
 			return e
 		}
-		return tx.Create(&SimulasiJawaban{UpayaSoalID: link.ID, JawabanJSON: string(in.Jawaban)}).Error
+		return tx.Create(&SimulasiJawaban{UpayaSoalID: link.ID, JawabanJSON: storedJSON}).Error
 	}); err != nil {
 		return err
 	}
@@ -2290,12 +2868,96 @@ func normalizeShortAnswer(value string) string {
 		return -1
 	}, value)
 }
+func gridRowIDs(rows []simulasiGridRow) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	return ids
+}
+func sameStringSequence(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+func answerComplete(snap simulasiSnapshot, raw string) bool {
+	if strings.TrimSpace(raw) == "" || raw == "null" {
+		return false
+	}
+	switch snap.Tipe {
+	case simulasiTipePG, simulasiTipeDropdown:
+		var value string
+		return json.Unmarshal([]byte(raw), &value) == nil && strings.TrimSpace(value) != ""
+	case simulasiTipePGK, simulasiTipeUrutan:
+		var values []string
+		if json.Unmarshal([]byte(raw), &values) != nil {
+			return false
+		}
+		if snap.Tipe == simulasiTipeUrutan {
+			return len(values) == len(snap.Konfigurasi.Choices)
+		}
+		return len(values) > 0
+	case simulasiTipeBenarSalah:
+		var values map[string]bool
+		return json.Unmarshal([]byte(raw), &values) == nil && len(values) == len(snap.Konfigurasi.Statements)
+	case simulasiTipeMenjodohkan:
+		var values map[string]string
+		if json.Unmarshal([]byte(raw), &values) != nil || len(values) != len(snap.Konfigurasi.Left) {
+			return false
+		}
+		for _, value := range values {
+			if value == "" {
+				return false
+			}
+		}
+		return true
+	case simulasiTipeIsian, simulasiTipeUraian, simulasiTipeTanggal, simulasiTipeWaktu:
+		var value string
+		return json.Unmarshal([]byte(raw), &value) == nil && strings.TrimSpace(value) != ""
+	case simulasiTipeSkala, simulasiTipeRating:
+		var value int
+		return json.Unmarshal([]byte(raw), &value) == nil
+	case simulasiTipeKisiPG:
+		var values map[string]string
+		if json.Unmarshal([]byte(raw), &values) != nil || len(values) != len(snap.Konfigurasi.Rows) {
+			return false
+		}
+		for _, value := range values {
+			if value == "" {
+				return false
+			}
+		}
+		return true
+	case simulasiTipeKisiPGK:
+		var values map[string][]string
+		if json.Unmarshal([]byte(raw), &values) != nil || len(values) != len(snap.Konfigurasi.Rows) {
+			return false
+		}
+		for _, value := range values {
+			if len(value) == 0 {
+				return false
+			}
+		}
+		return true
+	case simulasiTipeUnggah:
+		ids, err := decodeSimulasiFileIDs([]byte(raw))
+		return err == nil && len(ids) > 0
+	default:
+		return false
+	}
+}
 func gradeSnapshot(snap simulasiSnapshot, raw string, weight float64) (bool, float64, bool) {
 	if strings.TrimSpace(raw) == "" || raw == "null" {
 		return false, 0, snap.Tipe == simulasiTipeUraian
 	}
 	switch snap.Tipe {
-	case simulasiTipePG:
+	case simulasiTipePG, simulasiTipeDropdown:
 		var answer string
 		if json.Unmarshal([]byte(raw), &answer) != nil {
 			return false, 0, false
@@ -2309,6 +2971,13 @@ func gradeSnapshot(snap simulasiSnapshot, raw string, weight float64) (bool, flo
 		expected := append([]string(nil), snap.Konfigurasi.CorrectIDs...)
 		sort.Strings(expected)
 		correct := strings.Join(answer, "|") == strings.Join(expected, "|")
+		return correct, boolScore(correct, weight), false
+	case simulasiTipeSkala, simulasiTipeRating:
+		var answer int
+		if snap.Konfigurasi.CorrectNumber == nil || json.Unmarshal([]byte(raw), &answer) != nil {
+			return false, 0, false
+		}
+		correct := answer == *snap.Konfigurasi.CorrectNumber
 		return correct, boolScore(correct, weight), false
 	case simulasiTipeBenarSalah:
 		var answer map[string]bool
@@ -2341,7 +3010,57 @@ func gradeSnapshot(snap simulasiSnapshot, raw string, weight float64) (bool, flo
 			}
 		}
 		return correct, boolScore(correct, weight), false
+	case simulasiTipeTanggal, simulasiTipeWaktu:
+		var answer string
+		if json.Unmarshal([]byte(raw), &answer) != nil {
+			return false, 0, false
+		}
+		correct := false
+		for _, expected := range snap.Konfigurasi.AcceptedAnswers {
+			if answer == expected {
+				correct = true
+				break
+			}
+		}
+		return correct, boolScore(correct, weight), false
+	case simulasiTipeKisiPG:
+		var answer map[string]string
+		if json.Unmarshal([]byte(raw), &answer) != nil {
+			return false, 0, false
+		}
+		correct := len(answer) == len(snap.Konfigurasi.GridCorrect)
+		for row, expected := range snap.Konfigurasi.GridCorrect {
+			if answer[row] != expected {
+				correct = false
+			}
+		}
+		return correct, boolScore(correct, weight), false
+	case simulasiTipeKisiPGK:
+		var answer map[string][]string
+		if json.Unmarshal([]byte(raw), &answer) != nil {
+			return false, 0, false
+		}
+		correct := len(answer) == len(snap.Konfigurasi.GridMultiCorrect)
+		for row, expected := range snap.Konfigurasi.GridMultiCorrect {
+			actual := append([]string(nil), answer[row]...)
+			expectedCopy := append([]string(nil), expected...)
+			sort.Strings(actual)
+			sort.Strings(expectedCopy)
+			if strings.Join(actual, "|") != strings.Join(expectedCopy, "|") {
+				correct = false
+			}
+		}
+		return correct, boolScore(correct, weight), false
+	case simulasiTipeUrutan:
+		var answer []string
+		if json.Unmarshal([]byte(raw), &answer) != nil {
+			return false, 0, false
+		}
+		correct := sameStringSequence(answer, snap.Konfigurasi.CorrectOrder)
+		return correct, boolScore(correct, weight), false
 	case simulasiTipeUraian:
+		return false, 0, true
+	case simulasiTipeUnggah:
 		return false, 0, true
 	}
 	return false, 0, false
@@ -2456,6 +3175,44 @@ func (s *Server) simulasiKirim(c *fiber.Ctx) error {
 	attempt, paket, _, err := s.ownedUpaya(c)
 	if err != nil {
 		return err
+	}
+	if attempt.Status == "berlangsung" && attempt.BatasWaktu != nil && time.Now().After(*attempt.BatasWaktu) {
+		_, finishErr := s.finishSimulasiAttempt(attempt.ID, "kedaluwarsa")
+		if finishErr != nil {
+			return finishErr
+		}
+		return fiber.NewError(409, "waktu simulasi sudah habis; jawaban tersimpan telah dikumpulkan otomatis")
+	}
+	if attempt.Status == "berlangsung" {
+		var links []SimulasiUpayaSoal
+		if err := s.db.Where("upaya_id = ?", attempt.ID).Order("urutan_tampil").Find(&links).Error; err != nil {
+			return err
+		}
+		var missing []string
+		for _, link := range links {
+			var item SimulasiPaketSoal
+			if err := s.db.First(&item, "id = ?", link.PaketSoalID).Error; err != nil {
+				return err
+			}
+			var snap simulasiSnapshot
+			if err := json.Unmarshal([]byte(item.SnapshotJSON), &snap); err != nil {
+				return err
+			}
+			if !snap.WajibDijawab {
+				continue
+			}
+			var answer SimulasiJawaban
+			err := s.db.Where("upaya_soal_id = ?", link.ID).First(&answer).Error
+			if err != nil && !errorsIsNotFound(err) {
+				return err
+			}
+			if !answerComplete(snap, answer.JawabanJSON) {
+				missing = append(missing, strconv.Itoa(link.UrutanTampil))
+			}
+		}
+		if len(missing) > 0 {
+			return fiber.NewError(400, "Lengkapi soal wajib nomor "+strings.Join(missing, ", ")+" sebelum mengirim.")
+		}
 	}
 	finished, err := s.finishSimulasiAttempt(attempt.ID, "dikirim")
 	if err != nil {
@@ -2612,7 +3369,31 @@ func (s *Server) simulasiDetailUpaya(c *fiber.Ctx) error {
 		if err := json.Unmarshal([]byte(paketSoal.SnapshotJSON), &snapshot); err != nil {
 			return err
 		}
-		items = append(items, fiber.Map{"upayaSoalId": link.ID, "urutan": link.UrutanTampil, "ditandai": link.Ditandai, "bobot": paketSoal.Bobot, "soal": snapshot, "jawaban": answerByLink[link.ID]})
+		item := fiber.Map{"upayaSoalId": link.ID, "urutan": link.UrutanTampil, "ditandai": link.Ditandai, "bobot": paketSoal.Bobot, "soal": snapshot, "jawaban": answerByLink[link.ID]}
+		if snapshot.Tipe == simulasiTipeUnggah {
+			ids, decodeErr := decodeSimulasiFileIDs([]byte(answerByLink[link.ID].JawabanJSON))
+			if decodeErr != nil {
+				return fiber.NewError(500, "referensi berkas jawaban tidak valid")
+			}
+			var files []SimulasiJawabanFile
+			if len(ids) > 0 {
+				if err := s.db.Where("id IN ? AND upaya_soal_id = ?", ids, link.ID).Find(&files).Error; err != nil {
+					return err
+				}
+			}
+			byID := make(map[string]SimulasiJawabanFile, len(files))
+			for _, file := range files {
+				byID[file.ID] = file
+			}
+			refs := make([]fiber.Map, 0, len(ids))
+			for _, id := range ids {
+				if file, ok := byID[id]; ok {
+					refs = append(refs, fiber.Map{"id": file.ID, "namaFile": file.NamaFile, "contentType": file.ContentType, "ukuran": file.Ukuran})
+				}
+			}
+			item["files"] = refs
+		}
+		items = append(items, item)
 	}
 	return c.JSON(fiber.Map{"upaya": attempt, "pesertaDidik": attempt.PesertaDidik, "items": items})
 }
@@ -2696,8 +3477,8 @@ func (s *Server) simulasiNilaiUraian(c *fiber.Ctx) error {
 	if err := json.Unmarshal([]byte(item.SnapshotJSON), &snapshot); err != nil {
 		return fiber.NewError(500, "snapshot soal tidak valid")
 	}
-	if snapshot.Tipe != simulasiTipeUraian {
-		return fiber.NewError(400, "jawaban ini bukan soal uraian")
+	if snapshot.Tipe != simulasiTipeUraian && snapshot.Tipe != simulasiTipeUnggah {
+		return fiber.NewError(400, "jawaban ini tidak memerlukan penilaian manual")
 	}
 	if in.Skor > item.Bobot {
 		return fiber.NewError(400, "nilai melebihi bobot soal")
@@ -2839,19 +3620,26 @@ func (s *Server) seedSimulasiSamples() error {
 		return err
 	}
 	now := time.Now()
-	makeQuestion := func(tipe, prompt, domain, topik string, cfg simulasiConfig, stimulus string) SimulasiSoal {
+	makeQuestion := func(tipe, prompt, domain, topik string, cfg simulasiConfig, stimulus, explanation string) SimulasiSoal {
 		payload, _ := json.Marshal(cfg)
-		return SimulasiSoal{Jenjang: "SD/MI", KelasFase: "Kelas 5-6 / Fase C", Mode: "anbk_akm", Domain: domain, Topik: topik, Kompetensi: "Memahami informasi dan bernalar", LevelKognitif: "Memahami", TingkatKesulitan: "sedang", Tags: "contoh,orisinil", Tipe: tipe, Pertanyaan: prompt, Konfigurasi: string(payload), Pembahasan: "Pembahasan internal contoh untuk guru.", Bobot: 1, Status: "terbit", DibuatOlehUserID: owner.ID, Stimulus: []SimulasiStimulus{{Jenis: "text", Konten: stimulus, Urutan: 1}}}
+		competency, cognitiveLevel := "Memahami informasi dan menyimpulkan isi bacaan", "Memahami"
+		if domain == "Numerasi" {
+			competency, cognitiveLevel = "Menggunakan hubungan pecahan dan desimal", "Menerapkan"
+		}
+		if topik == "Refleksi" {
+			cognitiveLevel = "Mengevaluasi"
+		}
+		return SimulasiSoal{Jenjang: "SD/MI", KelasFase: "Kelas 5-6 / Fase C", Mode: "anbk_akm", Domain: domain, Topik: topik, Kompetensi: competency, LevelKognitif: cognitiveLevel, TingkatKesulitan: "sedang", Tags: "contoh,orisinil", Tipe: tipe, Pertanyaan: prompt, Konfigurasi: string(payload), Pembahasan: explanation, Bobot: 1, Status: "terbit", DibuatOlehUserID: owner.ID, Stimulus: []SimulasiStimulus{{Jenis: "text", Konten: stimulus, Urutan: 1}}}
 	}
 	literasi := []SimulasiSoal{
-		makeQuestion(simulasiTipePG, "Mengapa Rani datang lebih awal ke perpustakaan?", "Literasi membaca", "Informasi tersurat", simulasiConfig{Choices: []simulasiChoice{{ID: "a", Text: "Menukar buku"}, {ID: "b", Text: "Membantu menata buku"}, {ID: "c", Text: "Membeli alat tulis"}}, CorrectIDs: []string{"b"}}, "Pada Jumat pagi, Rani datang ke perpustakaan sekolah sebelum bel berbunyi. Ia membantu Bu Sari menata buku cerita yang baru kembali. Setelah itu, Rani memilih satu buku tentang kebun sekolah."),
-		makeQuestion(simulasiTipeBenarSalah, "Tentukan benar atau salah berdasarkan teks stimulus.", "Literasi membaca", "Mengevaluasi informasi", simulasiConfig{Statements: []simulasiStatement{{ID: "p1", Text: "Rani datang sebelum bel berbunyi.", Correct: true}, {ID: "p2", Text: "Rani memilih buku tentang olahraga.", Correct: false}}}, "Pada Jumat pagi, Rani datang ke perpustakaan sekolah sebelum bel berbunyi. Ia membantu Bu Sari menata buku cerita yang baru kembali. Setelah itu, Rani memilih satu buku tentang kebun sekolah."),
-		makeQuestion(simulasiTipeIsian, "Berapa jenis kegiatan yang dilakukan Rani sebelum memilih buku?", "Literasi membaca", "Menarik informasi", simulasiConfig{AcceptedAnswers: []string{"dua", "2"}}, "Rani datang lebih awal, membantu menata buku, lalu memilih satu buku untuk dibaca."),
-		makeQuestion(simulasiTipeUraian, "Tuliskan satu sikap baik Rani dan jelaskan alasanmu berdasarkan teks.", "Literasi membaca", "Refleksi", simulasiConfig{Rubrik: []simulasiRubrik{{Kriteria: "Sikap baik sesuai teks", Maks: 1}, {Kriteria: "Alasan dengan bukti teks", Maks: 1}}}, "Pada Jumat pagi, Rani membantu Bu Sari menata buku cerita yang baru kembali."),
+		makeQuestion(simulasiTipePG, "Apa yang dilakukan Rani sebelum memilih buku tentang kebun sekolah?", "Literasi membaca", "Informasi tersurat", simulasiConfig{Choices: []simulasiChoice{{ID: "a", Text: "Menukar buku"}, {ID: "b", Text: "Membantu menata buku"}, {ID: "c", Text: "Membeli alat tulis"}}, CorrectIDs: []string{"b"}}, "Pada Jumat pagi, Rani datang ke perpustakaan sekolah sebelum bel berbunyi. Ia membantu Bu Sari menata buku cerita yang baru kembali. Setelah itu, Rani memilih satu buku tentang kebun sekolah.", "Teks menyebutkan secara langsung bahwa Rani membantu Bu Sari menata buku cerita sebelum memilih buku tentang kebun sekolah."),
+		makeQuestion(simulasiTipeBenarSalah, "Tentukan benar atau salah berdasarkan teks stimulus.", "Literasi membaca", "Mengevaluasi informasi", simulasiConfig{Statements: []simulasiStatement{{ID: "p1", Text: "Rani datang sebelum bel berbunyi.", Correct: true}, {ID: "p2", Text: "Rani memilih buku tentang olahraga.", Correct: false}}}, "Pada Jumat pagi, Rani datang ke perpustakaan sekolah sebelum bel berbunyi. Ia membantu Bu Sari menata buku cerita yang baru kembali. Setelah itu, Rani memilih satu buku tentang kebun sekolah.", "Pernyataan pertama benar karena teks menyebut Rani datang sebelum bel berbunyi. Pernyataan kedua salah karena buku yang dipilih Rani bercerita tentang kebun sekolah, bukan olahraga."),
+		makeQuestion(simulasiTipeIsian, "Apa yang dibantu Rani lakukan di perpustakaan?", "Literasi membaca", "Menarik informasi", simulasiConfig{AcceptedAnswers: []string{"menata buku", "membantu menata buku"}}, "Rani datang lebih awal, membantu menata buku, lalu memilih satu buku untuk dibaca.", "Jawaban terdapat langsung pada teks: Rani membantu menata buku cerita yang baru kembali."),
+		makeQuestion(simulasiTipeUraian, "Tuliskan satu sikap baik Rani dan jelaskan alasanmu berdasarkan teks.", "Literasi membaca", "Refleksi", simulasiConfig{Rubrik: []simulasiRubrik{{Kriteria: "Sikap baik sesuai teks", Maks: 1}, {Kriteria: "Alasan dengan bukti teks", Maks: 1}}}, "Pada Jumat pagi, Rani membantu Bu Sari menata buku cerita yang baru kembali.", "Jawaban dapat menyebutkan sikap suka menolong, peduli, atau bekerja sama, lalu mengaitkannya dengan tindakan Rani membantu Bu Sari menata buku. Beri satu poin untuk sikap yang sesuai dan satu poin untuk alasan berbukti dari teks."),
 	}
 	numerasi := []SimulasiSoal{
-		makeQuestion(simulasiTipePGK, "Pilih semua pernyataan yang benar tentang 3/4.", "Numerasi", "Pecahan", simulasiConfig{Choices: []simulasiChoice{{ID: "a", Text: "3/4 lebih besar daripada 1/2"}, {ID: "b", Text: "3/4 sama dengan 6/8"}, {ID: "c", Text: "3/4 sama dengan 4/3"}}, CorrectIDs: []string{"a", "b"}}, "Satu pizza dibagi menjadi empat bagian sama besar. Tiga bagian dimakan bersama."),
-		makeQuestion(simulasiTipeMenjodohkan, "Jodohkan bentuk pecahan dengan nilainya.", "Numerasi", "Pecahan", simulasiConfig{Left: []simulasiChoice{{ID: "l1", Text: "1/2"}, {ID: "l2", Text: "1/4"}}, Right: []simulasiChoice{{ID: "r1", Text: "0,25"}, {ID: "r2", Text: "0,5"}}, Pairs: map[string]string{"l1": "r2", "l2": "r1"}}, "Gunakan hubungan antara pecahan dan desimal untuk memasangkan setiap bentuk."),
+		makeQuestion(simulasiTipePGK, "Pilih semua pernyataan yang benar tentang 3/4.", "Numerasi", "Pecahan", simulasiConfig{Choices: []simulasiChoice{{ID: "a", Text: "3/4 lebih besar daripada 1/2"}, {ID: "b", Text: "3/4 sama dengan 6/8"}, {ID: "c", Text: "3/4 sama dengan 4/3"}}, CorrectIDs: []string{"a", "b"}}, "Satu pizza dibagi menjadi empat bagian sama besar. Tiga bagian dimakan bersama.", "Pernyataan A benar karena tiga perempat lebih besar daripada setengah. Pernyataan B benar karena 3/4 dan 6/8 bernilai sama. Pernyataan C salah karena 4/3 lebih besar daripada satu utuh."),
+		makeQuestion(simulasiTipeMenjodohkan, "Jodohkan bentuk pecahan dengan nilainya.", "Numerasi", "Pecahan", simulasiConfig{Left: []simulasiChoice{{ID: "l1", Text: "1/2"}, {ID: "l2", Text: "1/4"}}, Right: []simulasiChoice{{ID: "r1", Text: "0,25"}, {ID: "r2", Text: "0,5"}}, Pairs: map[string]string{"l1": "r2", "l2": "r1"}}, "Gunakan hubungan antara pecahan dan desimal untuk memasangkan setiap bentuk.", "Setengah sama dengan 0,5 dan seperempat sama dengan 0,25. Pasangan ini dapat diperiksa dengan mengubah penyebut pecahan menjadi 10 atau 100."),
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		createPackage := func(name string, questions []SimulasiSoal) error {

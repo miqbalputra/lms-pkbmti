@@ -156,8 +156,8 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 /* The pre-exam screens intentionally mirror the calm, centered assessment
    flow from the reference: a full-width institutional banner and one clear
    white card below it. */
-.pre-exam-card{max-width:676px!important;margin:-45px auto 32px!important;position:relative;z-index:2;border-radius:15px!important;box-shadow:0 20px 46px rgba(15,23,42,.18)!important}
-.pre-exam-card .login-brand{display:none}.pre-exam-card .login-form-panel{padding:48px 70px 44px}.pre-exam-card .login-heading{margin-bottom:25px}.pre-exam-card .login-heading .eyebrow{color:#1d6fa8}.pre-exam-card .login-heading h2{font-size:28px}.pre-exam-card .login-heading p{font-size:15px}.pre-exam-card .card-footer{padding:0;margin-top:20px}.pre-exam-card .btn-primary{background:#147de1;border-color:#147de1;border-radius:8px}.pre-exam-card .btn-primary:hover{background:#0e6fc9}
+.pre-exam-card{display:grid!important;grid-template-columns:minmax(0,1fr)!important;min-height:0!important;max-width:676px!important;margin:-45px auto 32px!important;position:relative;z-index:2;border-radius:15px!important;box-shadow:0 20px 46px rgba(15,23,42,.18)!important}
+.pre-exam-card .login-brand{display:none}.pre-exam-card .login-form-panel{min-width:0!important;width:100%!important;padding:48px 70px 44px}.pre-exam-card .login-content,.pre-exam-card .login-footer{min-width:0!important;width:100%!important}.pre-exam-card .login-footer .btn{box-sizing:border-box;max-width:100%;min-width:0;width:100%}.pre-exam-card .login-heading{margin-bottom:25px}.pre-exam-card .login-heading .eyebrow{color:#1d6fa8}.pre-exam-card .login-heading h2{font-size:28px}.pre-exam-card .login-heading p{font-size:15px}.pre-exam-card .card-footer{padding:0;margin-top:20px}.pre-exam-card .btn-primary{background:#147de1;border-color:#147de1;border-radius:8px}.pre-exam-card .btn-primary:hover{background:#0e6fc9}
 .pre-exam-card .login-heading{text-align:center}.pre-exam-card .login-heading h2{letter-spacing:-.035em}.pre-exam-card .login-heading p{max-width:430px;margin-left:auto;margin-right:auto}.login-field{position:relative}.login-field .field-icon{position:absolute;left:13px;bottom:14px;z-index:1;display:grid;place-items:center;width:22px;height:22px;color:#64748b;font-size:17px;line-height:1}.login-field .input{padding-left:46px}.pre-exam-card .input{border-color:#d6dde8}.pre-exam-card .input:focus{border-color:#147de1;box-shadow:0 0 0 3px rgba(20,125,225,.13)}
 .pre-exam-list{max-width:780px!important;margin:-45px auto 32px!important;position:relative;z-index:2;border-radius:15px!important;box-shadow:0 20px 46px rgba(15,23,42,.18)!important}
 .pre-exam-list .list-hero{padding:25px 30px;background:#fff;color:#172033;border-bottom:1px solid #e5ebf2}.pre-exam-list .list-hero:after{background:rgba(29,111,168,.06)}.pre-exam-list .list-hero h1{color:#172033}.pre-exam-list .list-hero p{color:#64748b}.pre-exam-list .list-content{padding:22px 30px}.pre-exam-list .list-footer{padding:0 30px 26px}.pre-exam-list .exam-item{border-radius:10px}.pre-exam-list .exam-item .btn-primary{background:#147de1;border-color:#147de1}
@@ -258,14 +258,14 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
     <div class="exam-user"><span>Peserta didik</span><div class="exam-timer" id="timer" role="timer" aria-live="off">00:00:00</div></div>
   </header>
   <div class="exam-toolbar">
-    <div class="exam-title-block"><h1 id="examSubject">Ruang ujian</h1><p><span id="soalBadge">Soal 1/0</span> · Jawaban tersimpan otomatis</p></div>
+  <div class="exam-title-block"><h1 id="examSubject">Ruang ujian</h1><p><span id="soalBadge">Soal 1/0</span> · <span id="answeredSummary">0 dari 0 soal terjawab</span></p></div>
     <div class="exam-toolbar-actions">
       <div class="font-controls" aria-label="Ukuran teks"><button class="btn active" data-action="font-medium" aria-label="Ukuran teks sedang">A</button><button class="btn" data-action="font-small" aria-label="Ukuran teks kecil">A<sup>−</sup></button><button class="btn" data-action="font-large" aria-label="Ukuran teks besar">A<sup>+</sup></button></div>
       <button class="btn btn-outline" data-action="open-info">ⓘ Informasi soal</button><button class="btn btn-outline" data-action="open-palette">▦ Daftar soal</button><button class="btn btn-outline" data-action="flag-question" id="flagBtn">⚑ Ragu-ragu</button>
     </div>
   </div>
-  <div class="exam-status"><span class="exam-save" id="examSaveStatus">✓ Jawaban siap disimpan</span><span class="exam-online" id="examOnlineStatus">● Terhubung</span></div>
-  <div class="exam-progress"><div class="exam-progress-bar" id="progressBar" style="width:0%"></div></div>
+  <div class="exam-status"><span class="exam-save" id="examSaveStatus" aria-live="polite">✓ Jawaban siap disimpan</span><span class="exam-online" id="examOnlineStatus">● Terhubung</span></div>
+  <div class="exam-progress" id="examProgress" role="progressbar" aria-label="Kemajuan jawaban" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0 dari 0 soal terjawab"><div class="exam-progress-bar" id="progressBar" style="width:0%"></div></div>
   <div class="exam-grid">
     <section class="exam-panel stimulus-panel"><div class="exam-panel-head"><div><strong>Stimulus</strong><span>Bacaan / informasi pendukung</span></div><small>Panel dapat digulir</small></div><div class="stimulus-scroll" id="stimulusContainer"></div></section>
     <section class="exam-panel question-panel"><div class="exam-panel-head"><div><strong id="questionLabel">Pertanyaan 1</strong><span>Pilih atau tulis jawabanmu dengan teliti.</span></div><small id="questionState">Belum dijawab</small></div><div class="question-scroll" id="soalContainer"></div><div class="question-footer"><button class="btn btn-outline" data-action="previous-question" id="prevBtn" disabled>‹ Sebelumnya</button><button class="btn btn-primary" data-action="next-question" id="nextBtn">Berikutnya ›</button><button class="btn btn-success hidden" data-action="finish-exam" id="selesaiBtn">✓ Kirim jawaban</button></div></section>
@@ -275,7 +275,8 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 
 <div id="infoModal" class="modal-backdrop hidden" role="presentation"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle"><div class="modal-head"><h2 id="infoModalTitle">Informasi pengerjaan</h2><button class="modal-close" data-action="close-modal" aria-label="Tutup">×</button></div><div class="modal-body"><p>Jawaban tersimpan otomatis saat Anda memilih atau mengetik jawaban.</p><ul><li>Gunakan tombol <strong>Ragu-ragu</strong> untuk menandai soal yang ingin diperiksa kembali.</li><li>Gunakan tombol ukuran teks agar nyaman dibaca.</li><li>Daftar soal membantu berpindah langsung ke nomor tertentu.</li><li>Pengiriman tidak dapat dibatalkan setelah dikonfirmasi.</li></ul></div></section></div>
 <div id="paletteModal" class="modal-backdrop hidden" role="presentation"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="paletteModalTitle"><div class="modal-head"><h2 id="paletteModalTitle">Daftar soal</h2><button class="modal-close" data-action="close-modal" aria-label="Tutup">×</button></div><div class="modal-body"><div class="palette-grid" id="paletteGridMobile"></div><div class="palette-legend"><span><i class="legend-dot"></i>Sedang dibuka</span><span><i class="legend-dot answered"></i>Sudah dijawab</span><span><i class="legend-dot empty"></i>Belum dijawab</span></div></div></section></div>
-<div id="confirmExamModal" class="modal-backdrop hidden" role="presentation"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmExamTitle"><div class="modal-head"><h2 id="confirmExamTitle">Konfirmasi ujian</h2><button class="modal-close" data-action="close-modal" aria-label="Tutup">×</button></div><div class="modal-body"><h3 id="confirmExamName" style="font-size:20px;font-weight:800;color:#172033"></h3><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:16px 0"><div style="padding:12px;border-radius:10px;background:#f1f5f9;text-align:center"><strong id="confirmExamDuration" style="display:block;font-size:20px;color:#1d6fa8"></strong><span style="font-size:11px">menit</span></div><div style="padding:12px;border-radius:10px;background:#f1f5f9;text-align:center"><strong id="confirmExamStart" style="display:block;font-size:12px;color:#1d6fa8"></strong><span style="font-size:11px">mulai</span></div><div style="padding:12px;border-radius:10px;background:#f1f5f9;text-align:center"><strong id="confirmExamStatus" style="display:block;font-size:12px;color:#1d6fa8"></strong><span style="font-size:11px">status</span></div></div><p>Waktu ujian mulai dihitung setelah Anda menekan tombol mulai. Pastikan koneksi stabil dan siapkan diri sebelum melanjutkan.</p><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="btn btn-outline" data-action="close-modal">Kembali</button><button class="btn btn-primary" data-action="confirm-start">Mulai ujian</button></div></div></section></div>
+<div id="confirmExamModal" class="modal-backdrop hidden" role="presentation"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmExamTitle"><div class="modal-head"><h2 id="confirmExamTitle">Konfirmasi ujian</h2><button class="modal-close" data-action="close-modal" aria-label="Tutup">×</button></div><div class="modal-body"><h3 id="confirmExamName" style="font-size:20px;font-weight:800;color:#172033"></h3><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:16px 0"><div style="padding:12px;border-radius:10px;background:#f1f5f9;text-align:center"><strong id="confirmExamDuration" style="display:block;font-size:20px;color:#1d6fa8"></strong><span style="font-size:11px">menit</span></div><div style="padding:12px;border-radius:10px;background:#f1f5f9;text-align:center"><strong id="confirmExamStart" style="display:block;font-size:12px;color:#1d6fa8"></strong><span style="font-size:11px">mulai</span></div><div style="padding:12px;border-radius:10px;background:#f1f5f9;text-align:center"><strong id="confirmExamStatus" style="display:block;font-size:12px;color:#1d6fa8"></strong><span style="font-size:11px">status</span></div></div><p id="confirmExamHint">Waktu ujian mulai dihitung setelah Anda menekan tombol mulai. Pastikan koneksi stabil dan siapkan diri sebelum melanjutkan.</p><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="btn btn-outline" data-action="close-modal">Kembali</button><button class="btn btn-primary" data-action="confirm-start" id="confirmExamAction">Mulai ujian</button></div></div></section></div>
+<div id="confirmFinishModal" class="modal-backdrop hidden" role="presentation"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmFinishTitle"><div class="modal-head"><h2 id="confirmFinishTitle">Periksa sebelum mengirim</h2><button class="modal-close" data-action="close-modal" aria-label="Tutup">×</button></div><div class="modal-body"><p>Pastikan semua jawaban sudah sesuai. Setelah dikirim, jawaban tidak dapat diubah.</p><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:16px 0;text-align:center"><div style="padding:12px;border-radius:10px;background:#ecfdf5"><strong id="finishAnswered" style="display:block;font-size:22px;color:#047857">0</strong><span style="font-size:12px">Terjawab</span></div><div style="padding:12px;border-radius:10px;background:#fff7ed"><strong id="finishFlagged" style="display:block;font-size:22px;color:#c2410c">0</strong><span style="font-size:12px">Ragu-ragu</span></div><div style="padding:12px;border-radius:10px;background:#fef2f2"><strong id="finishEmpty" style="display:block;font-size:22px;color:#b91c1c">0</strong><span style="font-size:12px">Kosong</span></div></div><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="btn btn-outline" data-action="close-modal">Kembali memeriksa</button><button class="btn btn-primary" data-action="confirm-finish-exam" id="confirmFinishAction">Kirim jawaban</button></div></div></section></div>
 
 <!-- Result -->
 <div id="resultCard" class="card hidden">
@@ -312,7 +313,7 @@ label{display:block;font-size:14px;font-weight:500;margin-bottom:6px;color:var(-
 
 <script nonce="{{CSP_NONCE}}">
 const API='/api';
-let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,pendingExam:null,ujianPesertaId:'',soal:[],jawaban:{},flagged:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[]};
+let state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,pendingExam:null,ujianPesertaId:'',soal:[],jawaban:{},flagged:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[],saveTimer:null,syncPromise:null,answerSequence:0,submitting:false};
 let turnstileToken='';
 
 // --- Connectivity Detection ---
@@ -335,13 +336,8 @@ function showOfflinePopup(){
 function hideOfflinePopup(){hide(document.getElementById('offlineOverlay'));document.getElementById('toastReconnect').style.display='block';setTimeout(()=>{document.getElementById('toastReconnect').style.display='none'},3000)}
 
 function onReconnect(){
-  // Sync queued jawaban
-  while(state.offlineQueue.length){
-    const j=state.offlineQueue.shift();sendJawaban(j.soalId,j.val);
-  }
   const status=document.getElementById('examSaveStatus');if(status)status.textContent='Menyinkronkan jawaban…';
-  // Reload soal to sync with server
-  if(state.currentUjian){loadSoal(state.currentUjian.id).catch(()=>{})}
+  void flushAnswerQueue().then(()=>{if(state.currentUjian)return loadSoal(state.currentUjian.id)}).catch(()=>{});
 }
 
 async function reconnect(){
@@ -351,6 +347,7 @@ async function reconnect(){
     const r=await fetch(API+'/health');if(!r.ok)throw new Error();
     // If in exam, reload soal
     if(state.currentUjian){
+      await flushAnswerQueue();
       await loadSoal(state.currentUjian.id);
       hideOfflinePopup();
       document.getElementById('toastReconnect').style.display='block';
@@ -364,7 +361,7 @@ async function reconnect(){
 
 function show(el){el.classList.remove('hidden')}
 function hide(el){el.classList.add('hidden')}
-function showLogin(){resetTurnstile();clearInterval(state.timerInterval);state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,pendingExam:null,ujianPesertaId:'',soal:[],jawaban:{},flagged:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[]};hide(document.getElementById('infoModal'));hide(document.getElementById('paletteModal'));hide(document.getElementById('confirmExamModal'));void fetch(API+'/ujian-online/logout',{method:'POST',credentials:'include'}).catch(()=>{});show(document.getElementById('preExamHeader'));show(document.getElementById('loginCard'));hide(document.getElementById('listCard'));hide(document.getElementById('examCard'));hide(document.getElementById('resultCard'))}
+function showLogin(){resetTurnstile();clearInterval(state.timerInterval);clearTimeout(state.saveTimer);state={nisn:'',aksesKode:'',ujians:[],currentUjian:null,pendingExam:null,ujianPesertaId:'',soal:[],jawaban:{},flagged:{},currentIdx:0,timerInterval:null,sisaWaktu:0,mulai:null,offlineQueue:[],saveTimer:null,syncPromise:null,answerSequence:0,submitting:false};hide(document.getElementById('infoModal'));hide(document.getElementById('paletteModal'));hide(document.getElementById('confirmExamModal'));hide(document.getElementById('confirmFinishModal'));void fetch(API+'/ujian-online/logout',{method:'POST',credentials:'include'}).catch(()=>{});show(document.getElementById('preExamHeader'));show(document.getElementById('loginCard'));hide(document.getElementById('listCard'));hide(document.getElementById('examCard'));hide(document.getElementById('resultCard'))}
 function showError(id,msg){const e=document.getElementById(id);e.textContent=msg;show(e)}
 function onTurnstileSuccess(token){turnstileToken=token}
 function onTurnstileExpired(){turnstileToken=''}
@@ -379,7 +376,8 @@ document.addEventListener('click',e=>{
     case 'show-login':showLogin();break;
     case 'previous-question':prevSoal();break;
     case 'next-question':nextSoal();break;
-    case 'finish-exam':void selesaiUjian();break;
+    case 'finish-exam':openFinishConfirmation();break;
+    case 'confirm-finish-exam':hide(document.getElementById('confirmFinishModal'));void selesaiUjian(false);break;
     case 'reconnect':void reconnect();break;
     case 'start-exam':openExamConfirm(el.dataset.id||'');break;
     case 'confirm-start':hide(document.getElementById('confirmExamModal'));void mulaiUjian(state.pendingExam?.id||'');break;
@@ -394,7 +392,7 @@ document.addEventListener('click',e=>{
     case 'palette-question':state.currentIdx=Number(el.dataset.index||0);hide(document.getElementById('paletteModal'));renderSoal();break;
   }
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){hide(document.getElementById('infoModal'));hide(document.getElementById('paletteModal'))}if(state.currentUjian&&!document.getElementById('examCard').classList.contains('hidden')&&(e.target===document.body||e.target===document.documentElement)){if(e.key==='ArrowLeft')prevSoal();if(e.key==='ArrowRight')nextSoal();if(e.key.toLowerCase()==='m'){renderPalette('paletteGridMobile');show(document.getElementById('paletteModal'))}}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){hide(document.getElementById('infoModal'));hide(document.getElementById('paletteModal'));hide(document.getElementById('confirmExamModal'));hide(document.getElementById('confirmFinishModal'))}if(state.currentUjian&&!document.getElementById('examCard').classList.contains('hidden')&&(e.target===document.body||e.target===document.documentElement)){if(e.key==='ArrowLeft')prevSoal();if(e.key==='ArrowRight')nextSoal();if(e.key.toLowerCase()==='m'){renderPalette('paletteGridMobile');show(document.getElementById('paletteModal'))}}});
 document.addEventListener('input',e=>{
   const el=e.target instanceof Element?e.target.closest('[data-action="text-answer"]'):null;
   if(el)jawabTeks(el.dataset.id||'',el.value);
@@ -427,8 +425,9 @@ if(!state.ujians.length){c.innerHTML='<p style="color:var(--muted-foreground);fo
 c.innerHTML=state.ujians.map(u=>{
 const mulai=new Date(u.waktuMulai).toLocaleString('id-ID',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 const selesai=new Date(u.waktuSelesai).toLocaleString('id-ID',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
-let badge=u.sudahMengerjakan?'<span class="badge badge-success">Selesai</span>':'';
- return '<div class="exam-item"><h3>'+esc(u.judul)+'</h3><div class="exam-meta"><span>'+esc(u.mapel?.namaMapel||'')+'</span><span>'+u.durasiMenit+' menit</span><span>'+mulai+' — '+selesai+'</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+badge+'<button class="btn btn-primary btn-sm" data-action="start-exam" data-id="'+esc(u.id)+'" '+(u.sudahMengerjakan?'disabled':'')+'>'+((u.sudahMengerjakan)?'Sudah dikerjakan':'Lihat instruksi')+'</button></div></div>'
+const ongoing=u.status==='mulai';const finished=u.status==='selesai'||u.status==='dikunci'||(u.sudahMengerjakan&&!ongoing);
+let badge=ongoing?'<span class="badge" style="background:#fff7ed;color:#c2410c">Sedang berlangsung</span>':finished?'<span class="badge badge-success">Selesai</span>':'';
+ return '<div class="exam-item"><h3>'+esc(u.judul)+'</h3><div class="exam-meta"><span>'+esc(u.mapel?.namaMapel||'')+'</span><span>'+u.durasiMenit+' menit</span><span>'+mulai+' — '+selesai+'</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+badge+'<button class="btn btn-primary btn-sm" data-action="start-exam" data-id="'+esc(u.id)+'" '+(finished?'disabled':'')+'>'+((ongoing)?'Lanjutkan ujian':finished?'Sudah dikerjakan':'Lihat instruksi')+'</button></div></div>'
 }).join('');
 }
 
@@ -438,7 +437,9 @@ function openExamConfirm(ujianId){
  document.getElementById('confirmExamName').textContent=exam.judul||'Ujian Online';
  document.getElementById('confirmExamDuration').textContent=(exam.durasiMenit||60);
  document.getElementById('confirmExamStart').textContent=new Date(exam.waktuMulai).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
- document.getElementById('confirmExamStatus').textContent=exam.sudahMengerjakan?'Selesai':'Siap';
+ const ongoing=exam.status==='mulai';document.getElementById('confirmExamStatus').textContent=ongoing?'Sedang berlangsung':'Siap';
+ document.getElementById('confirmExamAction').textContent=ongoing?'Lanjutkan ujian':'Mulai ujian';
+ document.getElementById('confirmExamHint').textContent=ongoing?'Ujian ini sudah dimulai. Anda dapat melanjutkan dari jawaban terakhir yang tersimpan.':'Waktu ujian mulai dihitung setelah Anda menekan tombol mulai. Pastikan koneksi stabil dan siapkan diri sebelum melanjutkan.';
  show(document.getElementById('confirmExamModal'));
 }
 
@@ -464,22 +465,33 @@ const d=await r.json();if(!r.ok){
   if(d.error&&d.error.includes('habis')){hide(document.getElementById('examCard'));show(document.getElementById('preExamHeader'));show(document.getElementById('resultCard'));document.getElementById('scoreValue').textContent='—';document.getElementById('scoreDetail').innerHTML='<strong>Waktu ujian sudah habis.</strong>';}
   throw new Error(d.error||'Gagal');
 }
+const previousIndex=state.currentIdx;const hadQuestions=state.soal.length>0;
 state.soal=d.soal||[];state.sisaWaktu=d.sisaWaktu||0;
 state.currentUjian=state.currentUjian||{};
 state.currentUjian.gracePeriodMenit=d.gracePeriodMenit||5;
+state.jawaban={};
 (d.jawaban||[]).forEach(j=>{state.jawaban[j.ujianSoalId]=j.jawaban});
-state.currentIdx=0;renderSoal();
+restoreExamLocalState();
+state.currentIdx=hadQuestions?Math.min(previousIndex,Math.max(0,state.soal.length-1)):0;renderSoal();
 // Restart timer with server time (handles reconnect / grace period)
 if(state.sisaWaktu!==0){startTimer(null,state.sisaWaktu)}
 }
+
+function examStorageKey(){return state.ujianPesertaId?'ujian-online-state:'+state.ujianPesertaId:''}
+function persistExamLocalState(){const key=examStorageKey();if(!key)return;try{sessionStorage.setItem(key,JSON.stringify({jawaban:state.jawaban,flagged:state.flagged,offlineQueue:state.offlineQueue,answerSequence:state.answerSequence}))}catch(_){}}
+function restoreExamLocalState(){const key=examStorageKey();if(!key)return;try{const saved=JSON.parse(sessionStorage.getItem(key)||'null');if(!saved)return;state.flagged=saved.flagged&&typeof saved.flagged==='object'?saved.flagged:{};state.offlineQueue=Array.isArray(saved.offlineQueue)?saved.offlineQueue:[];state.answerSequence=Number(saved.answerSequence)||0;state.offlineQueue.forEach(item=>{if(item&&item.soalId)state.jawaban[item.soalId]=item.val})}catch(_){}}
+function hasExamAnswer(value){return value!==null&&value!==undefined&&(Array.isArray(value)?value.length>0:typeof value==='string'?value.trim()!=='':true)}
 
 function renderSoal(){
 const total=state.soal.length;if(!total)return;
 const s=state.soal[state.currentIdx];
 document.getElementById('soalBadge').textContent='Soal '+(state.currentIdx+1)+'/'+total;
-document.getElementById('progressBar').style.width=((state.currentIdx+1)/total*100)+'%';
+const answeredCount=state.soal.filter(question=>hasExamAnswer(state.jawaban[question.id])).length;
+const progressPercent=Math.round(answeredCount/total*100);document.getElementById('progressBar').style.width=progressPercent+'%';
+const progress=document.getElementById('examProgress');progress.setAttribute('aria-valuenow',String(progressPercent));progress.setAttribute('aria-valuetext',answeredCount+' dari '+total+' soal terjawab');
+document.getElementById('answeredSummary').textContent=answeredCount+' dari '+total+' soal terjawab';
 document.getElementById('questionLabel').textContent='Pertanyaan '+(state.currentIdx+1);
-document.getElementById('questionState').textContent=state.jawaban[s.id]?'Sudah dijawab':'Belum dijawab';
+document.getElementById('questionState').textContent=hasExamAnswer(state.jawaban[s.id])?'Sudah dijawab':'Belum dijawab';
 document.getElementById('flagBtn').textContent=(state.flagged&&state.flagged[s.id]?'⚑ Ditandai':'⚑ Ragu-ragu');
 document.getElementById('flagBtn').classList.toggle('btn-success',Boolean(state.flagged&&state.flagged[s.id]));
 document.getElementById('flagBtn').classList.toggle('btn-outline',!(state.flagged&&state.flagged[s.id]));
@@ -510,7 +522,7 @@ function renderStimulus(s){
 
 function renderPalette(targetId){
  const c=document.getElementById(targetId);if(!c)return;
- c.innerHTML=state.soal.map((s,i)=>'<button type="button" data-action="palette-question" data-index="'+i+'" class="'+(i===state.currentIdx?'current ':'')+(state.jawaban[s.id]?'answered ':'')+(state.flagged&&state.flagged[s.id]?'flagged':'')+'" aria-label="Buka soal '+(i+1)+'">'+(i+1)+'</button>').join('');
+ c.innerHTML=state.soal.map((s,i)=>{const isAnswered=hasExamAnswer(state.jawaban[s.id]);const isFlagged=Boolean(state.flagged&&state.flagged[s.id]);return '<button type="button" data-action="palette-question" data-index="'+i+'" class="'+(i===state.currentIdx?'current ':'')+(isAnswered?'answered ':'')+(isFlagged?'flagged':'')+'" aria-label="Buka soal '+(i+1)+(isAnswered?', sudah dijawab':', belum dijawab')+(isFlagged?', ditandai untuk diperiksa':'')+'">'+(i+1)+'</button>'}).join('');
 }
 
 function setExamFont(size){
@@ -522,7 +534,7 @@ function setExamFont(size){
 
 function toggleFlag(){
  const s=state.soal[state.currentIdx];if(!s)return;
- state.flagged=state.flagged||{};state.flagged[s.id]=!state.flagged[s.id];renderSoal();
+ state.flagged=state.flagged||{};state.flagged[s.id]=!state.flagged[s.id];persistExamLocalState();renderSoal();
  const status=document.getElementById('examSaveStatus');status.textContent=state.flagged[s.id]?'⚑ Soal ditandai untuk diperiksa':'✓ Tanda soal dihapus';
 }
 
@@ -535,9 +547,24 @@ function jawabTeks(soalId,val){state.jawaban[soalId]=val;
 sendJawaban(soalId,val);
 }
 function sendJawaban(soalId,val){
-if(!isOnline){state.offlineQueue.push({soalId,val});document.getElementById('examSaveStatus').textContent='Offline — jawaban menunggu sinkronisasi';return}
-const fd=new FormData();fd.append('ujianSoalId',soalId);fd.append('jawaban',val);
-fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd,credentials:'include'}).then(r=>{if(!r.ok)throw new Error('Jawaban belum tersimpan');document.getElementById('examSaveStatus').textContent='✓ Tersimpan'}).catch(()=>{state.offlineQueue.push({soalId,val});document.getElementById('examSaveStatus').textContent='Gagal tersimpan — akan dicoba lagi'});
+state.answerSequence++;
+const pending={soalId,val,sequence:state.answerSequence};const existing=state.offlineQueue.findIndex(item=>item.soalId===soalId);
+if(existing>=0)state.offlineQueue[existing]=pending;else state.offlineQueue.push(pending);
+persistExamLocalState();
+const status=document.getElementById('examSaveStatus');if(!isOnline){status.textContent='Offline — jawaban tersimpan lokal'}else{status.textContent='Menyimpan…';clearTimeout(state.saveTimer);state.saveTimer=setTimeout(()=>{void flushAnswerQueue()},350)}
+}
+async function flushAnswerQueue(){
+ if(state.syncPromise)return state.syncPromise;
+ state.syncPromise=(async()=>{
+  while(isOnline&&state.offlineQueue.length&&state.currentUjian){
+   const pending=state.offlineQueue[0];const fd=new FormData();fd.append('ujianSoalId',pending.soalId);fd.append('jawaban',pending.val);
+   try{const response=await fetch(API+'/ujian-online/'+state.currentUjian.id+'/jawab',{method:'POST',body:fd,credentials:'include'});if(!response.ok)throw new Error('Jawaban belum tersimpan');
+    const index=state.offlineQueue.findIndex(item=>item.soalId===pending.soalId&&item.sequence===pending.sequence);if(index>=0)state.offlineQueue.splice(index,1);persistExamLocalState();
+   }catch(_){const status=document.getElementById('examSaveStatus');if(status)status.textContent='Belum tersimpan — periksa koneksi';throw new Error('Jawaban belum tersimpan. Periksa koneksi lalu coba lagi.')}
+  }
+  const status=document.getElementById('examSaveStatus');if(status)status.textContent=state.offlineQueue.length?'Belum tersimpan':'✓ Tersimpan';
+ })().finally(()=>{state.syncPromise=null});
+ return state.syncPromise;
 }
 function prevSoal(){if(state.currentIdx>0){state.currentIdx--;renderSoal()}}
 function nextSoal(){if(state.currentIdx<state.soal.length-1){state.currentIdx++;renderSoal()}}
@@ -578,17 +605,21 @@ if(sisaG<=0){clearInterval(state.timerInterval);selesaiUjian(true)}
 }
 
 async function selesaiUjian(auto){
-if(!auto&&!confirm('Yakin ingin menyelesaikan ujian?'))return;
+if(!state.currentUjian||state.submitting)return;
 if(!isOnline){showOfflinePopup();return}
-clearInterval(state.timerInterval);
+state.submitting=true;const submitButton=document.getElementById('confirmFinishAction');if(submitButton){submitButton.disabled=true;submitButton.textContent='Menyinkronkan…'}
 try{
+ clearTimeout(state.saveTimer);await flushAnswerQueue();
+ if(state.offlineQueue.length)throw new Error('Masih ada jawaban yang belum tersimpan. Coba lagi sebelum mengirim.');
 const r=await fetch(API+'/ujian-online/'+state.currentUjian.id+'/selesai',{method:'POST',credentials:'include'});
 const d=await r.json();if(!r.ok)throw new Error(d.error||'Gagal');
  document.getElementById('scoreValue').textContent=Math.round(d.skor||0);
 document.getElementById('scoreDetail').innerHTML='Benar: <strong>'+d.benar+'</strong> dari <strong>'+d.total+'</strong> soal<br>Status: <strong>Selesai</strong>';
+const key=examStorageKey();if(key)sessionStorage.removeItem(key);clearInterval(state.timerInterval);hide(document.getElementById('confirmFinishModal'));
  hide(document.getElementById('examCard'));show(document.getElementById('preExamHeader'));show(document.getElementById('resultCard'));
-}catch(e){alert(e.message)}
+}catch(e){if(auto){const status=document.getElementById('examSaveStatus');if(status)status.textContent=e.message||'Pengiriman otomatis tertunda — sambungkan internet.';showOfflinePopup()}else alert(e.message)}finally{state.submitting=false;if(submitButton){submitButton.disabled=false;submitButton.textContent='Kirim jawaban'}}
 }
+function openFinishConfirmation(){if(!state.soal.length)return;const answeredCount=state.soal.filter(question=>hasExamAnswer(state.jawaban[question.id])).length;const flaggedCount=state.soal.filter(question=>state.flagged[question.id]).length;document.getElementById('finishAnswered').textContent=answeredCount;document.getElementById('finishEmpty').textContent=state.soal.length-answeredCount;document.getElementById('finishFlagged').textContent=flaggedCount;show(document.getElementById('confirmFinishModal'))}
 
 document.addEventListener('visibilitychange',()=>{
 if(document.hidden&&state.currentUjian&&!document.getElementById('examCard').classList.contains('hidden')){

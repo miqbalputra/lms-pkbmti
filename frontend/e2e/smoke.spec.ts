@@ -33,3 +33,28 @@ test('portal orang tua dan ujian online publik dapat dibuka', async ({ page }) =
   await page.goto(`${backend}/ujian`)
   await expect(page.locator('body')).toContainText(/Ujian/i)
 })
+
+test('form Ujian Online terbaca di desktop dan tetap di dalam layar ponsel', async ({ page }) => {
+  const backend = process.env.E2E_BACKEND_BASE_URL || process.env.E2E_BASE_URL || 'http://127.0.0.1:8080'
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto(`${backend}/ujian`)
+  const mobile = await page.evaluate(() => {
+    const card = document.querySelector('#loginCard')!
+    const button = document.querySelector('#cekBtn')!
+    return {
+      viewportWidth: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      cardLeft: card.getBoundingClientRect().left,
+      cardRight: card.getBoundingClientRect().right,
+      buttonLeft: button.getBoundingClientRect().left,
+      buttonRight: button.getBoundingClientRect().right,
+    }
+  })
+  expect(mobile.documentWidth).toBeLessThanOrEqual(mobile.viewportWidth)
+  expect(mobile.buttonLeft).toBeGreaterThanOrEqual(mobile.cardLeft)
+  expect(mobile.buttonRight).toBeLessThanOrEqual(mobile.cardRight + 1)
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const desktopFormWidth = await page.locator('#loginCard .login-form-panel').evaluate((form) => form.getBoundingClientRect().width)
+  expect(desktopFormWidth).toBeGreaterThanOrEqual(580)
+})
