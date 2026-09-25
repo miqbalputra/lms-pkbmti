@@ -8,6 +8,7 @@
 const PATH_OVERRIDES: Record<string, string> = {
   tutor: '/guru',
   ujian: '/ujian-luring',
+  'bank-soal-ujian': '/bank-soal-ujian',
 }
 
 const REVERSE_OVERRIDES: Record<string, string> = Object.fromEntries(
@@ -72,6 +73,7 @@ export const PAGE_IDS = [
   'nilai-kompetensi',
   'rapor',
   'bank-soal',
+  'bank-soal-ujian',
   'ujian',
   'ujian-online',
   'ujian-monitor',

@@ -14,7 +14,7 @@ import (
 
 func TestGradeUjianPesertaIncludesUnansweredQuestions(t *testing.T) {
 	db := isolatedTestDB(t, "exam-grade-unanswered")
-	if err := db.AutoMigrate(&BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}); err != nil {
+	if err := db.AutoMigrate(&BankSoal{}, &Ujian{}, &UjianBagian{}, &UjianSoal{}, &UjianPeserta{}, &UjianPesertaSoal{}, &UjianJawaban{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,6 +69,11 @@ func TestPublicExamPagesUseCSPCompatibleHandlers(t *testing.T) {
 	if !strings.Contains(ujianOnlineHTML, `data-action="answer"`) || !strings.Contains(ujianOnlineHTML, `data-action="text-answer"`) {
 		t.Fatal("public exam page is missing delegated answer handlers")
 	}
+	for _, marker := range []string{`data-change-action="checkbox-answer"`, `data-change-action="select-answer"`, `s.tipe==='short_answer'`, `s.tipe==='true_false'`} {
+		if !strings.Contains(ujianOnlineHTML, marker) {
+			t.Fatalf("public exam page is missing support for question behavior %q", marker)
+		}
+	}
 	if !strings.Contains(ortuPortalHTML, `data-action="show-tab"`) || !strings.Contains(ortuPortalHTML, `data-action="send-chat"`) {
 		t.Fatal("parent portal is missing delegated interaction handlers")
 	}
@@ -89,7 +94,7 @@ func TestProductionCSPAuthorizesInlinePageStyles(t *testing.T) {
 
 func TestPublicExamSessionCookieAvoidsCredentialQuery(t *testing.T) {
 	db := isolatedTestDB(t, "exam-session-cookie")
-	if err := db.AutoMigrate(&PesertaDidik{}, &Kelas{}, &MataPelajaran{}, &Ujian{}, &UjianPeserta{}, &UjianSoal{}, &UjianJawaban{}, &BankSoal{}); err != nil {
+	if err := db.AutoMigrate(&PesertaDidik{}, &Kelas{}, &MataPelajaran{}, &Ujian{}, &UjianBagian{}, &UjianPeserta{}, &UjianPesertaSoal{}, &UjianSoal{}, &UjianJawaban{}, &UjianJawabanBerkas{}, &BankSoal{}); err != nil {
 		t.Fatal(err)
 	}
 	kelas := Kelas{Jenjang: 1, NamaRombel: "A", PokjarID: "pokjar-1", TahunAjaranID: "ta-1"}
@@ -105,7 +110,7 @@ func TestPublicExamSessionCookieAvoidsCredentialQuery(t *testing.T) {
 	if err := db.Create(&exam).Error; err != nil {
 		t.Fatal(err)
 	}
-	question := BankSoal{MapelID: "", Tipe: "pg", Pertanyaan: "1 + 1?", Opsi: `["2","3"]`, Kunci: "0", Poin: 1}
+	question := BankSoal{MapelID: "", Tipe: "pg", Pertanyaan: "1 + 1?", Opsi: `["2","3"]`, Kunci: "0", Poin: 1, StimulusJSON: `[{"jenis":"text","konten":"Bacaan pengantar","urutan":1},{"jenis":"table","konten":"Nama\tJumlah\nJeruk\t3","urutan":2}]`}
 	if err := db.Create(&question).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +161,9 @@ func TestPublicExamSessionCookieAvoidsCredentialQuery(t *testing.T) {
 	}
 	if strings.Contains(soalBody, `"kunci"`) || strings.Contains(soalBody, `"aksesKode"`) {
 		t.Fatalf("public exam questions leaked secret fields: %s", soalBody)
+	}
+	if !strings.Contains(soalBody, `"jenis":"table"`) || !strings.Contains(soalBody, `"konten":"Bacaan pengantar"`) {
+		t.Fatalf("public exam questions did not include the frozen student-safe stimulus: %s", soalBody)
 	}
 	if !strings.Contains(soalBody, `"ujianSoalId":"`+joinedQuestion.ID+`"`) {
 		t.Fatalf("saved answer was not mapped back to its public UjianSoal id: %s", soalBody)

@@ -36,7 +36,7 @@ export const DialogContent = forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-3 top-3 rounded-sm opacity-70 hover:opacity-100 focus:outline-none sm:right-4 sm:top-4">
+      <DialogPrimitive.Close className="absolute right-3 top-3 grid min-h-11 min-w-11 place-items-center rounded-lg opacity-70 hover:bg-gray-100 hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:right-4 sm:top-4">
         <X className="h-4 w-4" />
         <span className="sr-only">Tutup</span>
       </DialogPrimitive.Close>

@@ -8,7 +8,7 @@ export type FontScale = 'small' | 'medium' | 'large'
 function scalePx(scale: FontScale) { return scale === 'small' ? 15 : scale === 'large' ? 20 : 17 }
 function parseTable(value: string) { return value.split('\n').filter((row) => row.trim() !== '').map((row) => row.split('\t')) }
 
-export function QuestionAnswerControl({ question, questionId, value, onChange, fontScale = 'medium', onFileUpload, onFileRemove, onFileDownload }: {
+export function QuestionAnswerControl({ question, questionId, value, onChange, fontScale = 'medium', onFileUpload, onFileRemove, onFileDownload, token, shareToken }: {
   question: Question
   questionId: string
   value: any
@@ -17,6 +17,8 @@ export function QuestionAnswerControl({ question, questionId, value, onChange, f
   onFileUpload?: (file: File) => Promise<Question>
   onFileRemove?: (id: string) => Promise<void>
   onFileDownload?: (id: string, name: string) => void
+  token?: string
+  shareToken?: string
 }) {
   const config = question.konfigurasi || {}
   const fontSize = `${scalePx(fontScale)}px`
@@ -69,7 +71,7 @@ export function QuestionAnswerControl({ question, questionId, value, onChange, f
   if (question.tipe === 'pg_tunggal') return <div className="grid gap-3" role="radiogroup" aria-labelledby={questionId} style={{ fontSize }}>
     {(config.choices || []).map((choice: Question, index: number) => <label key={choice.id} className={`flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border p-4 transition ${value === choice.id ? 'border-[#2f8cca] bg-[#eff8ff] shadow-sm' : 'border-slate-200 hover:border-[#8bc5e9] hover:bg-slate-50'}`}>
       <input aria-label={choice.text || `Pilihan ${String.fromCharCode(65 + index)}`} className="mt-1 h-5 w-5 shrink-0 accent-[#1d6fa8]" type="radio" name={questionId} checked={value === choice.id} onChange={() => onChange(choice.id)} />
-      <span><strong className="mr-1 text-[#1d6fa8]">{String.fromCharCode(65 + index)}.</strong>{choice.text}</span>
+      <span className="min-w-0 flex-1"><strong className="mr-1 text-[#1d6fa8]">{String.fromCharCode(65 + index)}.</strong>{choice.text}<ChoiceImage choice={choice} token={token} shareToken={shareToken} /></span>
     </label>)}
   </div>
 
@@ -78,12 +80,24 @@ export function QuestionAnswerControl({ question, questionId, value, onChange, f
     return <div className="grid gap-3" role="group" aria-labelledby={questionId} style={{ fontSize }}>
       {(config.choices || []).map((choice: Question, index: number) => <label key={choice.id} className={`flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border p-4 transition ${selected.includes(choice.id) ? 'border-[#2f8cca] bg-[#eff8ff] shadow-sm' : 'border-slate-200 hover:border-[#8bc5e9] hover:bg-slate-50'}`}>
         <input aria-label={choice.text || `Pernyataan ${String.fromCharCode(65 + index)}`} className="mt-1 h-5 w-5 shrink-0 accent-[#1d6fa8]" type="checkbox" checked={selected.includes(choice.id)} onChange={(event) => onChange(event.currentTarget.checked ? [...selected, choice.id] : selected.filter((id) => id !== choice.id))} />
-        <span><strong className="mr-1 text-[#1d6fa8]">{String.fromCharCode(65 + index)}.</strong>{choice.text}</span>
+        <span className="min-w-0 flex-1"><strong className="mr-1 text-[#1d6fa8]">{String.fromCharCode(65 + index)}.</strong>{choice.text}<ChoiceImage choice={choice} token={token} shareToken={shareToken} /></span>
       </label>)}
     </div>
   }
 
-  if (question.tipe === 'dropdown') return <div style={{ fontSize }}><label className="mb-2 block font-medium" htmlFor={`${questionId}-dropdown`}>Pilih satu jawaban</label><select id={`${questionId}-dropdown`} className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f8cca]" value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value)}><option value="">Pilih jawaban…</option>{(config.choices || []).map((choice: Question) => <option key={choice.id} value={choice.id}>{choice.text}</option>)}</select></div>
+  if (question.tipe === 'dropdown') {
+    const choices: Question[] = config.choices || []
+    // Native <option> cannot render images. Keep the compact select for text-only
+    // dropdowns, and switch to accessible radio cards when a teacher adds images.
+    if (choices.some((choice) => choice.imageId)) return <fieldset className="grid gap-3" style={{ fontSize }}>
+      <legend className="mb-2 font-medium">Pilih satu jawaban</legend>
+      {choices.map((choice: Question, index: number) => <label key={choice.id} className={`flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border p-4 transition ${value === choice.id ? 'border-[#2f8cca] bg-[#eff8ff] shadow-sm' : 'border-slate-200 hover:border-[#8bc5e9] hover:bg-slate-50'}`}>
+        <input aria-label={choice.text || `Pilihan ${String.fromCharCode(65 + index)}`} className="mt-1 h-5 w-5 shrink-0 accent-[#1d6fa8]" type="radio" name={questionId} checked={value === choice.id} onChange={() => onChange(choice.id)} />
+        <span className="min-w-0 flex-1"><strong className="mr-1 text-[#1d6fa8]">{String.fromCharCode(65 + index)}.</strong>{choice.text}<ChoiceImage choice={choice} token={token} shareToken={shareToken} /></span>
+      </label>)}
+    </fieldset>
+    return <div style={{ fontSize }}><label className="mb-2 block font-medium" htmlFor={`${questionId}-dropdown`}>Pilih satu jawaban</label><select id={`${questionId}-dropdown`} className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2f8cca]" value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value)}><option value="">Pilih jawaban…</option>{choices.map((choice: Question) => <option key={choice.id} value={choice.id}>{choice.text}</option>)}</select></div>
+  }
 
   if (question.tipe === 'skala_linear' || question.tipe === 'rating') {
     const min = question.tipe === 'rating' ? 1 : Number(config.scaleMin ?? 1)
@@ -140,14 +154,23 @@ export function QuestionAnswerControl({ question, questionId, value, onChange, f
   }
 
   const isEssay = question.tipe === 'uraian'
-  if (isEssay) return <div style={{ fontSize }}><textarea aria-label="Jawaban uraian" className="min-h-36 w-full rounded-xl border border-slate-300 bg-white p-4 leading-relaxed shadow-inner outline-none transition focus:border-[#2f8cca] focus:ring-2 focus:ring-[#2f8cca]/20" value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value)} placeholder="Tuliskan jawabanmu dengan jelas." /><p className="mt-2 text-xs text-muted-foreground">Jawaban uraian akan dinilai guru menggunakan rubrik.</p></div>
+  const textMinLength = Number(config.textMinLength || 0)
+  const textMaxLength = Number(config.textMaxLength || 0)
+  const textValue = typeof value === 'string' ? value : ''
+  const defaultValidationHint = textMinLength && textMaxLength
+    ? `Jawaban ${textMinLength}–${textMaxLength} karakter.`
+    : textMinLength ? `Jawaban minimal ${textMinLength} karakter.`
+      : textMaxLength ? `Jawaban maksimal ${textMaxLength} karakter.` : ''
+  const validationHint = [defaultValidationHint, String(config.validationMessage || '').trim()].filter(Boolean).join(' ')
+  if (isEssay) return <div style={{ fontSize }}><textarea aria-label="Jawaban uraian" aria-describedby={`${questionId}-text-help`} maxLength={textMaxLength || undefined} className="min-h-36 w-full rounded-xl border border-slate-300 bg-white p-4 leading-relaxed shadow-inner outline-none transition focus:border-[#2f8cca] focus:ring-2 focus:ring-[#2f8cca]/20" value={textValue} onChange={(event) => onChange(event.target.value)} placeholder="Tuliskan jawabanmu dengan jelas." /><p id={`${questionId}-text-help`} className="mt-2 text-xs text-muted-foreground">{['Jawaban uraian akan dinilai guru menggunakan rubrik.', validationHint].filter(Boolean).join(' ')}</p>{textMaxLength > 0 && <p className="text-right text-xs text-muted-foreground">{Array.from(textValue).length}/{textMaxLength} karakter</p>}</div>
 
   const inputType = question.tipe === 'tanggal' ? 'date' : question.tipe === 'waktu' ? 'time' : 'text'
   const inputLabel = question.tipe === 'tanggal' ? 'Tanggal' : question.tipe === 'waktu' ? 'Waktu' : 'Jawaban singkat'
-  return <div style={{ fontSize }}><label htmlFor={`${questionId}-answer`} className="mb-2 block font-medium">{inputLabel}</label><input id={`${questionId}-answer`} aria-label={inputLabel} className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 shadow-inner outline-none transition focus:border-[#2f8cca] focus:ring-2 focus:ring-[#2f8cca]/20" type={inputType} value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value)} placeholder={inputType === 'text' ? 'Ketik jawaban singkatmu.' : undefined} /><p className="mt-2 text-xs text-muted-foreground">{inputType === 'text' ? 'Periksa kembali ejaan dan angka jawabanmu.' : 'Pilih jawaban menggunakan kontrol yang tersedia.'}</p></div>
+  const isShortText = question.tipe === 'isian_singkat'
+  return <div style={{ fontSize }}><label htmlFor={`${questionId}-answer`} className="mb-2 block font-medium">{inputLabel}</label><input id={`${questionId}-answer`} aria-label={inputLabel} aria-describedby={`${questionId}-text-help`} maxLength={isShortText && textMaxLength > 0 ? textMaxLength : undefined} className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 shadow-inner outline-none transition focus:border-[#2f8cca] focus:ring-2 focus:ring-[#2f8cca]/20" type={inputType} value={textValue} onChange={(event) => onChange(event.target.value)} placeholder={inputType === 'text' ? 'Ketik jawaban singkatmu.' : undefined} /><p id={`${questionId}-text-help`} className="mt-2 text-xs text-muted-foreground">{inputType === 'text' && validationHint ? validationHint : inputType === 'text' ? 'Periksa kembali ejaan dan angka jawabanmu.' : 'Pilih jawaban menggunakan kontrol yang tersedia.'}</p>{isShortText && textMaxLength > 0 && <p className="text-right text-xs text-muted-foreground">{Array.from(textValue).length}/{textMaxLength} karakter</p>}</div>
 }
 
-function StimulusImage({ id, alt, token, shareToken }: { id: string; alt: string; token: string; shareToken?: string }) {
+export function StimulusImage({ id, alt, token, shareToken }: { id: string; alt: string; token: string; shareToken?: string }) {
   const [url, setUrl] = useState('')
   const [failed, setFailed] = useState(false)
   useEffect(() => {
@@ -179,4 +202,11 @@ export function StimulusContent({ items, token, shareToken, emptyLabel, compact 
         : item.jenis === 'media_link' ? <a className="flex min-h-11 items-center gap-2 rounded-xl border border-[#2f8cca]/25 bg-[#eff8ff] px-3 py-3 font-medium text-[#1d6fa8] underline-offset-2 hover:underline" href={item.konten} target="_blank" rel="noopener noreferrer" aria-label="Buka media pendukung di tab baru"><Link2 className="h-4 w-4 shrink-0" />Buka media pendukung di tab baru</a>
           : <p className="whitespace-pre-wrap leading-relaxed">{item.konten}</p>}
   </div>)}</div>
+}
+
+function ChoiceImage({ choice, token, shareToken }: { choice: Question; token?: string; shareToken?: string }) {
+  const imageId = String(choice.imageId || '')
+  if (!imageId) return null
+  if (!token) return <p className="mt-2 text-xs text-slate-500">Gambar pilihan: {choice.imageAltText || choice.text || 'tersedia saat pengerjaan'}</p>
+  return <div className="mt-3 max-w-sm"><StimulusImage id={imageId} alt={choice.imageAltText || choice.text || 'Gambar pilihan jawaban'} token={token} shareToken={shareToken} /></div>
 }

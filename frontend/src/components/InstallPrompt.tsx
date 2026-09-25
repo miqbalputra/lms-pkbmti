@@ -1,13 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download } from 'lucide-react'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog'
+import { Download, X } from 'lucide-react'
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>
@@ -32,7 +24,7 @@ function persistDismissedAt(dismissedAt: number) {
   try {
     window.localStorage.setItem(DISMISSED_AT_KEY, String(dismissedAt))
   } catch {
-    // Some privacy modes can block localStorage. The popup still works for the current visit.
+    // Some privacy modes can block localStorage. The reminder still works for this visit.
   }
 }
 
@@ -51,6 +43,7 @@ export function InstallPrompt() {
   const [installed, setInstalled] = useState(() => isStandalone())
   const [dismissedAt, setDismissedAt] = useState(() => getStoredDismissedAt())
   const popupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suppressedRef = useRef(false)
 
   useEffect(() => {
     const clearPopupTimer = () => {
@@ -66,6 +59,7 @@ export function InstallPrompt() {
         setInstalled(true)
         return
       }
+      if (suppressedRef.current) return
 
       const elapsed = Date.now() - dismissedAt
       const wait = elapsed >= REMINDER_INTERVAL
@@ -74,8 +68,20 @@ export function InstallPrompt() {
 
       popupTimer.current = setTimeout(() => {
         popupTimer.current = null
-        if (!isStandalone()) setShowPopup(true)
+        if (!isStandalone() && !suppressedRef.current) setShowPopup(true)
       }, wait)
+    }
+
+    const syncSuppression = () => {
+      const shouldSuppress = Boolean(document.querySelector('[data-assessment-workspace]'))
+      if (shouldSuppress === suppressedRef.current) return
+      suppressedRef.current = shouldSuppress
+      if (shouldSuppress) {
+        clearPopupTimer()
+        setShowPopup(false)
+      } else {
+        schedulePopup()
+      }
     }
 
     const handleBeforeInstallPrompt = (event: Event) => {
@@ -91,7 +97,6 @@ export function InstallPrompt() {
     }
 
     try {
-      // The old prompt used permanent dismissal. Its value must not suppress the new 3-hour reminder.
       window.localStorage.removeItem(LEGACY_DISMISSED_KEY)
     } catch {
       // Continue when browser storage is unavailable.
@@ -99,10 +104,14 @@ export function InstallPrompt() {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
     window.addEventListener('appinstalled', handleAppInstalled)
+    const workspaceObserver = new MutationObserver(syncSuppression)
+    workspaceObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-assessment-workspace'] })
+    syncSuppression()
     schedulePopup()
 
     return () => {
       clearPopupTimer()
+      workspaceObserver.disconnect()
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
       window.removeEventListener('appinstalled', handleAppInstalled)
     }
@@ -127,73 +136,43 @@ export function InstallPrompt() {
       const { outcome } = await prompt.userChoice
       if (outcome === 'accepted') setInstalled(true)
     } catch {
-      // The reminder has already been scheduled by the dismissal timestamp.
+      // The reminder is rescheduled from the dismissal timestamp.
     }
   }
 
-  if (installed) return null
+  if (installed || !showPopup) return null
 
-  const ios = isIOS()
-  const canUseNativePrompt = Boolean(deferredPrompt)
-  const instruction = ios
-    ? 'Di Safari, ketuk tombol Bagikan lalu pilih “Tambah ke Layar Utama”.'
+  const instruction = isIOS()
+    ? 'Di Safari, ketuk Bagikan lalu pilih “Tambah ke Layar Utama”.'
     : 'Gunakan menu browser lalu pilih “Install aplikasi” atau “Tambahkan ke layar utama”.'
 
   return (
-    <Dialog open={showPopup} onOpenChange={(open) => (open ? setShowPopup(true) : dismiss())}>
-      <DialogContent className="max-w-[26rem] gap-0 overflow-hidden border-0 p-0 shadow-2xl [&>button]:right-4 [&>button]:top-4 [&>button]:z-10 [&>button]:rounded-full [&>button]:p-1.5 [&>button]:text-slate-500 [&>button]:transition-colors [&>button]:hover:bg-slate-100 [&>button]:hover:text-slate-900 dark:[&>button]:hover:bg-slate-800 dark:[&>button]:hover:text-white">
-        <div className="relative overflow-hidden px-6 pb-6 pt-8 sm:px-8 sm:pt-9">
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-blue-50 to-transparent dark:from-blue-950/40" />
-          <DialogHeader className="relative items-center space-y-3 text-center">
-            <div className="rounded-[1.4rem] bg-white p-2.5 shadow-lg shadow-blue-900/10 ring-1 ring-blue-100 dark:bg-slate-950 dark:ring-blue-900/70">
-              <img src="/pkbmti-lms-book-192.png" alt="PKBMTI LMS" className="h-14 w-14 rounded-2xl" />
-            </div>
-            <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.13em] text-[#0B63CE] dark:bg-blue-950/50 dark:text-blue-200">
-              PKBM Tunas Ilmu
-            </span>
-            <DialogTitle className="pr-6 text-center text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Install PKBMTI LMS
-            </DialogTitle>
-            <DialogDescription className="max-w-[21rem] text-center text-[15px] leading-6 text-slate-500 dark:text-slate-400">
-              Akses lebih cepat langsung dari layar utama perangkat Anda.
-            </DialogDescription>
-          </DialogHeader>
-
-          {!canUseNativePrompt && (
-            <p className="relative mt-5 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-left text-sm leading-6 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-100">
-              {instruction}
-            </p>
-          )}
+    <aside
+      aria-label="Instal aplikasi PKBM Tunas Ilmu"
+      aria-live="polite"
+      className="pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[100] flex justify-center sm:inset-x-auto sm:right-5 sm:w-[min(25rem,calc(100vw-2rem))] sm:justify-end"
+    >
+      <section className="pointer-events-auto w-full max-w-md rounded-2xl border border-blue-100 bg-white p-4 shadow-[0_18px_55px_rgba(15,23,42,.2)] ring-1 ring-black/5 dark:border-slate-700 dark:bg-slate-900 dark:ring-white/10">
+        <div className="flex items-start gap-3">
+          <img src="/pkbmti-lms-book-192.png" alt="" className="h-11 w-11 shrink-0 rounded-xl ring-1 ring-blue-100 dark:ring-slate-700" />
+          <div className="min-w-0 flex-1 pr-1">
+            <h2 className="font-semibold text-slate-900 dark:text-white">Install PKBMTI LMS</h2>
+            <p className="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-300">Akses lebih cepat langsung dari layar utama perangkat Anda.</p>
+            {!deferredPrompt && <p className="mt-2 rounded-lg bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-900 dark:bg-blue-950/50 dark:text-blue-100">{instruction}</p>}
+          </div>
+          <button type="button" onClick={dismiss} aria-label="Tutup ajakan instal aplikasi" className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 dark:hover:bg-slate-800">
+            <X className="h-4 w-4" />
+          </button>
         </div>
-
-        <DialogFooter className="border-t border-slate-100 bg-slate-50 px-6 py-4 sm:flex-row sm:space-x-0 sm:px-8 dark:border-slate-800 dark:bg-slate-900/70">
-          <button
-            type="button"
-            onClick={dismiss}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-          >
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={dismiss} className="min-h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
             Nanti saja
           </button>
-          {canUseNativePrompt ? (
-            <button
-              type="button"
-              onClick={() => void handleInstall()}
-              className="flex items-center justify-center gap-2 rounded-xl bg-[#0B63CE] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-[#0754B4] hover:shadow-blue-600/30"
-            >
-              <Download className="h-4 w-4" />
-              Install sekarang
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={dismiss}
-              className="rounded-xl bg-[#0B63CE] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-[#0754B4] hover:shadow-blue-600/30"
-            >
-              Saya mengerti
-            </button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          {deferredPrompt && <button type="button" onClick={() => void handleInstall()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#0B63CE] px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#0754B4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2">
+            <Download className="h-4 w-4" />Install sekarang
+          </button>}
+        </div>
+      </section>
+    </aside>
   )
 }

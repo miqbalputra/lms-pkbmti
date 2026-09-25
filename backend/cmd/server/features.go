@@ -1,10 +1,17 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
+	"math/rand"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +20,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ============================================================================
@@ -28,6 +36,320 @@ const (
 	examSessionCookie = "exam_session"
 	examSessionTTL    = 12 * time.Hour
 )
+
+type ujianQuestionSnapshot struct {
+	Tipe        string               `json:"tipe"`
+	Pertanyaan  string               `json:"pertanyaan"`
+	Opsi        string               `json:"opsi"`
+	Kunci       string               `json:"kunci"`
+	Konfigurasi simulasiConfig       `json:"konfigurasi,omitempty"`
+	Stimulus    []simulasiStimulusIn `json:"stimulus,omitempty"`
+	Metadata    map[string]string    `json:"metadata,omitempty"`
+}
+
+// publicUjianQuestionConfig is an allowlist: answer keys, accepted answers,
+// rubrics, and scoring maps can never be serialized to the exam-taking client.
+type publicUjianQuestionConfig struct {
+	Choices           []simulasiChoice       `json:"choices,omitempty"`
+	Statements        []publicUjianStatement `json:"statements,omitempty"`
+	Left              []simulasiChoice       `json:"left,omitempty"`
+	Right             []simulasiChoice       `json:"right,omitempty"`
+	Rows              []simulasiGridRow      `json:"rows,omitempty"`
+	Columns           []simulasiChoice       `json:"columns,omitempty"`
+	ScaleMin          int                    `json:"scaleMin,omitempty"`
+	ScaleMax          int                    `json:"scaleMax,omitempty"`
+	ScaleMinLabel     string                 `json:"scaleMinLabel,omitempty"`
+	ScaleMaxLabel     string                 `json:"scaleMaxLabel,omitempty"`
+	RatingMax         int                    `json:"ratingMax,omitempty"`
+	AllowedFileTypes  []string               `json:"allowedFileTypes,omitempty"`
+	MaxFiles          int                    `json:"maxFiles,omitempty"`
+	MaxFileSizeMB     int                    `json:"maxFileSizeMB,omitempty"`
+	TextMinLength     int                    `json:"textMinLength,omitempty"`
+	TextMaxLength     int                    `json:"textMaxLength,omitempty"`
+	ValidationMessage string                 `json:"validationMessage,omitempty"`
+}
+
+type publicUjianStatement struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+func studentSafeUjianConfig(config simulasiConfig) publicUjianQuestionConfig {
+	statements := make([]publicUjianStatement, 0, len(config.Statements))
+	for _, row := range config.Statements {
+		statements = append(statements, publicUjianStatement{ID: row.ID, Text: row.Text})
+	}
+	return publicUjianQuestionConfig{
+		Choices: config.Choices, Statements: statements, Left: config.Left, Right: config.Right,
+		Rows: config.Rows, Columns: config.Columns, ScaleMin: config.ScaleMin, ScaleMax: config.ScaleMax,
+		ScaleMinLabel: config.ScaleMinLabel, ScaleMaxLabel: config.ScaleMaxLabel, RatingMax: config.RatingMax,
+		AllowedFileTypes: config.AllowedFileTypes, MaxFiles: config.MaxFiles, MaxFileSizeMB: config.MaxFileSizeMB,
+		TextMinLength: config.TextMinLength, TextMaxLength: config.TextMaxLength, ValidationMessage: config.ValidationMessage,
+	}
+}
+
+func hasUjianVisualConfig(config simulasiConfig) bool {
+	return len(config.Choices) > 0 || len(config.Statements) > 0 || len(config.Left) > 0 ||
+		len(config.Right) > 0 || len(config.Pairs) > 0 || len(config.AcceptedAnswers) > 0 ||
+		len(config.Rubrik) > 0 || len(config.Rows) > 0 || len(config.Columns) > 0 ||
+		len(config.GridCorrect) > 0 || len(config.GridMultiCorrect) > 0 || len(config.CorrectOrder) > 0 ||
+		config.CorrectNumber != nil || len(config.AllowedFileTypes) > 0 || config.TextMinLength > 0 ||
+		config.TextMaxLength > 0 || strings.TrimSpace(config.ValidationMessage) != ""
+}
+
+func ensureUjianAttemptQuestionsTx(tx *gorm.DB, up *UjianPeserta, uj *Ujian) ([]UjianPesertaSoal, error) {
+	return loadUjianAttemptQuestionsTx(tx, up, uj, true)
+}
+
+func orderUjianQuestions(source []UjianSoal, sections []UjianBagian, seedKey string, shuffle bool) []UjianSoal {
+	sectionOrder := make(map[string]int, len(sections))
+	for index, section := range sections {
+		sectionOrder[section.ClientID] = index
+	}
+	if len(sections) == 0 {
+		if shuffle {
+			random := rand.New(rand.NewSource(seedFromID(seedKey)))
+			random.Shuffle(len(source), func(i, j int) { source[i], source[j] = source[j], source[i] })
+		}
+		return source
+	}
+	sectionKey := func(sectionID string) int {
+		if order, ok := sectionOrder[sectionID]; ok {
+			return order
+		}
+		return len(sections)
+	}
+	sort.SliceStable(source, func(i, j int) bool {
+		left, right := sectionKey(source[i].BagianID), sectionKey(source[j].BagianID)
+		if left != right {
+			return left < right
+		}
+		return source[i].Urutan < source[j].Urutan
+	})
+	if shuffle {
+		for start := 0; start < len(source); {
+			end := start + 1
+			for end < len(source) && sectionKey(source[end].BagianID) == sectionKey(source[start].BagianID) {
+				end++
+			}
+			sectionSeedID := source[start].BagianID
+			if sectionSeedID == "" {
+				sectionSeedID = "unassigned"
+			}
+			random := rand.New(rand.NewSource(seedFromID(seedKey + ":section:" + sectionSeedID)))
+			random.Shuffle(end-start, func(i, j int) { source[start+i], source[start+j] = source[start+j], source[start+i] })
+			start = end
+		}
+	}
+	return source
+}
+
+func loadUjianAttemptQuestionsTx(tx *gorm.DB, up *UjianPeserta, uj *Ujian, persist bool) ([]UjianPesertaSoal, error) {
+	if persist {
+		var current UjianPeserta
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ? AND ujian_id = ?", up.ID, uj.ID).Error; err != nil {
+			return nil, err
+		}
+	}
+	var snapshots []UjianPesertaSoal
+	if err := tx.Where("ujian_peserta_id = ?", up.ID).Order("urutan asc").Find(&snapshots).Error; err != nil {
+		return nil, err
+	}
+	if len(snapshots) > 0 {
+		return snapshots, nil
+	}
+	var source []UjianSoal
+	if err := tx.Preload("Soal").Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&source).Error; err != nil {
+		return nil, err
+	}
+	var sections []UjianBagian
+	if err := tx.Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&sections).Error; err != nil {
+		return nil, err
+	}
+	if err := validateUjianBranchAssignments(source, sections); err != nil {
+		return nil, err
+	}
+	sectionByID := make(map[string]UjianBagian, len(sections))
+	for _, section := range sections {
+		sectionByID[section.ClientID] = section
+	}
+	// Sectioned exams keep their authored section order while shuffling only
+	// questions within each section. Legacy exams retain the original shuffle.
+	source = orderUjianQuestions(source, sections, up.ID, uj.AcakSoal)
+	snapshots = make([]UjianPesertaSoal, 0, len(source))
+	for index, item := range source {
+		var config simulasiConfig
+		if strings.TrimSpace(item.Soal.Konfigurasi) != "" {
+			if err := json.Unmarshal([]byte(item.Soal.Konfigurasi), &config); err != nil {
+				return nil, errors.New("konfigurasi soal tidak valid")
+			}
+		}
+		if strings.TrimSpace(item.BranchToByAnswerJSON) != "" {
+			if err := json.Unmarshal([]byte(item.BranchToByAnswerJSON), &config.BranchToByAnswer); err != nil {
+				return nil, errors.New("aturan alur soal tidak valid")
+			}
+		}
+		stimulus, err := decodeBankSoalStimulus(item.Soal.StimulusJSON)
+		if err != nil {
+			return nil, err
+		}
+		metadata := map[string]string{}
+		for key, value := range map[string]string{"domain": item.Soal.Domain, "topik": item.Soal.Topik, "kompetensi": item.Soal.Kompetensi, "levelKognitif": item.Soal.LevelKognitif} {
+			if value = strings.TrimSpace(value); value != "" {
+				metadata[key] = value
+			}
+		}
+		snapshot, err := json.Marshal(ujianQuestionSnapshot{Tipe: item.Soal.Tipe, Pertanyaan: item.Soal.Pertanyaan, Opsi: item.Soal.Opsi, Kunci: item.Soal.Kunci, Konfigurasi: config, Stimulus: stimulus, Metadata: metadata})
+		if err != nil {
+			return nil, err
+		}
+		frozenSection := sectionByID[item.BagianID]
+		snapshots = append(snapshots, UjianPesertaSoal{
+			UjianPesertaID: up.ID, UjianSoalID: item.ID, SoalID: item.SoalID,
+			Urutan: index + 1, BagianID: item.BagianID, NamaBagian: frozenSection.Nama,
+			DeskripsiBagian: frozenSection.Deskripsi, UrutanBagian: frozenSection.Urutan,
+			Bobot: item.Bobot, SnapshotJSON: string(snapshot),
+		})
+	}
+	if len(snapshots) == 0 || !persist {
+		return snapshots, nil
+	}
+	if err := tx.Create(&snapshots).Error; err != nil {
+		if !isUniqueErr(err) {
+			return nil, err
+		}
+		if err := tx.Where("ujian_peserta_id = ?", up.ID).Order("urutan asc").Find(&snapshots).Error; err != nil {
+			return nil, err
+		}
+	}
+	return snapshots, nil
+}
+
+func loadUjianQuestionSnapshot(raw string) (ujianQuestionSnapshot, error) {
+	var snapshot ujianQuestionSnapshot
+	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil || snapshot.Tipe == "" {
+		return snapshot, errors.New("snapshot soal ujian tidak valid")
+	}
+	return snapshot, nil
+}
+
+// activeUjianQuestionIDs evaluates the frozen section route using only the
+// learner's saved answers. It returns UjianSoal IDs, never source-bank IDs.
+// A branch question with no answer holds later sections until the learner
+// answers it; forward-only routes guarantee that the evaluation terminates.
+func activeUjianQuestionIDs(questions []UjianPesertaSoal, answers []UjianJawaban) (map[string]bool, error) {
+	active := make(map[string]bool, len(questions))
+	answerBySourceID := make(map[string]string, len(answers))
+	for _, answer := range answers {
+		answerBySourceID[answer.SoalID] = answer.Jawaban
+	}
+	type sectionQuestions struct {
+		id    string
+		rank  int
+		items []UjianPesertaSoal
+	}
+	groupsByID := make(map[string]*sectionQuestions)
+	for _, item := range questions {
+		group := groupsByID[item.BagianID]
+		if group == nil {
+			group = &sectionQuestions{id: item.BagianID, rank: item.UrutanBagian}
+			if item.BagianID == "" {
+				group.rank = int(^uint(0) >> 1)
+			}
+			groupsByID[item.BagianID] = group
+		}
+		group.items = append(group.items, item)
+	}
+	groups := make([]sectionQuestions, 0, len(groupsByID))
+	for _, group := range groupsByID {
+		sort.SliceStable(group.items, func(i, j int) bool { return group.items[i].Urutan < group.items[j].Urutan })
+		groups = append(groups, *group)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].rank != groups[j].rank {
+			return groups[i].rank < groups[j].rank
+		}
+		return groups[i].id < groups[j].id
+	})
+	if len(groups) == 0 {
+		return active, nil
+	}
+	groupIndex := make(map[string]int, len(groups))
+	for index, group := range groups {
+		groupIndex[group.id] = index
+	}
+	for index := 0; index < len(groups); {
+		group := groups[index]
+		for _, item := range group.items {
+			active[item.UjianSoalID] = true
+		}
+		branchQuestion := UjianPesertaSoal{}
+		branchSnapshot := ujianQuestionSnapshot{}
+		for _, item := range group.items {
+			snapshot, err := loadUjianQuestionSnapshot(item.SnapshotJSON)
+			if err != nil {
+				return nil, err
+			}
+			if len(snapshot.Konfigurasi.BranchToByAnswer) > 0 {
+				if branchQuestion.UjianSoalID != "" {
+					return nil, errors.New("lebih dari satu soal pengatur alur dalam satu bagian")
+				}
+				branchQuestion, branchSnapshot = item, snapshot
+			}
+		}
+		if branchQuestion.UjianSoalID == "" {
+			index++
+			continue
+		}
+		rawAnswer := strings.TrimSpace(answerBySourceID[branchQuestion.SoalID])
+		if rawAnswer == "" || rawAnswer == "null" {
+			break
+		}
+		var answerID string
+		if err := json.Unmarshal([]byte(rawAnswer), &answerID); err != nil {
+			break
+		}
+		target, routed := branchSnapshot.Konfigurasi.BranchToByAnswer[answerID]
+		if !routed {
+			index++
+			continue
+		}
+		if target == simulasiBranchFinish {
+			break
+		}
+		next, exists := groupIndex[target]
+		if !exists || next <= index {
+			return nil, errors.New("tujuan alur bagian tidak valid")
+		}
+		index = next
+	}
+	return active, nil
+}
+
+func activeUjianAttemptQuestions(tx *gorm.DB, up *UjianPeserta, uj *Ujian) ([]UjianPesertaSoal, []UjianJawaban, map[string]bool, error) {
+	questions, err := ensureUjianAttemptQuestionsTx(tx, up, uj)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var answers []UjianJawaban
+	if err := tx.Where("ujian_peserta_id = ?", up.ID).Find(&answers).Error; err != nil {
+		return nil, nil, nil, err
+	}
+	active, err := activeUjianQuestionIDs(questions, answers)
+	return questions, answers, active, err
+}
+
+func (s *Server) loadActiveUjianAttemptQuestions(up *UjianPeserta, uj *Ujian) ([]UjianPesertaSoal, []UjianJawaban, map[string]bool, error) {
+	var questions []UjianPesertaSoal
+	var answers []UjianJawaban
+	var active map[string]bool
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		questions, answers, active, err = activeUjianAttemptQuestions(tx, up, uj)
+		return err
+	})
+	return questions, answers, active, err
+}
 
 // Public exam responses use allowlisted DTOs rather than serializing database
 // models. Ujian contains the shared access code, while the persistence models
@@ -54,10 +376,17 @@ type publicExamItem struct {
 	DurasiMenit      int             `json:"durasiMenit"`
 	GracePeriodMenit int             `json:"gracePeriodMenit"`
 	AcakSoal         bool            `json:"acakSoal"`
+	BolehEditRespons bool            `json:"bolehEditRespons"`
 	Mapel            publicExamMapel `json:"mapel"`
 	SudahMengerjakan bool            `json:"sudahMengerjakan"`
 	Status           string          `json:"status"`
 	Skor             *float64        `json:"skor"`
+}
+
+type publicExamAnswerFile struct {
+	ID       string `json:"id"`
+	NamaFile string `json:"namaFile"`
+	Ukuran   int64  `json:"ukuran"`
 }
 
 type publicParentExamResult struct {
@@ -85,6 +414,7 @@ type examMonitorItem struct {
 	Skor           *float64           `json:"skor"`
 	Status         string             `json:"status"`
 	TabSwitch      int                `json:"tabSwitch"`
+	UraianMenunggu int                `json:"uraianMenunggu"`
 	PesertaDidik   examMonitorStudent `json:"pesertaDidik"`
 }
 
@@ -507,12 +837,14 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 			ID: uj.ID, Judul: uj.Judul, WaktuMulai: uj.WaktuMulai,
 			WaktuSelesai: uj.WaktuSelesai, DurasiMenit: uj.DurasiMenit,
 			GracePeriodMenit: uj.GracePeriodMenit, AcakSoal: uj.AcakSoal,
-			Mapel: publicExamMapel{ID: uj.Mapel.ID, NamaMapel: uj.Mapel.NamaMapel, KodeMapel: uj.Mapel.KodeMapel},
+			BolehEditRespons: false,
+			Mapel:            publicExamMapel{ID: uj.Mapel.ID, NamaMapel: uj.Mapel.NamaMapel, KodeMapel: uj.Mapel.KodeMapel},
 		}
 		if up, ok := sessionByExam[uj.ID]; ok {
 			r.SudahMengerjakan = true
 			r.Status = up.Status
 			r.Skor = up.Skor
+			r.BolehEditRespons = ujianResponseEditAllowed(up, uj, time.Now())
 		}
 		res = append(res, r)
 	}
@@ -530,6 +862,14 @@ func (s *Server) mulaiUjianOnline(c *fiber.Ctx) error {
 	var up UjianPeserta
 	findErr := s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error
 	if findErr == nil {
+		if up.Status == "mulai" {
+			if err := s.db.Transaction(func(tx *gorm.DB) error {
+				_, err := ensureUjianAttemptQuestionsTx(tx, &up, uj)
+				return err
+			}); err != nil {
+				return fiber.NewError(500, "Gagal membekukan soal ujian")
+			}
+		}
 		return c.JSON(up)
 	}
 	if !errors.Is(findErr, gorm.ErrRecordNotFound) {
@@ -537,20 +877,32 @@ func (s *Server) mulaiUjianOnline(c *fiber.Ctx) error {
 	}
 	now := time.Now()
 	up = UjianPeserta{
-		UjianID:        uj.ID,
-		PesertaDidikID: pd.ID,
-		Mulai:          &now,
-		Status:         "mulai",
+		UjianID:          uj.ID,
+		PesertaDidikID:   pd.ID,
+		KelasIDSaatUjian: pd.KelasID,
+		Mulai:            &now,
+		Status:           "mulai",
 	}
 	if e := s.db.Create(&up).Error; e != nil {
 		// Two tabs can submit "Mulai" at the same time. The unique index is the
 		// source of truth; return the winner's session instead of a 500.
 		if isUniqueErr(e) {
 			if lookupErr := s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error; lookupErr == nil {
+				if up.Status == "mulai" {
+					if snapshotErr := s.db.Transaction(func(tx *gorm.DB) error { _, err := ensureUjianAttemptQuestionsTx(tx, &up, uj); return err }); snapshotErr != nil {
+						return fiber.NewError(500, "Gagal membekukan soal ujian")
+					}
+				}
 				return c.JSON(up)
 			}
 		}
 		return fiber.NewError(500, "Gagal memulai ujian: "+e.Error())
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		_, err := ensureUjianAttemptQuestionsTx(tx, &up, uj)
+		return err
+	}); err != nil {
+		return fiber.NewError(500, "Gagal membekukan soal ujian")
 	}
 	return c.Status(201).JSON(up)
 }
@@ -572,7 +924,7 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 			return fiber.NewError(500, "Gagal memuat sesi ujian")
 		}
 		now := time.Now()
-		up = UjianPeserta{UjianID: uj.ID, PesertaDidikID: pd.ID, Mulai: &now, Status: "mulai"}
+		up = UjianPeserta{UjianID: uj.ID, PesertaDidikID: pd.ID, KelasIDSaatUjian: pd.KelasID, Mulai: &now, Status: "mulai"}
 		if createErr := s.db.Create(&up).Error; createErr != nil && !isUniqueErr(createErr) {
 			return fiber.NewError(500, "Gagal membuat sesi ujian")
 		}
@@ -582,107 +934,147 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 			}
 		}
 	}
-	if up.Status == "selesai" || up.Status == "dikunci" {
+	if up.Status == "dikunci" || ((up.Status == "selesai" || up.Status == "menunggu_nilai") && !ujianResponseEditAllowed(up, *uj, time.Now())) {
 		return fiber.NewError(403, "Anda sudah menyelesaikan ujian ini")
 	}
-	// Check if time is up (beyond grace period)
-	if up.Mulai != nil && uj.DurasiMenit > 0 {
+	// Check if time is up (beyond grace period) only while the attempt is live.
+	if up.Status == "mulai" && up.Mulai != nil && uj.DurasiMenit > 0 {
 		if time.Now().After(batasGrace(&up, uj)) {
 			// Hard lock: grace period expired
-			up.Status = "selesai"
 			now := time.Now()
-			up.Selesai = &now
-			grade, gradeErr := s.gradeUjianPesertaResult(&up, uj)
-			if gradeErr != nil {
+			if _, finishErr := s.finishUjianAttempt(&up, uj, now, false, true, nil); finishErr != nil {
 				return fiber.NewError(500, "Gagal menghitung nilai ujian")
-			}
-			up.Skor = &grade.Score
-			if saveErr := s.db.Model(&UjianPeserta{}).Where("id = ?", up.ID).Updates(map[string]interface{}{
-				"status": "selesai", "selesai": now, "skor": grade.Score,
-			}).Error; saveErr != nil {
-				return fiber.NewError(500, "Gagal menyimpan hasil ujian")
 			}
 			return fiber.NewError(403, "Waktu ujian sudah habis")
 		}
 	}
-	var us []UjianSoal
-	if err := s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Order("created_at").Find(&us).Error; err != nil {
-		return fiber.NewError(500, "Gagal memuat soal ujian")
+	var order []UjianPesertaSoal
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var snapshotErr error
+		order, snapshotErr = ensureUjianAttemptQuestionsTx(tx, &up, uj)
+		return snapshotErr
+	}); err != nil {
+		return fiber.NewError(500, "Gagal memuat snapshot soal ujian")
 	}
-	// Shuffle if AcakSoal
-	order := us
-	if uj.AcakSoal {
-		seed := seedFromID(uj.ID)
-		cp := make([]UjianSoal, len(us))
-		copy(cp, us)
-		r := make([]int, len(us))
-		for i := range r {
-			r[i] = i
-		}
-		// deterministic shuffle
-		for i := len(r) - 1; i > 0; i-- {
-			seed = (seed*1103515245 + 12345) & 0x7fffffff
-			j := int(seed) % (i + 1)
-			r[i], r[j] = r[j], r[i]
-		}
-		shuffled := make([]UjianSoal, len(us))
-		for i, idx := range r {
-			shuffled[i] = cp[idx]
-		}
-		order = shuffled
+	var jawabans []UjianJawaban
+	if err := s.db.Where("ujian_peserta_id = ?", up.ID).Find(&jawabans).Error; err != nil {
+		return fiber.NewError(500, "Gagal memuat jawaban ujian")
+	}
+	activeQuestions, err := activeUjianQuestionIDs(order, jawabans)
+	if err != nil {
+		return fiber.NewError(500, "Alur bagian ujian tidak valid")
 	}
 	// Build response: strip answers
 	type soalRes struct {
-		ID         string   `json:"id"`
-		UjianID    string   `json:"ujianId"`
-		Bobot      float64  `json:"bobot"`
-		Pertanyaan string   `json:"pertanyaan"`
-		Tipe       string   `json:"tipe"`
-		Opsi       []string `json:"opsi"`
+		ID              string                     `json:"id"`
+		UjianID         string                     `json:"ujianId"`
+		Bobot           float64                    `json:"bobot"`
+		Pertanyaan      string                     `json:"pertanyaan"`
+		Tipe            string                     `json:"tipe"`
+		Opsi            []string                   `json:"opsi"`
+		OpsiIndex       []int                      `json:"opsiIndex,omitempty"`
+		Konfigurasi     *publicUjianQuestionConfig `json:"konfigurasi,omitempty"`
+		Stimulus        []simulasiStimulusIn       `json:"stimulus,omitempty"`
+		BagianID        string                     `json:"bagianId,omitempty"`
+		NamaBagian      string                     `json:"namaBagian,omitempty"`
+		DeskripsiBagian string                     `json:"deskripsiBagian,omitempty"`
+		UrutanBagian    int                        `json:"urutanBagian,omitempty"`
+		HasBranching    bool                       `json:"hasBranching,omitempty"`
 		// Benar/Kunci are intentionally excluded
 	}
 	var res []soalRes
 	for _, item := range order {
-		r := soalRes{
-			ID:         item.ID,
-			UjianID:    item.UjianID,
-			Bobot:      item.Bobot,
-			Pertanyaan: item.Soal.Pertanyaan,
-			Tipe:       item.Soal.Tipe,
+		if !activeQuestions[item.UjianSoalID] {
+			continue
 		}
-		if item.Soal.Tipe == "pg" && item.Soal.Opsi != "" {
-			var opsi []string
-			if json.Unmarshal([]byte(item.Soal.Opsi), &opsi) == nil {
-				r.Opsi = opsi
+		snapshot, snapshotErr := loadUjianQuestionSnapshot(item.SnapshotJSON)
+		if snapshotErr != nil {
+			return fiber.NewError(500, "Snapshot soal ujian tidak valid")
+		}
+		r := soalRes{
+			ID:         item.UjianSoalID,
+			UjianID:    uj.ID,
+			Bobot:      item.Bobot,
+			Pertanyaan: snapshot.Pertanyaan,
+			Tipe:       snapshot.Tipe,
+			Stimulus:   snapshot.Stimulus,
+			BagianID:   item.BagianID, NamaBagian: item.NamaBagian,
+			DeskripsiBagian: item.DeskripsiBagian, UrutanBagian: item.UrutanBagian,
+			HasBranching: len(snapshot.Konfigurasi.BranchToByAnswer) > 0,
+		}
+		if hasUjianVisualConfig(snapshot.Konfigurasi) {
+			publicConfig := studentSafeUjianConfig(snapshot.Konfigurasi)
+			if uj.AcakSoal {
+				seed := seedFromID(up.ID + ":" + item.UjianSoalID + ":options")
+				if len(publicConfig.Choices) > 1 {
+					random := rand.New(rand.NewSource(seed))
+					random.Shuffle(len(publicConfig.Choices), func(i, j int) {
+						publicConfig.Choices[i], publicConfig.Choices[j] = publicConfig.Choices[j], publicConfig.Choices[i]
+					})
+				}
+				if len(publicConfig.Right) > 1 {
+					random := rand.New(rand.NewSource(seed + 1))
+					random.Shuffle(len(publicConfig.Right), func(i, j int) {
+						publicConfig.Right[i], publicConfig.Right[j] = publicConfig.Right[j], publicConfig.Right[i]
+					})
+				}
+			}
+			r.Konfigurasi = &publicConfig
+		}
+		if snapshot.Opsi != "" {
+			var options []string
+			if json.Unmarshal([]byte(snapshot.Opsi), &options) == nil {
+				indices := make([]int, len(options))
+				for i := range indices {
+					indices[i] = i
+				}
+				if uj.AcakSoal {
+					options, indices = shuffleBankOptionList(options, seedFromID(up.ID+":"+item.UjianSoalID))
+				}
+				r.Opsi, r.OpsiIndex = options, indices
 			}
 		}
 		res = append(res, r)
 	}
 	// Also return existing answers
 	type jawabanRes struct {
-		UjianSoalID string `json:"ujianSoalId"`
-		Jawaban     string `json:"jawaban"`
+		UjianSoalID string                 `json:"ujianSoalId"`
+		Jawaban     string                 `json:"jawaban"`
+		Berkas      []publicExamAnswerFile `json:"berkas,omitempty"`
 	}
-	var jawabans []UjianJawaban
-	if err := s.db.Where("ujian_peserta_id = ?", up.ID).Find(&jawabans).Error; err != nil {
-		return fiber.NewError(500, "Gagal memuat jawaban ujian")
+	var files []UjianJawabanBerkas
+	if err := s.db.Where("ujian_peserta_id = ?", up.ID).Find(&files).Error; err != nil {
+		return fiber.NewError(500, "Gagal memuat berkas jawaban")
+	}
+	filesByID := make(map[string]UjianJawabanBerkas, len(files))
+	for _, file := range files {
+		filesByID[file.ID] = file
 	}
 	ujianSoalIDByBankSoalID := make(map[string]string, len(order))
 	for _, item := range order {
-		ujianSoalIDByBankSoalID[item.SoalID] = item.ID
+		ujianSoalIDByBankSoalID[item.SoalID] = item.UjianSoalID
 	}
 	jawabanList := make([]jawabanRes, 0, len(jawabans))
 	for _, j := range jawabans {
 		ujianSoalID, ok := ujianSoalIDByBankSoalID[j.SoalID]
-		if !ok {
+		if !ok || !activeQuestions[ujianSoalID] {
 			continue
 		}
-		jawabanList = append(jawabanList, jawabanRes{UjianSoalID: ujianSoalID, Jawaban: j.Jawaban})
+		row := jawabanRes{UjianSoalID: ujianSoalID, Jawaban: j.Jawaban}
+		if ids, decodeErr := decodeSimulasiFileIDs([]byte(j.Jawaban)); decodeErr == nil {
+			for _, fileID := range ids {
+				if file, exists := filesByID[fileID]; exists && file.UjianSoalID == ujianSoalID {
+					row.Berkas = append(row.Berkas, publicExamAnswerFile{ID: file.ID, NamaFile: file.NamaFile, Ukuran: file.Ukuran})
+				}
+			}
+		}
+		jawabanList = append(jawabanList, row)
 	}
 	return c.JSON(fiber.Map{
 		"ujianPesertaId":   up.ID,
 		"sisaWaktu":        s.sisaWaktu(&up, uj),
 		"gracePeriodMenit": uj.GracePeriodMenit,
+		"bolehEditRespons": ujianResponseEditAllowed(up, *uj, time.Now()),
 		"soal":             res,
 		"jawaban":          jawabanList,
 	})
@@ -709,6 +1101,271 @@ func (s *Server) sisaWaktu(up *UjianPeserta, uj *Ujian) int {
 	return 0 // both expired
 }
 
+func regradeUjianAttemptAfterRevisionTx(tx *gorm.DB, attempt *UjianPeserta, uj *Ujian) (ujianGradeResult, error) {
+	var grade ujianGradeResult
+	if err := gradeUjianPesertaTx(tx, attempt, uj, &grade); err != nil {
+		return grade, err
+	}
+	status := "selesai"
+	var score *float64 = &grade.Score
+	if grade.PendingManual > 0 {
+		status, score = "menunggu_nilai", nil
+	}
+	if err := tx.Model(&UjianPeserta{}).Where("id = ?", attempt.ID).Updates(map[string]interface{}{"status": status, "skor": score}).Error; err != nil {
+		return grade, err
+	}
+	attempt.Status, attempt.Skor = status, score
+	return grade, nil
+}
+
+func ujianResponseEditAllowed(attempt UjianPeserta, uj Ujian, now time.Time) bool {
+	if !uj.IzinkanEditRespons || attempt.PenutupanOtomatis || (attempt.Status != "selesai" && attempt.Status != "menunggu_nilai") {
+		return false
+	}
+	return uj.WaktuSelesai.IsZero() || !now.After(uj.WaktuSelesai)
+}
+
+func ujianJawabanPenilaianAudit(answer UjianJawaban) (string, error) {
+	return marshalJSON(map[string]interface{}{
+		"benar": answer.Benar, "nilai": answer.Nilai, "nilaiManual": answer.NilaiManual,
+		"komentarGuru": answer.KomentarGuru, "dinilaiOlehUserId": answer.DinilaiOlehUserID,
+		"dinilaiPada": answer.DinilaiPada,
+	})
+}
+
+func ujianActiveQuestionList(questions []UjianPesertaSoal, answers []UjianJawaban) ([]string, error) {
+	active, err := activeUjianQuestionIDs(questions, answers)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(active))
+	for _, question := range questions {
+		if active[question.UjianSoalID] {
+			ids = append(ids, question.UjianSoalID)
+		}
+	}
+	return ids, nil
+}
+
+func marshalJSON(value interface{}) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func (s *Server) reviseSubmittedUjianAnswer(pd *PesertaDidik, uj *Ujian, attempt *UjianPeserta, ujianSoalID, answerText string, c *fiber.Ctx) error {
+	key := strings.TrimSpace(c.Get("Idempotency-Key"))
+	if _, err := uuid.Parse(key); err != nil {
+		return fiber.NewError(400, "kunci idempotensi revisi tidak valid")
+	}
+	hashInput, _ := json.Marshal(struct {
+		UjianSoalID string `json:"ujianSoalId"`
+		Jawaban     string `json:"jawaban"`
+	}{ujianSoalID, answerText})
+	requestHash := hash(string(hashInput))
+	var revision UjianJawabanRevisi
+	created, replayed := false, false
+	var grade ujianGradeResult
+	activeIDs := []string{}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		lookupErr := tx.Where("ujian_peserta_id = ? AND idempotency_key = ?", attempt.ID, key).First(&revision).Error
+		if lookupErr == nil {
+			if revision.UjianSoalID != ujianSoalID || revision.RequestHash != requestHash {
+				return fiber.NewError(409, "kunci idempotensi sudah digunakan untuk perubahan lain")
+			}
+			replayed = true
+			var summaryErr error
+			grade, summaryErr = summarizeUjianAttemptTx(tx, attempt, uj)
+			if summaryErr != nil {
+				return summaryErr
+			}
+			questions, err := ensureUjianAttemptQuestionsTx(tx, attempt, uj)
+			if err != nil {
+				return err
+			}
+			var answers []UjianJawaban
+			if err := tx.Where("ujian_peserta_id = ?", attempt.ID).Find(&answers).Error; err != nil {
+				return err
+			}
+			activeIDs, err = ujianActiveQuestionList(questions, answers)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			return lookupErr
+		}
+		var locked UjianPeserta
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ? AND ujian_id = ? AND peserta_didik_id = ?", attempt.ID, uj.ID, pd.ID).Error; err != nil {
+			return fiber.NewError(404, "percobaan ujian tidak ditemukan")
+		}
+		// Recheck after taking the attempt lock so simultaneous retries cannot
+		// commit a duplicate revision with the same idempotency key.
+		lookupErr = tx.Where("ujian_peserta_id = ? AND idempotency_key = ?", locked.ID, key).First(&revision).Error
+		if lookupErr == nil {
+			if revision.UjianSoalID != ujianSoalID || revision.RequestHash != requestHash {
+				return fiber.NewError(409, "kunci idempotensi sudah digunakan untuk perubahan lain")
+			}
+			replayed = true
+			var summaryErr error
+			grade, summaryErr = summarizeUjianAttemptTx(tx, &locked, uj)
+			if summaryErr != nil {
+				return summaryErr
+			}
+			questions, err := ensureUjianAttemptQuestionsTx(tx, &locked, uj)
+			if err != nil {
+				return err
+			}
+			var saved []UjianJawaban
+			if err := tx.Where("ujian_peserta_id = ?", locked.ID).Find(&saved).Error; err != nil {
+				return err
+			}
+			var activeErr error
+			activeIDs, activeErr = ujianActiveQuestionList(questions, saved)
+			if activeErr != nil {
+				return activeErr
+			}
+			*attempt = locked
+			return nil
+		}
+		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			return lookupErr
+		}
+		var currentExam Ujian
+		if err := tx.First(&currentExam, "id = ?", uj.ID).Error; err != nil {
+			return fiber.NewError(404, "ujian tidak ditemukan")
+		}
+		if !ujianResponseEditAllowed(locked, currentExam, time.Now()) {
+			return fiber.NewError(409, "perubahan respons tidak diizinkan atau masa revisi telah berakhir")
+		}
+		questions, err := ensureUjianAttemptQuestionsTx(tx, &locked, &currentExam)
+		if err != nil {
+			return err
+		}
+		var answers []UjianJawaban
+		if err := tx.Where("ujian_peserta_id = ?", locked.ID).Find(&answers).Error; err != nil {
+			return err
+		}
+		activeBefore, err := activeUjianQuestionIDs(questions, answers)
+		if err != nil {
+			return fiber.NewError(500, "alur bagian ujian tidak valid")
+		}
+		var frozen UjianPesertaSoal
+		for _, question := range questions {
+			if question.UjianSoalID == ujianSoalID {
+				frozen = question
+				break
+			}
+		}
+		if frozen.ID == "" || !activeBefore[frozen.UjianSoalID] {
+			return fiber.NewError(404, "soal tidak tersedia pada percobaan ini")
+		}
+		snapshot, err := loadUjianQuestionSnapshot(frozen.SnapshotJSON)
+		if err != nil {
+			return fiber.NewError(500, "snapshot soal ujian tidak valid")
+		}
+		configRaw := ""
+		if hasUjianVisualConfig(snapshot.Konfigurasi) {
+			config, err := json.Marshal(snapshot.Konfigurasi)
+			if err != nil {
+				return fiber.NewError(500, "konfigurasi soal tidak valid")
+			}
+			configRaw = string(config)
+		}
+		if err := validateUjianAnswer(snapshot.Tipe, snapshot.Opsi, answerText, configRaw); err != nil {
+			return err
+		}
+		if snapshot.Tipe == simulasiTipeUnggah {
+			fileIDs, err := decodeSimulasiFileIDs([]byte(answerText))
+			if err != nil {
+				return fiber.NewError(400, "referensi berkas jawaban tidak valid")
+			}
+			var count int64
+			if err := tx.Model(&UjianJawabanBerkas{}).Where("id IN ? AND ujian_peserta_id = ? AND ujian_soal_id = ?", fileIDs, locked.ID, frozen.UjianSoalID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != int64(len(fileIDs)) {
+				return fiber.NewError(403, "berkas harus berasal dari jawaban soal ini")
+			}
+		}
+		var answer UjianJawaban
+		findErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ujian_peserta_id = ? AND soal_id = ?", locked.ID, frozen.SoalID).First(&answer).Error
+		if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		beforeAnswer, beforeGrading := "", ""
+		if errors.Is(findErr, gorm.ErrRecordNotFound) {
+			answer = UjianJawaban{UjianPesertaID: locked.ID, SoalID: frozen.SoalID}
+		} else {
+			beforeAnswer = answer.Jawaban
+			beforeGrading, err = ujianJawabanPenilaianAudit(answer)
+			if err != nil {
+				return err
+			}
+		}
+		answer.Jawaban = answerText
+		// A response edit invalidates any teacher grade/comment for that answer.
+		answer.Benar, answer.Nilai, answer.NilaiManual = nil, 0, nil
+		answer.KomentarGuru, answer.DinilaiOlehUserID, answer.DinilaiPada = "", nil, nil
+		if errors.Is(findErr, gorm.ErrRecordNotFound) {
+			if err := tx.Create(&answer).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Save(&answer).Error; err != nil {
+			return err
+		}
+		grade, err = regradeUjianAttemptAfterRevisionTx(tx, &locked, &currentExam)
+		if err != nil {
+			return err
+		}
+		if err := tx.Where("ujian_peserta_id = ?", locked.ID).Find(&answers).Error; err != nil {
+			return err
+		}
+		activeIDs, err = ujianActiveQuestionList(questions, answers)
+		if err != nil {
+			return fiber.NewError(500, "alur bagian ujian tidak valid")
+		}
+		answerAfter, err := ujianJawabanPenilaianAudit(answer)
+		if err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&UjianJawabanRevisi{}).Where("ujian_peserta_id = ? AND ujian_soal_id = ?", locked.ID, ujianSoalID).Count(&count).Error; err != nil {
+			return err
+		}
+		revision = UjianJawabanRevisi{
+			UjianPesertaID: locked.ID, IdempotencyKey: key, UjianSoalID: ujianSoalID,
+			Nomor: int(count) + 1, PesertaDidikID: pd.ID, AktorID: pd.ID,
+			RequestHash: requestHash, JawabanSebelum: beforeAnswer, JawabanSesudah: answerText,
+			PenilaianSebelumJSON: beforeGrading, PenilaianSesudahJSON: answerAfter,
+		}
+		if err := tx.Create(&revision).Error; err != nil {
+			return err
+		}
+		*attempt = locked
+		created = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if created {
+		s.audit(&pd.ID, "revise_response", "ujian_online_jawaban", revision.ID)
+	}
+	status := "tersimpan"
+	if replayed {
+		status = "sudah_tersimpan"
+	}
+	response := ujianSubmitResponse(attempt, grade)
+	response["statusSimpan"], response["revision"] = status, revision.Nomor
+	response["bolehEditRespons"] = ujianResponseEditAllowed(*attempt, *uj, time.Now())
+	response["activeSoalIds"] = activeIDs
+	return c.JSON(response)
+}
+
 // jawabSoal — POST /ujian-online/:ujianId/jawab {nisn, aksesKode, ujianSoalId, jawaban}
 func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
@@ -719,24 +1376,15 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	if findErr := s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error; findErr != nil {
 		return fiber.NewError(400, "Anda belum memulai ujian ini")
 	}
-	if up.Status == "selesai" || up.Status == "dikunci" {
+	if up.Status == "dikunci" || (up.Status != "mulai" && !ujianResponseEditAllowed(up, *uj, time.Now())) {
 		return fiber.NewError(403, "Ujian sudah selesai")
 	}
 	// Check time (beyond grace period = hard lock)
-	if up.Mulai != nil && uj.DurasiMenit > 0 {
+	if up.Status == "mulai" && up.Mulai != nil && uj.DurasiMenit > 0 {
 		if time.Now().After(batasGrace(&up, uj)) {
-			up.Status = "selesai"
 			now := time.Now()
-			up.Selesai = &now
-			grade, gradeErr := s.gradeUjianPesertaResult(&up, uj)
-			if gradeErr != nil {
+			if _, finishErr := s.finishUjianAttempt(&up, uj, now, false, true, nil); finishErr != nil {
 				return fiber.NewError(500, "Gagal menghitung nilai ujian")
-			}
-			up.Skor = &grade.Score
-			if saveErr := s.db.Model(&UjianPeserta{}).Where("id = ?", up.ID).Updates(map[string]interface{}{
-				"status": "selesai", "selesai": now, "skor": grade.Score,
-			}).Error; saveErr != nil {
-				return fiber.NewError(500, "Gagal menyimpan hasil ujian")
 			}
 			return fiber.NewError(403, "Waktu ujian sudah habis")
 		}
@@ -755,14 +1403,71 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	if len([]byte(in.Jawaban)) > 64*1024 {
 		return fiber.NewError(413, "jawaban terlalu panjang")
 	}
-	// Verify the soal belongs to this ujian
-	var us UjianSoal
-	if s.db.Where("ujian_id = ? AND id = ?", uj.ID, in.UjianSoalID).First(&us).Error != nil {
+	if up.Status == "selesai" || up.Status == "menunggu_nilai" {
+		return s.reviseSubmittedUjianAnswer(pd, uj, &up, in.UjianSoalID, in.Jawaban, c)
+	}
+	// Accept only question IDs frozen into this student's attempt. The snapshot
+	// remains valid if staff archive/remove the source question during the exam.
+	var attemptQuestions []UjianPesertaSoal
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var snapshotErr error
+		attemptQuestions, snapshotErr = ensureUjianAttemptQuestionsTx(tx, &up, uj)
+		return snapshotErr
+	}); err != nil {
+		return fiber.NewError(500, "Gagal memeriksa snapshot soal")
+	}
+	var savedAnswers []UjianJawaban
+	if err := s.db.Where("ujian_peserta_id = ?", up.ID).Find(&savedAnswers).Error; err != nil {
+		return fiber.NewError(500, "Gagal memuat jawaban ujian")
+	}
+	activeBeforeSave, err := activeUjianQuestionIDs(attemptQuestions, savedAnswers)
+	if err != nil {
+		return fiber.NewError(500, "Alur bagian ujian tidak valid")
+	}
+	var frozen UjianPesertaSoal
+	for _, item := range attemptQuestions {
+		if item.UjianSoalID == in.UjianSoalID {
+			frozen = item
+			break
+		}
+	}
+	if frozen.ID == "" {
 		return fiber.NewError(400, "Soal tidak ditemukan dalam ujian ini")
+	}
+	if !activeBeforeSave[frozen.UjianSoalID] {
+		return fiber.NewError(404, "Soal berada pada bagian yang tidak aktif untuk jawaban Anda")
+	}
+	snapshot, err := loadUjianQuestionSnapshot(frozen.SnapshotJSON)
+	if err != nil {
+		return fiber.NewError(500, "Snapshot soal ujian tidak valid")
+	}
+	configRaw := ""
+	if hasUjianVisualConfig(snapshot.Konfigurasi) {
+		configJSON, marshalErr := json.Marshal(snapshot.Konfigurasi)
+		if marshalErr != nil {
+			return fiber.NewError(500, "Konfigurasi soal tidak valid")
+		}
+		configRaw = string(configJSON)
+	}
+	if err := validateUjianAnswer(snapshot.Tipe, snapshot.Opsi, in.Jawaban, configRaw); err != nil {
+		return fiber.NewError(400, err.Error())
+	}
+	if snapshot.Tipe == simulasiTipeUnggah {
+		fileIDs, decodeErr := decodeSimulasiFileIDs([]byte(in.Jawaban))
+		if decodeErr != nil {
+			return fiber.NewError(400, "referensi berkas jawaban tidak valid")
+		}
+		var count int64
+		if err := s.db.Model(&UjianJawabanBerkas{}).Where("id IN ? AND ujian_peserta_id = ? AND ujian_soal_id = ?", fileIDs, up.ID, frozen.UjianSoalID).Count(&count).Error; err != nil {
+			return fiber.NewError(500, "Gagal memeriksa kepemilikan berkas")
+		}
+		if count != int64(len(fileIDs)) {
+			return fiber.NewError(403, "Berkas harus berasal dari jawaban soal ini")
+		}
 	}
 	// Upsert jawaban
 	var jawaban UjianJawaban
-	findAnswerErr := s.db.Where("ujian_peserta_id = ? AND soal_id = ?", up.ID, us.SoalID).First(&jawaban).Error
+	findAnswerErr := s.db.Where("ujian_peserta_id = ? AND soal_id = ?", up.ID, frozen.SoalID).First(&jawaban).Error
 	if findAnswerErr == nil {
 		jawaban.Jawaban = in.Jawaban
 		if e := s.db.Model(&UjianJawaban{}).Where("id = ?", jawaban.ID).Updates(map[string]interface{}{"jawaban": jawaban.Jawaban}).Error; e != nil {
@@ -771,7 +1476,7 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	} else if errors.Is(findAnswerErr, gorm.ErrRecordNotFound) {
 		jawaban = UjianJawaban{
 			UjianPesertaID: up.ID,
-			SoalID:         us.SoalID,
+			SoalID:         frozen.SoalID,
 			Jawaban:        in.Jawaban,
 		}
 		if e := s.db.Create(&jawaban).Error; e != nil {
@@ -781,7 +1486,7 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 			if !isUniqueErr(e) {
 				return fiber.NewError(500, "Gagal menyimpan jawaban")
 			}
-			if lookupErr := s.db.Where("ujian_peserta_id = ? AND soal_id = ?", up.ID, us.SoalID).First(&jawaban).Error; lookupErr != nil {
+			if lookupErr := s.db.Where("ujian_peserta_id = ? AND soal_id = ?", up.ID, frozen.SoalID).First(&jawaban).Error; lookupErr != nil {
 				return fiber.NewError(500, "Gagal memuat jawaban ujian")
 			}
 			if updateErr := s.db.Model(&UjianJawaban{}).Where("id = ?", jawaban.ID).Updates(map[string]interface{}{"jawaban": in.Jawaban}).Error; updateErr != nil {
@@ -791,83 +1496,728 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	} else {
 		return fiber.NewError(500, "Gagal memuat jawaban ujian")
 	}
-	return c.JSON(fiber.Map{"status": "ok"})
+	updated := false
+	for index := range savedAnswers {
+		if savedAnswers[index].SoalID == frozen.SoalID {
+			savedAnswers[index].Jawaban = in.Jawaban
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		savedAnswers = append(savedAnswers, UjianJawaban{UjianPesertaID: up.ID, SoalID: frozen.SoalID, Jawaban: in.Jawaban})
+	}
+	activeAfterSave, err := activeUjianQuestionIDs(attemptQuestions, savedAnswers)
+	if err != nil {
+		return fiber.NewError(500, "Alur bagian ujian tidak valid")
+	}
+	activeIDs := make([]string, 0, len(activeAfterSave))
+	for _, question := range attemptQuestions {
+		if activeAfterSave[question.UjianSoalID] {
+			activeIDs = append(activeIDs, question.UjianSoalID)
+		}
+	}
+	return c.JSON(fiber.Map{"status": "ok", "activeSoalIds": activeIDs, "hasBranching": len(snapshot.Konfigurasi.BranchToByAnswer) > 0})
 }
 
-// gradeUjianPeserta auto-grades all answers for a participant and computes the
-// final score. Used by selesaiUjianOnline (manual finish) and
-// autoFinishUjianSessions (server-side timeout/tab-lock).
+func ujianAttemptWritable(s *Server, attempt *UjianPeserta, ujian *Ujian) error {
+	if ujianResponseEditAllowed(*attempt, *ujian, time.Now()) {
+		return nil
+	}
+	if attempt.Status != "mulai" {
+		return fiber.NewError(403, "Ujian sudah selesai")
+	}
+	if attempt.Mulai != nil && ujian.DurasiMenit > 0 && time.Now().After(batasGrace(attempt, ujian)) {
+		if _, err := s.finishUjianAttempt(attempt, ujian, time.Now(), false, true, nil); err != nil {
+			return fiber.NewError(500, "Gagal menghitung nilai ujian")
+		}
+		return fiber.NewError(403, "Waktu ujian sudah habis")
+	}
+	return nil
+}
+
+func (s *Server) ujianOnlineUploadAnswerFile(c *fiber.Ctx) error {
+	pd, ujian, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	var attempt UjianPeserta
+	if err := s.db.Where("ujian_id = ? AND peserta_didik_id = ?", ujian.ID, pd.ID).First(&attempt).Error; err != nil {
+		return fiber.NewError(404, "Percobaan ujian tidak ditemukan")
+	}
+	if err := ujianAttemptWritable(s, &attempt, ujian); err != nil {
+		return err
+	}
+	frozen, _, activeQuestions, err := s.loadActiveUjianAttemptQuestions(&attempt, ujian)
+	if err != nil {
+		return fiber.NewError(500, "Gagal memeriksa snapshot ujian")
+	}
+	var question *UjianPesertaSoal
+	for index := range frozen {
+		if frozen[index].UjianSoalID == c.Params("ujianSoalId") {
+			question = &frozen[index]
+			break
+		}
+	}
+	if question == nil {
+		return fiber.NewError(404, "Soal tidak ditemukan dalam percobaan ini")
+	}
+	if !activeQuestions[question.UjianSoalID] {
+		return fiber.NewError(404, "Soal berada pada bagian ujian yang tidak aktif")
+	}
+	snapshot, err := loadUjianQuestionSnapshot(question.SnapshotJSON)
+	if err != nil || snapshot.Tipe != simulasiTipeUnggah {
+		return fiber.NewError(400, "Soal ini tidak menerima unggahan")
+	}
+	file, err := c.FormFile("file")
+	if err != nil || file == nil {
+		return fiber.NewError(400, "Pilih berkas jawaban terlebih dahulu")
+	}
+	allowed := normalizedFileExtensions(snapshot.Konfigurasi.AllowedFileTypes)
+	if len(allowed) == 0 {
+		allowed = []string{"pdf", "docx", "xlsx", "png", "jpg", "jpeg"}
+	}
+	extension := strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
+	if !containsString(allowed, extension) {
+		return fiber.NewError(400, "Jenis berkas ini tidak diizinkan oleh guru")
+	}
+	maxFiles := snapshot.Konfigurasi.MaxFiles
+	if maxFiles < 1 {
+		maxFiles = 3
+	}
+	maxSizeMB := snapshot.Konfigurasi.MaxFileSizeMB
+	if maxSizeMB < 1 {
+		maxSizeMB = 10
+	}
+	isSubmitted := attempt.Status == "selesai" || attempt.Status == "menunggu_nilai"
+	revisionKey, requestHash := "", ""
+	if isSubmitted {
+		revisionKey = strings.TrimSpace(c.Get("Idempotency-Key"))
+		if _, err := uuid.Parse(revisionKey); err != nil {
+			return fiber.NewError(400, "kunci idempotensi revisi berkas tidak valid")
+		}
+		opened, err := file.Open()
+		if err != nil {
+			return fiber.NewError(400, "berkas jawaban tidak dapat dibaca")
+		}
+		digest := sha256.New()
+		_, copyErr := io.Copy(digest, opened)
+		_ = opened.Close()
+		if copyErr != nil {
+			return fiber.NewError(400, "berkas jawaban tidak dapat dibaca")
+		}
+		requestData, _ := json.Marshal(struct {
+			QuestionID string `json:"questionId"`
+			Filename   string `json:"filename"`
+			Size       int64  `json:"size"`
+			Content    string `json:"content"`
+		}{question.UjianSoalID, safeSimulasiSubmittedFilename(file.Filename), file.Size, hex.EncodeToString(digest.Sum(nil))})
+		requestHash = hash(string(requestData))
+	}
+	path, err := s.saveUpload(c, "file", "ujian-online-jawaban", int64(maxSizeMB)*1024*1024, allowed)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fiber.NewError(400, "Berkas jawaban wajib diunggah")
+	}
+	answerFile := UjianJawabanBerkas{UjianPesertaID: attempt.ID, UjianSoalID: question.UjianSoalID, SoalID: question.SoalID, FilePath: path, NamaFile: safeSimulasiSubmittedFilename(file.Filename), ContentType: simulasiUploadMIME(filepath.Ext(file.Filename)), Ukuran: file.Size}
+	var replayFile *UjianJawabanBerkas
+	var revision UjianJawabanRevisi
+	revisionCreated := false
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var locked UjianPeserta
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ?", attempt.ID).Error; err != nil {
+			return err
+		}
+		isRevision := locked.Status == "selesai" || locked.Status == "menunggu_nilai"
+		if isRevision && !ujianResponseEditAllowed(locked, *ujian, time.Now()) {
+			return fiber.NewError(409, "perubahan respons tidak diizinkan atau masa revisi telah berakhir")
+		}
+		if locked.Status != "mulai" && !isRevision {
+			return fiber.NewError(403, "Ujian sudah selesai")
+		}
+		if !isRevision && locked.Mulai != nil && ujian.DurasiMenit > 0 && time.Now().After(batasGrace(&locked, ujian)) {
+			return fiber.NewError(403, "Waktu ujian sudah habis")
+		}
+		if isRevision {
+			var prior UjianJawabanRevisi
+			lookupErr := tx.Where("ujian_peserta_id = ? AND idempotency_key = ?", locked.ID, revisionKey).First(&prior).Error
+			if lookupErr == nil {
+				if prior.UjianSoalID != question.UjianSoalID || prior.RequestHash != requestHash {
+					return fiber.NewError(409, "kunci idempotensi sudah digunakan untuk perubahan lain")
+				}
+				before := map[string]bool{}
+				oldIDs, oldErr := decodeSimulasiFileIDs([]byte(prior.JawabanSebelum))
+				if oldErr == nil {
+					for _, id := range oldIDs {
+						before[id] = true
+					}
+				}
+				newIDs, newErr := decodeSimulasiFileIDs([]byte(prior.JawabanSesudah))
+				if newErr != nil {
+					return fiber.NewError(500, "riwayat berkas revisi tidak valid")
+				}
+				for _, id := range newIDs {
+					if !before[id] {
+						var saved UjianJawabanBerkas
+						if err := tx.First(&saved, "id = ? AND ujian_peserta_id = ? AND ujian_soal_id = ?", id, locked.ID, question.UjianSoalID).Error; err != nil {
+							return fiber.NewError(500, "riwayat berkas revisi tidak ditemukan")
+						}
+						replayFile = &saved
+						break
+					}
+				}
+				if replayFile == nil {
+					return fiber.NewError(409, "riwayat idempotensi bukan unggahan berkas")
+				}
+				revision = prior
+				return nil
+			}
+			if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+				return lookupErr
+			}
+		}
+		var answer UjianJawaban
+		findErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ujian_peserta_id = ? AND soal_id = ?", attempt.ID, question.SoalID).First(&answer).Error
+		ids := []string{}
+		if findErr == nil {
+			var decodeErr error
+			ids, decodeErr = decodeSimulasiFileIDs([]byte(answer.Jawaban))
+			if decodeErr != nil {
+				return fiber.NewError(500, "Referensi berkas sebelumnya tidak valid")
+			}
+		} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		if len(ids) >= maxFiles {
+			return fiber.NewError(400, fmt.Sprintf("Maksimal %d berkas untuk soal ini", maxFiles))
+		}
+		if err := tx.Create(&answerFile).Error; err != nil {
+			return err
+		}
+		ids = append(ids, answerFile.ID)
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return err
+		}
+		if findErr == nil {
+			answer.Jawaban = string(encoded)
+		} else {
+			answer = UjianJawaban{UjianPesertaID: attempt.ID, SoalID: question.SoalID, Jawaban: string(encoded)}
+		}
+		beforeAnswer, beforeGrading := "", ""
+		if findErr == nil && isRevision {
+			beforeAnswer = answer.Jawaban
+			// answer.Jawaban was just replaced; recover the exact pre-edit list from
+			// the IDs loaded above rather than writing the new list twice.
+			oldIDs := ids[:len(ids)-1]
+			oldEncoded, _ := json.Marshal(oldIDs)
+			beforeAnswer = string(oldEncoded)
+			beforeGrading, err = ujianJawabanPenilaianAudit(answer)
+			if err != nil {
+				return err
+			}
+			answer.Benar, answer.Nilai, answer.NilaiManual = nil, 0, nil
+			answer.KomentarGuru, answer.DinilaiOlehUserID, answer.DinilaiPada = "", nil, nil
+		}
+		if findErr == nil {
+			if err := tx.Save(&answer).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Create(&answer).Error; err != nil {
+			return err
+		}
+		if isRevision {
+			var lockedExam Ujian
+			if err := tx.First(&lockedExam, "id = ?", ujian.ID).Error; err != nil {
+				return err
+			}
+			if !ujianResponseEditAllowed(locked, lockedExam, time.Now()) {
+				return fiber.NewError(409, "perubahan respons tidak diizinkan atau masa revisi telah berakhir")
+			}
+			if _, gradeErr := regradeUjianAttemptAfterRevisionTx(tx, &locked, &lockedExam); gradeErr != nil {
+				return gradeErr
+			}
+			if err := tx.First(&answer, "ujian_peserta_id = ? AND soal_id = ?", locked.ID, question.SoalID).Error; err != nil {
+				return err
+			}
+			afterGrading, err := ujianJawabanPenilaianAudit(answer)
+			if err != nil {
+				return err
+			}
+			var revisionCount int64
+			if err := tx.Model(&UjianJawabanRevisi{}).Where("ujian_peserta_id = ? AND ujian_soal_id = ?", locked.ID, question.UjianSoalID).Count(&revisionCount).Error; err != nil {
+				return err
+			}
+			revision = UjianJawabanRevisi{UjianPesertaID: locked.ID, IdempotencyKey: revisionKey, UjianSoalID: question.UjianSoalID, Nomor: int(revisionCount) + 1, PesertaDidikID: pd.ID, AktorID: pd.ID, RequestHash: requestHash, JawabanSebelum: beforeAnswer, JawabanSesudah: answer.Jawaban, PenilaianSebelumJSON: beforeGrading, PenilaianSesudahJSON: afterGrading}
+			if err := tx.Create(&revision).Error; err != nil {
+				return err
+			}
+			revisionCreated = true
+		}
+		return nil
+	})
+	if err != nil {
+		removeUpload(path)
+		return err
+	}
+	if replayFile != nil {
+		removeUpload(path)
+		return c.Status(201).JSON(publicExamAnswerFile{ID: replayFile.ID, NamaFile: replayFile.NamaFile, Ukuran: replayFile.Ukuran})
+	}
+	if revisionCreated {
+		s.audit(&pd.ID, "revise_response", "ujian_online_jawaban", revision.ID)
+	}
+	s.audit(&pd.ID, "upload_answer", "ujian_jawaban_berkas", answerFile.ID)
+	return c.Status(201).JSON(publicExamAnswerFile{ID: answerFile.ID, NamaFile: answerFile.NamaFile, Ukuran: answerFile.Ukuran})
+}
+
+func (s *Server) ujianOnlineDeleteAnswerFile(c *fiber.Ctx) error {
+	pd, ujian, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	var attempt UjianPeserta
+	if err := s.db.Where("ujian_id = ? AND peserta_didik_id = ?", ujian.ID, pd.ID).First(&attempt).Error; err != nil {
+		return fiber.NewError(404, "Percobaan ujian tidak ditemukan")
+	}
+	if err := ujianAttemptWritable(s, &attempt, ujian); err != nil {
+		return err
+	}
+	var file UjianJawabanBerkas
+	if err := s.db.Where("id = ? AND ujian_peserta_id = ? AND ujian_soal_id = ?", c.Params("fileId"), attempt.ID, c.Params("ujianSoalId")).First(&file).Error; err != nil {
+		return fiber.NewError(404, "Berkas jawaban tidak ditemukan")
+	}
+	_, _, activeQuestions, err := s.loadActiveUjianAttemptQuestions(&attempt, ujian)
+	if err != nil {
+		return fiber.NewError(500, "Gagal memeriksa alur ujian")
+	}
+	if !activeQuestions[file.UjianSoalID] {
+		return fiber.NewError(404, "Soal berada pada bagian ujian yang tidak aktif")
+	}
+	if attempt.Status == "selesai" || attempt.Status == "menunggu_nilai" {
+		return s.reviseSubmittedUjianFileDeletion(c, pd, ujian, &attempt, &file)
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var answer UjianJawaban
+		if err := tx.Where("ujian_peserta_id = ? AND soal_id = ?", attempt.ID, file.SoalID).First(&answer).Error; err != nil {
+			return err
+		}
+		ids, err := decodeSimulasiFileIDs([]byte(answer.Jawaban))
+		if err != nil {
+			return err
+		}
+		kept := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if id != file.ID {
+				kept = append(kept, id)
+			}
+		}
+		encoded, err := json.Marshal(kept)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&answer).Update("jawaban", string(encoded)).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&file).Error
+	}); err != nil {
+		return fiber.NewError(500, "Gagal menghapus berkas jawaban")
+	}
+	removeUpload(file.FilePath)
+	s.audit(&pd.ID, "delete_answer_upload", "ujian_jawaban_berkas", file.ID)
+	return c.SendStatus(204)
+}
+
+func (s *Server) reviseSubmittedUjianFileDeletion(c *fiber.Ctx, pd *PesertaDidik, uj *Ujian, attempt *UjianPeserta, file *UjianJawabanBerkas) error {
+	key := strings.TrimSpace(c.Get("Idempotency-Key"))
+	if _, err := uuid.Parse(key); err != nil {
+		return fiber.NewError(400, "kunci idempotensi revisi berkas tidak valid")
+	}
+	requestData, _ := json.Marshal(struct {
+		QuestionID string `json:"questionId"`
+		FileID     string `json:"fileId"`
+		Action     string `json:"action"`
+	}{file.UjianSoalID, file.ID, "remove"})
+	requestHash := hash(string(requestData))
+	var revision UjianJawabanRevisi
+	created, replayed := false, false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		lookupErr := tx.Where("ujian_peserta_id = ? AND idempotency_key = ?", attempt.ID, key).First(&revision).Error
+		if lookupErr == nil {
+			if revision.UjianSoalID != file.UjianSoalID || revision.RequestHash != requestHash {
+				return fiber.NewError(409, "kunci idempotensi sudah digunakan untuk perubahan lain")
+			}
+			replayed = true
+			return nil
+		}
+		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			return lookupErr
+		}
+		var locked UjianPeserta
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ? AND peserta_didik_id = ?", attempt.ID, pd.ID).Error; err != nil {
+			return fiber.NewError(404, "percobaan ujian tidak ditemukan")
+		}
+		lookupErr = tx.Where("ujian_peserta_id = ? AND idempotency_key = ?", locked.ID, key).First(&revision).Error
+		if lookupErr == nil {
+			if revision.UjianSoalID != file.UjianSoalID || revision.RequestHash != requestHash {
+				return fiber.NewError(409, "kunci idempotensi sudah digunakan untuk perubahan lain")
+			}
+			replayed = true
+			*attempt = locked
+			return nil
+		}
+		if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			return lookupErr
+		}
+		var lockedExam Ujian
+		if err := tx.First(&lockedExam, "id = ?", uj.ID).Error; err != nil {
+			return fiber.NewError(404, "ujian tidak ditemukan")
+		}
+		if !ujianResponseEditAllowed(locked, lockedExam, time.Now()) {
+			return fiber.NewError(409, "perubahan respons tidak diizinkan atau masa revisi telah berakhir")
+		}
+		questions, err := ensureUjianAttemptQuestionsTx(tx, &locked, &lockedExam)
+		if err != nil {
+			return err
+		}
+		activeAnswers := []UjianJawaban{}
+		if err := tx.Where("ujian_peserta_id = ?", locked.ID).Find(&activeAnswers).Error; err != nil {
+			return err
+		}
+		active, err := activeUjianQuestionIDs(questions, activeAnswers)
+		if err != nil {
+			return err
+		}
+		if !active[file.UjianSoalID] {
+			return fiber.NewError(404, "soal berada pada bagian yang tidak aktif")
+		}
+		var answer UjianJawaban
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ujian_peserta_id = ? AND soal_id = ?", locked.ID, file.SoalID).First(&answer).Error; err != nil {
+			return fiber.NewError(404, "jawaban berkas tidak ditemukan")
+		}
+		ids, err := decodeSimulasiFileIDs([]byte(answer.Jawaban))
+		if err != nil || !containsString(ids, file.ID) {
+			return fiber.NewError(409, "berkas ini bukan bagian dari jawaban aktif")
+		}
+		beforeAnswer := answer.Jawaban
+		beforeGrading, err := ujianJawabanPenilaianAudit(answer)
+		if err != nil {
+			return err
+		}
+		kept := make([]string, 0, len(ids)-1)
+		for _, id := range ids {
+			if id != file.ID {
+				kept = append(kept, id)
+			}
+		}
+		encoded, err := json.Marshal(kept)
+		if err != nil {
+			return err
+		}
+		answer.Jawaban = string(encoded)
+		answer.Benar, answer.Nilai, answer.NilaiManual = nil, 0, nil
+		answer.KomentarGuru, answer.DinilaiOlehUserID, answer.DinilaiPada = "", nil, nil
+		if err := tx.Save(&answer).Error; err != nil {
+			return err
+		}
+		if _, err := regradeUjianAttemptAfterRevisionTx(tx, &locked, &lockedExam); err != nil {
+			return err
+		}
+		if err := tx.First(&answer, "id = ?", answer.ID).Error; err != nil {
+			return err
+		}
+		afterGrading, err := ujianJawabanPenilaianAudit(answer)
+		if err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&UjianJawabanRevisi{}).Where("ujian_peserta_id = ? AND ujian_soal_id = ?", locked.ID, file.UjianSoalID).Count(&count).Error; err != nil {
+			return err
+		}
+		revision = UjianJawabanRevisi{UjianPesertaID: locked.ID, IdempotencyKey: key, UjianSoalID: file.UjianSoalID, Nomor: int(count) + 1, PesertaDidikID: pd.ID, AktorID: pd.ID, RequestHash: requestHash, JawabanSebelum: beforeAnswer, JawabanSesudah: answer.Jawaban, PenilaianSebelumJSON: beforeGrading, PenilaianSesudahJSON: afterGrading}
+		if err := tx.Create(&revision).Error; err != nil {
+			return err
+		}
+		*attempt = locked
+		created = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if created {
+		s.audit(&pd.ID, "revise_response", "ujian_online_jawaban", revision.ID)
+	}
+	_ = replayed // a replay intentionally returns the same empty success response.
+	return c.SendStatus(204)
+}
+
+func (s *Server) ujianOnlineDownloadAnswerFile(c *fiber.Ctx) error {
+	pd, ujian, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
+	if err != nil {
+		return err
+	}
+	var attempt UjianPeserta
+	if err := s.db.Where("ujian_id = ? AND peserta_didik_id = ?", ujian.ID, pd.ID).First(&attempt).Error; err != nil {
+		return fiber.NewError(404, "Percobaan ujian tidak ditemukan")
+	}
+	var file UjianJawabanBerkas
+	if err := s.db.Where("id = ? AND ujian_peserta_id = ? AND ujian_soal_id = ?", c.Params("fileId"), attempt.ID, c.Params("ujianSoalId")).First(&file).Error; err != nil {
+		return fiber.NewError(404, "Berkas jawaban tidak ditemukan")
+	}
+	_, _, activeQuestions, err := s.loadActiveUjianAttemptQuestions(&attempt, ujian)
+	if err != nil {
+		return fiber.NewError(500, "Gagal memeriksa alur ujian")
+	}
+	if !activeQuestions[file.UjianSoalID] {
+		return fiber.NewError(404, "Soal berada pada bagian ujian yang tidak aktif")
+	}
+	c.Set(fiber.HeaderContentType, file.ContentType)
+	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%q", file.NamaFile))
+	return s.sendUpload(c, file.FilePath)
+}
+
+func (s *Server) ujianOnlineStaffDownloadAnswerFile(c *fiber.Ctx) error {
+	var exam Ujian
+	if err := s.db.First(&exam, "id = ?", c.Params("ujianId")).Error; err != nil {
+		return fiber.NewError(404, "Ujian tidak ditemukan")
+	}
+	if err := s.scopeUjian(c, &exam); err != nil {
+		return err
+	}
+	var attempt UjianPeserta
+	if err := s.db.First(&attempt, "id = ? AND ujian_id = ?", c.Params("attemptId"), exam.ID).Error; err != nil {
+		return fiber.NewError(404, "Percobaan tidak ditemukan")
+	}
+	var file UjianJawabanBerkas
+	if err := s.db.Where("id = ? AND ujian_peserta_id = ?", c.Params("fileId"), attempt.ID).First(&file).Error; err != nil {
+		return fiber.NewError(404, "Berkas jawaban tidak ditemukan")
+	}
+	c.Set(fiber.HeaderContentType, file.ContentType)
+	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%q", file.NamaFile))
+	return s.sendUpload(c, file.FilePath)
+}
+
+// gradeUjianPeserta auto-grades objective answers and calculates the final
+// score. Essay answers are deliberately held for staff review.
 type ujianGradeResult struct {
-	Score   float64
-	Correct int
-	Total   int
+	Score         float64
+	Correct       int
+	Total         int
+	PendingManual int
 }
 
 func (s *Server) gradeUjianPesertaResult(up *UjianPeserta, uj *Ujian) (ujianGradeResult, error) {
 	var result ujianGradeResult
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		var ujianSoals []UjianSoal
-		if err := tx.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&ujianSoals).Error; err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error { return gradeUjianPesertaTx(tx, up, uj, &result) })
+	return result, err
+}
+
+func isManualUjianQuestion(tipe string) bool {
+	switch strings.ToLower(strings.TrimSpace(tipe)) {
+	case "essay", "uraian", "paragraf", simulasiTipeUnggah:
+		return true
+	default:
+		return false
+	}
+}
+
+func ujianAttemptNeedsManualGrade(up *UjianPeserta) bool {
+	return up.Status == "menunggu_nilai" || (up.Status == "dikunci" && up.Skor == nil)
+}
+
+func gradeUjianPesertaTx(tx *gorm.DB, up *UjianPeserta, uj *Ujian, result *ujianGradeResult) error {
+	questions, jawabans, activeQuestions, err := activeUjianAttemptQuestions(tx, up, uj)
+	if err != nil {
+		return err
+	}
+	answerByQuestion := make(map[string]*UjianJawaban, len(jawabans))
+	for i := range jawabans {
+		answerByQuestion[jawabans[i].SoalID] = &jawabans[i]
+	}
+	totalSkor, totalBobot := 0.0, 0.0
+	activeTotal := 0
+	for _, question := range questions {
+		if activeQuestions[question.UjianSoalID] {
+			activeTotal++
+		}
+	}
+	*result = ujianGradeResult{Total: activeTotal}
+	for _, frozen := range questions {
+		if !activeQuestions[frozen.UjianSoalID] {
+			continue
+		}
+		snapshot, err := loadUjianQuestionSnapshot(frozen.SnapshotJSON)
+		if err != nil {
 			return err
 		}
-		var jawabans []UjianJawaban
-		if err := tx.Where("ujian_peserta_id = ?", up.ID).Find(&jawabans).Error; err != nil {
-			return err
+		if frozen.Bobot < 0 || math.IsNaN(frozen.Bobot) || math.IsInf(frozen.Bobot, 0) {
+			return errors.New("bobot soal tidak valid")
 		}
-
-		soalLookup := map[string]UjianSoal{}
-		for _, us := range ujianSoals {
-			soalLookup[us.SoalID] = us
+		totalBobot += frozen.Bobot
+		answer := answerByQuestion[frozen.SoalID]
+		if answer == nil {
+			continue
 		}
-
-		totalSkor := 0.0
-		totalBobot := 0.0
-		for _, us := range ujianSoals {
-			if us.Bobot < 0 {
-				return errors.New("bobot soal tidak valid")
-			}
-			totalBobot += us.Bobot
-		}
-		result = ujianGradeResult{Total: len(ujianSoals)}
-		for i := range jawabans {
-			us, ok := soalLookup[jawabans[i].SoalID]
-			if !ok {
-				continue
-			}
-			kunci := strings.TrimSpace(us.Soal.Kunci)
-			jawaban := strings.TrimSpace(jawabans[i].Jawaban)
-			if kunci == "" || jawaban == "" {
-				if err := tx.Model(&UjianJawaban{}).Where("id = ?", jawabans[i].ID).Updates(map[string]interface{}{"benar": nil, "nilai": 0}).Error; err != nil {
-					return err
+		jawaban := strings.TrimSpace(answer.Jawaban)
+		hasAnswer := hasAssessmentAnswer(jawaban)
+		updates := map[string]interface{}{"benar": nil, "nilai": 0.0}
+		if isManualUjianQuestion(snapshot.Tipe) {
+			if hasAnswer && answer.NilaiManual == nil {
+				result.PendingManual++
+			} else if answer.NilaiManual != nil {
+				if *answer.NilaiManual < 0 || *answer.NilaiManual > frozen.Bobot || math.IsNaN(*answer.NilaiManual) || math.IsInf(*answer.NilaiManual, 0) {
+					return errors.New("nilai manual di luar rentang bobot soal")
 				}
-				continue
+				answer.Nilai = *answer.NilaiManual
+				totalSkor += answer.Nilai
+				updates["nilai"] = answer.Nilai
 			}
-			var benar bool
-			switch us.Soal.Tipe {
-			case "essay":
-				benar = strings.Contains(strings.ToLower(jawaban), strings.ToLower(kunci))
-			default:
-				benar = kunci == jawaban
-			}
-			jawabans[i].Benar = &benar
-			if benar {
-				jawabans[i].Nilai = us.Bobot
-				totalSkor += us.Bobot
-				result.Correct++
+		} else if jawaban != "" && hasUjianVisualConfig(snapshot.Konfigurasi) {
+			benar, score, manual := gradeSnapshot(simulasiSnapshot{Tipe: snapshot.Tipe, Konfigurasi: snapshot.Konfigurasi}, jawaban, frozen.Bobot)
+			if manual {
+				result.PendingManual++
 			} else {
-				jawabans[i].Nilai = 0
+				answer.Benar = &benar
+				answer.Nilai = score
+				totalSkor += score
+				if benar {
+					result.Correct++
+				}
+				updates["benar"] = benar
+				updates["nilai"] = score
 			}
-			if err := tx.Model(&UjianJawaban{}).Where("id = ?", jawabans[i].ID).Updates(map[string]interface{}{"benar": jawabans[i].Benar, "nilai": jawabans[i].Nilai}).Error; err != nil {
+		} else if jawaban != "" && strings.TrimSpace(snapshot.Kunci) != "" {
+			benar := bankSoalAnswerCorrect(snapshot.Tipe, snapshot.Opsi, snapshot.Kunci, jawaban)
+			answer.Benar = &benar
+			updates["benar"] = benar
+			if benar {
+				answer.Nilai = frozen.Bobot
+				totalSkor += frozen.Bobot
+				result.Correct++
+				updates["nilai"] = frozen.Bobot
+			}
+		}
+		if err := tx.Model(&UjianJawaban{}).Where("id = ?", answer.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+	if result.PendingManual == 0 {
+		if totalBobot > 0 {
+			result.Score = totalSkor / totalBobot * 100
+		}
+	}
+	return nil
+}
+
+// summarizeUjianAttemptTx produces an idempotent submission result without
+// recalculating historical grades.
+func summarizeUjianAttemptTx(tx *gorm.DB, up *UjianPeserta, uj *Ujian) (ujianGradeResult, error) {
+	var result ujianGradeResult
+	questions, answers, activeQuestions, err := activeUjianAttemptQuestions(tx, up, uj)
+	if err != nil {
+		return result, err
+	}
+	for _, question := range questions {
+		if activeQuestions[question.UjianSoalID] {
+			result.Total++
+		}
+	}
+	answerByQuestion := make(map[string]UjianJawaban, len(answers))
+	for _, answer := range answers {
+		answerByQuestion[answer.SoalID] = answer
+	}
+	trackPending := ujianAttemptNeedsManualGrade(up)
+	for _, question := range questions {
+		if !activeQuestions[question.UjianSoalID] {
+			continue
+		}
+		snapshot, err := loadUjianQuestionSnapshot(question.SnapshotJSON)
+		if err != nil {
+			return result, err
+		}
+		answer, ok := answerByQuestion[question.SoalID]
+		if ok && answer.Benar != nil && *answer.Benar {
+			result.Correct++
+		}
+		if trackPending && ok && isManualUjianQuestion(snapshot.Tipe) && hasAssessmentAnswer(answer.Jawaban) && answer.NilaiManual == nil {
+			result.PendingManual++
+		}
+	}
+	if up.Skor != nil {
+		result.Score = *up.Skor
+	}
+	return result, nil
+}
+
+func (s *Server) finishUjianAttempt(up *UjianPeserta, uj *Ujian, now time.Time, locked, autoClosed bool, tabSwitch *int) (ujianGradeResult, error) {
+	var result ujianGradeResult
+	newlySubmitted := false
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var current UjianPeserta
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ? AND ujian_id = ?", up.ID, uj.ID).Error; err != nil {
+			return err
+		}
+		if current.Status != "mulai" {
+			var summaryErr error
+			result, summaryErr = summarizeUjianAttemptTx(tx, &current, uj)
+			*up = current
+			return summaryErr
+		}
+		if err := gradeUjianPesertaTx(tx, &current, uj, &result); err != nil {
+			return err
+		}
+		status := "selesai"
+		if locked {
+			status = "dikunci"
+		} else if result.PendingManual > 0 {
+			status = "menunggu_nilai"
+		}
+		updates := map[string]interface{}{"status": status, "selesai": now, "penutupan_otomatis": autoClosed || locked}
+		if result.PendingManual > 0 {
+			updates["skor"] = nil
+			current.Skor = nil
+		} else {
+			updates["skor"] = result.Score
+			current.Skor = &result.Score
+		}
+		if tabSwitch != nil {
+			updates["tab_switch"] = *tabSwitch
+			current.TabSwitch = *tabSwitch
+		}
+		write := tx.Model(&UjianPeserta{}).Where("id = ? AND status = ?", current.ID, "mulai").Updates(updates)
+		if write.Error != nil {
+			return write.Error
+		}
+		if write.RowsAffected == 0 {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", current.ID).Error; err != nil {
 				return err
 			}
+			var summaryErr error
+			result, summaryErr = summarizeUjianAttemptTx(tx, &current, uj)
+			*up = current
+			return summaryErr
 		}
-
-		if totalBobot > 0 {
-			result.Score = (totalSkor / totalBobot) * 100
-		}
+		current.Status, current.Selesai = status, &now
+		current.PenutupanOtomatis = autoClosed || locked
+		*up = current
+		newlySubmitted = true
 		return nil
 	})
+	if err == nil && newlySubmitted {
+		s.audit(nil, "submit", "ujian_online", up.ID)
+	}
 	return result, err
+}
+
+func ujianSubmitResponse(up *UjianPeserta, grade ujianGradeResult) fiber.Map {
+	var score interface{}
+	if up.Skor != nil {
+		score = *up.Skor
+	}
+	return fiber.Map{"skor": score, "benar": grade.Correct, "total": grade.Total, "status": up.Status, "menungguPenilaian": grade.PendingManual > 0, "uraianMenunggu": grade.PendingManual}
 }
 
 func (s *Server) gradeUjianPeserta(up *UjianPeserta, uj *Ujian) float64 {
@@ -914,16 +2264,7 @@ func (s *Server) autoFinishUjianSessions() {
 		}
 		// Only auto-finish after the FULL grace period has expired
 		if now.After(batasGrace(&up, &up.Ujian)) {
-			up.Selesai = &now
-			up.Status = "selesai"
-			grade, err := s.gradeUjianPesertaResult(&up, &up.Ujian)
-			if err != nil {
-				continue
-			}
-			up.Skor = &grade.Score
-			if err := s.db.Model(&UjianPeserta{}).Where("id = ?", up.ID).Updates(map[string]interface{}{
-				"status": "selesai", "selesai": now, "skor": grade.Score,
-			}).Error; err != nil {
+			if _, err := s.finishUjianAttempt(&up, &up.Ujian, now, false, true, nil); err != nil {
 				operationLog("exam_auto_finish_update_failed", map[string]any{})
 			}
 		}
@@ -932,6 +2273,50 @@ func (s *Server) autoFinishUjianSessions() {
 
 // selesaiUjianOnline — POST /ujian-online/:ujianId/selesai {nisn, aksesKode}
 // Auto-grades PG answers, computes score, returns result.
+func (s *Server) validateUjianTextResponses(up *UjianPeserta, uj *Ujian) error {
+	var attemptQuestions []UjianPesertaSoal
+	var answers []UjianJawaban
+	var activeQuestions map[string]bool
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		attemptQuestions, answers, activeQuestions, err = activeUjianAttemptQuestions(tx, up, uj)
+		return err
+	}); err != nil {
+		return fiber.NewError(500, "Gagal memeriksa jawaban ujian")
+	}
+	answerByQuestion := make(map[string]UjianJawaban, len(answers))
+	for _, answer := range answers {
+		answerByQuestion[answer.SoalID] = answer
+	}
+	for _, item := range attemptQuestions {
+		if !activeQuestions[item.UjianSoalID] {
+			continue
+		}
+		snapshot, err := loadUjianQuestionSnapshot(item.SnapshotJSON)
+		if err != nil {
+			return fiber.NewError(500, "Snapshot soal ujian tidak valid")
+		}
+		if len(snapshot.Konfigurasi.BranchToByAnswer) > 0 {
+			answer, exists := answerByQuestion[item.SoalID]
+			if !exists || strings.TrimSpace(answer.Jawaban) == "" || strings.TrimSpace(answer.Jawaban) == "null" {
+				return fiber.NewError(400, fmt.Sprintf("Soal %d: pilih jawaban untuk menentukan bagian berikutnya sebelum mengirim ujian", item.Urutan))
+			}
+		}
+		if snapshot.Tipe != simulasiTipeIsian && snapshot.Tipe != simulasiTipeUraian {
+			continue
+		}
+		answer, exists := answerByQuestion[item.SoalID]
+		if !exists {
+			continue
+		}
+		validationErr := validateSimulasiResponseRules(simulasiSnapshot{Tipe: snapshot.Tipe, Konfigurasi: snapshot.Konfigurasi}, answer.Jawaban)
+		if validationErr != nil {
+			return fiber.NewError(400, fmt.Sprintf("Soal %d: %s", item.Urutan, validationErr.Error()))
+		}
+	}
+	return nil
+}
+
 func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
 	pd, uj, err := s.ujianOnlineKodeAuth(c, c.Params("ujianId"))
 	if err != nil {
@@ -941,30 +2326,29 @@ func (s *Server) selesaiUjianOnline(c *fiber.Ctx) error {
 	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
 		return fiber.NewError(400, "Anda belum memulai ujian ini")
 	}
-	if up.Status == "selesai" || up.Status == "dikunci" {
-		return fiber.NewError(403, "Ujian sudah selesai")
+	if up.Status == "selesai" || up.Status == "menunggu_nilai" || up.Status == "dikunci" {
+		grade, summaryErr := summarizeUjianAttemptTx(s.db, &up, uj)
+		if summaryErr != nil {
+			return fiber.NewError(500, "Gagal memuat hasil ujian")
+		}
+		response := ujianSubmitResponse(&up, grade)
+		response["bolehEditRespons"] = ujianResponseEditAllowed(up, *uj, time.Now())
+		return c.JSON(response)
 	}
 	now := time.Now()
-	up.Selesai = &now
-	up.Status = "selesai"
-
-	grade, gradeErr := s.gradeUjianPesertaResult(&up, uj)
-	if gradeErr != nil {
+	autoClosed := up.Mulai != nil && uj.DurasiMenit > 0 && now.After(batasGrace(&up, uj))
+	if !autoClosed {
+		if err := s.validateUjianTextResponses(&up, uj); err != nil {
+			return err
+		}
+	}
+	grade, finishErr := s.finishUjianAttempt(&up, uj, now, false, autoClosed, nil)
+	if finishErr != nil {
 		return fiber.NewError(500, "Gagal menghitung nilai ujian")
 	}
-
-	up.Skor = &grade.Score
-	if saveErr := s.db.Model(&UjianPeserta{}).Where("id = ?", up.ID).Updates(map[string]interface{}{
-		"status": "selesai", "selesai": now, "skor": grade.Score,
-	}).Error; saveErr != nil {
-		return fiber.NewError(500, "Gagal menyimpan hasil ujian")
-	}
-	return c.JSON(fiber.Map{
-		"skor":   grade.Score,
-		"benar":  grade.Correct,
-		"total":  grade.Total,
-		"status": "selesai",
-	})
+	response := ujianSubmitResponse(&up, grade)
+	response["bolehEditRespons"] = ujianResponseEditAllowed(up, *uj, time.Now())
+	return c.JSON(response)
 }
 
 // tabSwitchUjianOnline — POST /ujian-online/:ujianId/tab-switch {nisn, aksesKode}
@@ -977,26 +2361,20 @@ func (s *Server) tabSwitchUjianOnline(c *fiber.Ctx) error {
 	if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&up).Error != nil {
 		return fiber.NewError(400, "Anda belum memulai ujian ini")
 	}
-	if up.Status == "selesai" || up.Status == "dikunci" {
+	if up.Status == "selesai" || up.Status == "menunggu_nilai" || up.Status == "dikunci" {
 		return fiber.NewError(403, "Ujian sudah selesai")
 	}
 	up.TabSwitch++
 	// Auto-lock if batas terlampaui
 	if uj.BatasTabSwitch > 0 && up.TabSwitch >= uj.BatasTabSwitch {
 		now := time.Now()
-		up.Selesai = &now
-		up.Status = "dikunci"
-		grade, gradeErr := s.gradeUjianPesertaResult(&up, uj)
-		if gradeErr != nil {
+		grade, finishErr := s.finishUjianAttempt(&up, uj, now, true, true, &up.TabSwitch)
+		if finishErr != nil {
 			return fiber.NewError(500, "Gagal menghitung nilai ujian")
 		}
-		up.Skor = &grade.Score
-		if saveErr := s.db.Model(&UjianPeserta{}).Where("id = ?", up.ID).Updates(map[string]interface{}{
-			"tab_switch": up.TabSwitch, "status": "dikunci", "selesai": now, "skor": grade.Score,
-		}).Error; saveErr != nil {
-			return fiber.NewError(500, "Gagal menyimpan status ujian")
-		}
-		return c.JSON(fiber.Map{"tabSwitch": up.TabSwitch, "locked": true, "skor": grade.Score})
+		response := ujianSubmitResponse(&up, grade)
+		response["tabSwitch"], response["locked"] = up.TabSwitch, true
+		return c.JSON(response)
 	}
 	if err := s.db.Model(&UjianPeserta{}).Where("id = ?", up.ID).Update("tab_switch", up.TabSwitch).Error; err != nil {
 		return fiber.NewError(500, "Gagal menyimpan status ujian")
@@ -1022,16 +2400,324 @@ func (s *Server) monitorUjianOnline(c *fiber.Ctx) error {
 	if err := s.db.Preload("PesertaDidik").Where("ujian_id = ?", ujianID).Find(&pesertas).Error; err != nil {
 		return fiber.NewError(500, "Gagal memuat peserta ujian")
 	}
+	var questions []UjianSoal
+	if err := s.db.Preload("Soal").Where("ujian_id = ?", ujianID).Find(&questions).Error; err != nil {
+		return fiber.NewError(500, "Gagal memuat ringkasan soal")
+	}
+	attemptIDs := make([]string, 0, len(pesertas))
+	pendingAttempts := make(map[string]bool, len(pesertas))
+	for _, peserta := range pesertas {
+		attemptIDs = append(attemptIDs, peserta.ID)
+		pendingAttempts[peserta.ID] = ujianAttemptNeedsManualGrade(&peserta)
+	}
+	var answers []UjianJawaban
+	if len(attemptIDs) > 0 {
+		if err := s.db.Where("ujian_peserta_id IN ?", attemptIDs).Find(&answers).Error; err != nil {
+			return fiber.NewError(500, "Gagal memuat ringkasan jawaban")
+		}
+	}
+	var snapshots []UjianPesertaSoal
+	if len(attemptIDs) > 0 {
+		if err := s.db.Where("ujian_peserta_id IN ?", attemptIDs).Find(&snapshots).Error; err != nil {
+			return fiber.NewError(500, "Gagal memuat snapshot soal")
+		}
+	}
+	gradeByAttempt := make(map[string]ujianGradeResult, len(pesertas))
+	legacyQuestionTypeByID := make(map[string]string, len(questions))
+	for _, question := range questions {
+		legacyQuestionTypeByID[question.SoalID] = question.Soal.Tipe
+	}
+	answersByAttempt := make(map[string][]UjianJawaban, len(pesertas))
+	for _, answer := range answers {
+		answersByAttempt[answer.UjianPesertaID] = append(answersByAttempt[answer.UjianPesertaID], answer)
+	}
+	snapshotsByAttempt := make(map[string][]UjianPesertaSoal, len(pesertas))
+	for _, question := range snapshots {
+		snapshotsByAttempt[question.UjianPesertaID] = append(snapshotsByAttempt[question.UjianPesertaID], question)
+	}
+	questionTypeByAttemptAndID := make(map[string]string, len(snapshots))
+	activeSourceByAttemptAndID := make(map[string]bool, len(snapshots))
+	questionTotalByAttempt := make(map[string]int, len(pesertas))
+	for _, peserta := range pesertas {
+		attemptQuestions := snapshotsByAttempt[peserta.ID]
+		if len(attemptQuestions) == 0 {
+			for _, sourceQuestion := range questions {
+				activeSourceByAttemptAndID[peserta.ID+":"+sourceQuestion.SoalID] = true
+			}
+			questionTotalByAttempt[peserta.ID] = len(questions)
+			continue
+		}
+		activeQuestions, err := activeUjianQuestionIDs(attemptQuestions, answersByAttempt[peserta.ID])
+		if err != nil {
+			return fiber.NewError(500, "Alur bagian ujian tidak valid")
+		}
+		for _, question := range attemptQuestions {
+			if !activeQuestions[question.UjianSoalID] {
+				continue
+			}
+			snapshot, err := loadUjianQuestionSnapshot(question.SnapshotJSON)
+			if err != nil {
+				return fiber.NewError(500, "Snapshot soal ujian tidak valid")
+			}
+			questionTypeByAttemptAndID[question.UjianPesertaID+":"+question.SoalID] = snapshot.Tipe
+			activeSourceByAttemptAndID[question.UjianPesertaID+":"+question.SoalID] = true
+			questionTotalByAttempt[question.UjianPesertaID]++
+		}
+	}
+	for _, answer := range answers {
+		if !activeSourceByAttemptAndID[answer.UjianPesertaID+":"+answer.SoalID] {
+			continue
+		}
+		grade := gradeByAttempt[answer.UjianPesertaID]
+		if answer.Benar != nil && *answer.Benar {
+			grade.Correct++
+		}
+		questionType := questionTypeByAttemptAndID[answer.UjianPesertaID+":"+answer.SoalID]
+		if questionType == "" {
+			questionType = legacyQuestionTypeByID[answer.SoalID]
+		}
+		if pendingAttempts[answer.UjianPesertaID] && isManualUjianQuestion(questionType) && strings.TrimSpace(answer.Jawaban) != "" && answer.NilaiManual == nil {
+			grade.PendingManual++
+		}
+		gradeByAttempt[answer.UjianPesertaID] = grade
+	}
 	result := make([]examMonitorItem, 0, len(pesertas))
 	for _, peserta := range pesertas {
+		grade := gradeByAttempt[peserta.ID]
+		grade.Total = len(questions)
+		if questionTotalByAttempt[peserta.ID] > 0 {
+			grade.Total = questionTotalByAttempt[peserta.ID]
+		}
 		result = append(result, examMonitorItem{
 			ID: peserta.ID, UjianID: peserta.UjianID, PesertaDidikID: peserta.PesertaDidikID,
 			Mulai: peserta.Mulai, Selesai: peserta.Selesai, Skor: peserta.Skor,
-			Status: peserta.Status, TabSwitch: peserta.TabSwitch,
+			Status: peserta.Status, TabSwitch: peserta.TabSwitch, UraianMenunggu: grade.PendingManual,
 			PesertaDidik: examMonitorStudent{ID: peserta.PesertaDidik.ID, Nama: peserta.PesertaDidik.Nama, NIS: peserta.PesertaDidik.NIS},
 		})
 	}
 	return c.JSON(result)
+}
+
+type examReviewQuestion struct {
+	UjianSoalID  string                 `json:"ujianSoalId"`
+	Aktif        bool                   `json:"aktif"`
+	JawabanID    string                 `json:"jawabanId,omitempty"`
+	Tipe         string                 `json:"tipe"`
+	Pertanyaan   string                 `json:"pertanyaan"`
+	Opsi         []string               `json:"opsi,omitempty"`
+	Konfigurasi  simulasiConfig         `json:"konfigurasi,omitempty"`
+	Kunci        string                 `json:"kunci"`
+	Bobot        float64                `json:"bobot"`
+	Jawaban      string                 `json:"jawaban"`
+	Nilai        float64                `json:"nilai"`
+	NilaiManual  *float64               `json:"nilaiManual,omitempty"`
+	KomentarGuru string                 `json:"komentarGuru"`
+	DinilaiPada  *time.Time             `json:"dinilaiPada,omitempty"`
+	Berkas       []publicExamAnswerFile `json:"berkas,omitempty"`
+}
+
+// getUjianAttemptReview is staff-only and intentionally separate from the
+// public monitor summary, so answer keys can never leak to student endpoints.
+func (s *Server) getUjianAttemptReview(c *fiber.Ctx) error {
+	ujianID, attemptID := c.Params("ujianId"), c.Params("attemptId")
+	var uj Ujian
+	if s.db.First(&uj, "id = ?", ujianID).Error != nil {
+		return fiber.NewError(404, "Ujian tidak ditemukan")
+	}
+	if err := s.scopeUjian(c, &uj); err != nil {
+		return err
+	}
+	var attempt UjianPeserta
+	if err := s.db.Preload("PesertaDidik").First(&attempt, "id = ? AND ujian_id = ?", attemptID, ujianID).Error; err != nil {
+		return fiber.NewError(404, "Percobaan tidak ditemukan")
+	}
+	var questions []UjianPesertaSoal
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		questions, err = loadUjianAttemptQuestionsTx(tx, &attempt, &uj, false)
+		return err
+	}); err != nil {
+		return fiber.NewError(500, "Gagal memuat soal ujian")
+	}
+	var answers []UjianJawaban
+	if err := s.db.Where("ujian_peserta_id = ?", attempt.ID).Find(&answers).Error; err != nil {
+		return fiber.NewError(500, "Gagal memuat jawaban peserta")
+	}
+	answerByQuestion := make(map[string]UjianJawaban, len(answers))
+	for _, answer := range answers {
+		answerByQuestion[answer.SoalID] = answer
+	}
+	var answerFiles []UjianJawabanBerkas
+	if err := s.db.Where("ujian_peserta_id = ?", attempt.ID).Find(&answerFiles).Error; err != nil {
+		return fiber.NewError(500, "Gagal memuat berkas jawaban peserta")
+	}
+	fileByID := make(map[string]UjianJawabanBerkas, len(answerFiles))
+	for _, file := range answerFiles {
+		fileByID[file.ID] = file
+	}
+	activeQuestions, err := activeUjianQuestionIDs(questions, answers)
+	if err != nil {
+		return fiber.NewError(500, "Alur bagian ujian tidak valid")
+	}
+	review := make([]examReviewQuestion, 0, len(questions))
+	for _, question := range questions {
+		snapshot, err := loadUjianQuestionSnapshot(question.SnapshotJSON)
+		if err != nil {
+			return fiber.NewError(500, "Snapshot soal ujian tidak valid")
+		}
+		row := examReviewQuestion{
+			UjianSoalID: question.UjianSoalID, Aktif: activeQuestions[question.UjianSoalID], Tipe: snapshot.Tipe,
+			Pertanyaan: snapshot.Pertanyaan, Kunci: snapshot.Kunci, Bobot: question.Bobot,
+			Konfigurasi: snapshot.Konfigurasi,
+		}
+		if snapshot.Opsi != "" {
+			_ = json.Unmarshal([]byte(snapshot.Opsi), &row.Opsi)
+		}
+		if answer, ok := answerByQuestion[question.SoalID]; ok {
+			row.JawabanID, row.Jawaban, row.Nilai = answer.ID, answer.Jawaban, answer.Nilai
+			row.NilaiManual, row.KomentarGuru, row.DinilaiPada = answer.NilaiManual, answer.KomentarGuru, answer.DinilaiPada
+			if ids, decodeErr := decodeSimulasiFileIDs([]byte(answer.Jawaban)); decodeErr == nil {
+				for _, fileID := range ids {
+					if file, exists := fileByID[fileID]; exists && file.UjianSoalID == question.UjianSoalID {
+						row.Berkas = append(row.Berkas, publicExamAnswerFile{ID: file.ID, NamaFile: file.NamaFile, Ukuran: file.Ukuran})
+					}
+				}
+			}
+		}
+		review = append(review, row)
+	}
+	var grade ujianGradeResult
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		grade, err = summarizeUjianAttemptTx(tx, &attempt, &uj)
+		return err
+	}); err != nil {
+		return fiber.NewError(500, "Gagal menghitung ringkasan penilaian")
+	}
+	return c.JSON(fiber.Map{
+		"attempt": fiber.Map{
+			"id": attempt.ID, "status": attempt.Status, "skor": attempt.Skor,
+			"mulai": attempt.Mulai, "selesai": attempt.Selesai,
+			"pesertaDidik": examMonitorStudent{ID: attempt.PesertaDidik.ID, Nama: attempt.PesertaDidik.Nama, NIS: attempt.PesertaDidik.NIS},
+			"benar":        grade.Correct, "total": grade.Total, "uraianMenunggu": grade.PendingManual,
+		},
+		"soal": review,
+	})
+}
+
+func (s *Server) gradeUjianOnlineAnswer(c *fiber.Ctx) error {
+	role, _ := c.Locals("role").(string)
+	if role != "admin" && role != "guru" {
+		return fiber.NewError(403, "Hanya admin atau guru yang dapat menilai jawaban")
+	}
+	ujianID, attemptID, answerID := c.Params("ujianId"), c.Params("attemptId"), c.Params("answerId")
+	var uj Ujian
+	if s.db.First(&uj, "id = ?", ujianID).Error != nil {
+		return fiber.NewError(404, "Ujian tidak ditemukan")
+	}
+	if err := s.scopeUjian(c, &uj); err != nil {
+		return err
+	}
+	if role == "guru" && uj.DibuatOlehUserID != c.Locals("userID") && !s.assessmentCollaboratorCanGrade(assessmentModuleUjian, uj.ID, c.Locals("userID").(string)) {
+		return fiber.NewError(403, "peran kolaborator ini tidak dapat menilai jawaban")
+	}
+	var in struct {
+		Nilai    float64 `json:"nilai"`
+		Komentar string  `json:"komentar"`
+	}
+	if err := c.BodyParser(&in); err != nil || math.IsNaN(in.Nilai) || math.IsInf(in.Nilai, 0) || in.Nilai < 0 {
+		return fiber.NewError(400, "Nilai jawaban tidak valid")
+	}
+	in.Komentar = strings.TrimSpace(in.Komentar)
+	if len([]byte(in.Komentar)) > 4000 {
+		return fiber.NewError(400, "Komentar terlalu panjang")
+	}
+	uid, _ := c.Locals("userID").(string)
+	var result ujianGradeResult
+	var finalStatus string
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var attempt UjianPeserta
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&attempt, "id = ? AND ujian_id = ?", attemptID, ujianID).Error; err != nil {
+			return fiber.NewError(404, "Percobaan tidak ditemukan")
+		}
+		if attempt.Status == "mulai" {
+			return fiber.NewError(409, "Ujian belum dikirim oleh peserta")
+		}
+		var answer UjianJawaban
+		if err := tx.First(&answer, "id = ? AND ujian_peserta_id = ?", answerID, attempt.ID).Error; err != nil {
+			return fiber.NewError(404, "Jawaban tidak ditemukan pada percobaan ini")
+		}
+		questions, _, activeQuestions, err := activeUjianAttemptQuestions(tx, &attempt, &uj)
+		if err != nil {
+			return err
+		}
+		var question *UjianPesertaSoal
+		for i := range questions {
+			if questions[i].SoalID == answer.SoalID {
+				question = &questions[i]
+				break
+			}
+		}
+		if question == nil {
+			return fiber.NewError(404, "Soal tidak ditemukan dalam ujian ini")
+		}
+		if !activeQuestions[question.UjianSoalID] {
+			return fiber.NewError(409, "Jawaban berasal dari bagian yang dilewati dan tidak masuk penilaian")
+		}
+		snapshot, err := loadUjianQuestionSnapshot(question.SnapshotJSON)
+		if err != nil {
+			return fiber.NewError(500, "Snapshot soal ujian tidak valid")
+		}
+		if !isManualUjianQuestion(snapshot.Tipe) {
+			return fiber.NewError(400, "Soal ini tidak memerlukan penilaian manual")
+		}
+		if question.Bobot < 0 || in.Nilai > question.Bobot {
+			return fiber.NewError(400, "Nilai harus berada dalam rentang 0 sampai bobot soal")
+		}
+		now, score := time.Now(), in.Nilai
+		answer.NilaiManual, answer.KomentarGuru = &score, in.Komentar
+		answer.DinilaiOlehUserID, answer.DinilaiPada = &uid, &now
+		if err := tx.Model(&UjianJawaban{}).Where("id = ?", answer.ID).Updates(map[string]interface{}{
+			"nilai_manual": score, "komentar_guru": in.Komentar,
+			"dinilai_oleh_user_id": uid, "dinilai_pada": now,
+		}).Error; err != nil {
+			return err
+		}
+		if err := gradeUjianPesertaTx(tx, &attempt, &uj, &result); err != nil {
+			return err
+		}
+		finalStatus = attempt.Status
+		if finalStatus != "dikunci" {
+			if result.PendingManual > 0 {
+				finalStatus = "menunggu_nilai"
+			} else {
+				finalStatus = "selesai"
+			}
+		}
+		updates := map[string]interface{}{"status": finalStatus}
+		if result.PendingManual > 0 {
+			updates["skor"] = nil
+		} else {
+			updates["skor"] = result.Score
+		}
+		if err := tx.Model(&UjianPeserta{}).Where("id = ?", attempt.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		s.auditTx(tx, &uid, "grade", "ujian_online_jawaban", answer.ID)
+		return nil
+	})
+	if err != nil {
+		var fiberErr *fiber.Error
+		if errors.As(err, &fiberErr) {
+			return err
+		}
+		return fiber.NewError(500, "Gagal menyimpan penilaian")
+	}
+	var score interface{}
+	if result.PendingManual == 0 {
+		score = result.Score
+	}
+	return c.JSON(fiber.Map{"jawabanId": answerID, "nilai": in.Nilai, "komentar": in.Komentar, "skorUjian": score, "status": finalStatus, "uraianMenunggu": result.PendingManual})
 }
 
 // ============================================================================
@@ -1600,7 +3286,7 @@ func (s *Server) getUjianSkorAnak(c *fiber.Ctx) error {
 	}
 	var pesertas []UjianPeserta
 	if err := s.db.Preload("Ujian").Preload("Ujian.Mapel").
-		Where("peserta_didik_id = ? AND status = ?", anakID, "selesai").
+		Where("peserta_didik_id = ? AND status IN ?", anakID, []string{"selesai", "menunggu_nilai", "dikunci"}).
 		Order("created_at desc").
 		Find(&pesertas).Error; err != nil {
 		return fiber.NewError(500, "gagal memuat hasil ujian anak")

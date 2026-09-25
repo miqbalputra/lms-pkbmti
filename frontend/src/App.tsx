@@ -71,6 +71,7 @@ const PengumumanView = lazy(() => import('./pages/PengumumanView').then((m) => (
 const RekapBuku = lazy(() => import('./pages/RekapBuku').then((m) => ({ default: m.RekapBuku })))
 const TugasView = lazy(() => import('./pages/TugasView').then((m) => ({ default: m.TugasView })))
 const UjianView = lazy(() => import('./pages/UjianView').then((m) => ({ default: m.UjianView })))
+const BankSoalView = lazy(() => import('./pages/BankSoalView').then((m) => ({ default: m.BankSoalView })))
 const SertifikatView = lazy(() => import('./pages/SertifikatView').then((m) => ({ default: m.SertifikatView })))
 const KartuPelajarView = lazy(() => import('./pages/KartuPelajarView').then((m) => ({ default: m.KartuPelajarView })))
 const PerilakuView = lazy(() => import('./pages/PerilakuView').then((m) => ({ default: m.PerilakuView })))
@@ -370,6 +371,9 @@ function Workspace({
   if (page === 'rpp') return <RppView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'kelas-virtual') return <KelasVirtualView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'bank-soal') return <SimulasiView token={token} user={user} />
+  if (page === 'bank-soal-ujian') return user.role === 'admin' || user.role === 'guru' || user.role === 'kepala_sekolah'
+    ? <BankSoalView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
+    : <Restricted />
   if (page === 'ujian') return <UjianView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'sertifikat') return <SertifikatView token={token} readOnly={user.role !== 'admin'} />
   if (page === 'kartu-pelajar') return <KartuPelajarView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />

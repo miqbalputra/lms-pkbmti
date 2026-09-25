@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
@@ -32,6 +33,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func (s *Server) routes(api fiber.Router) {
@@ -57,6 +59,9 @@ func (s *Server) routes(api fiber.Router) {
 
 	// Other bare-api reads (each handler scopes guru via inline checks).
 	api.Get("/kelas", s.listKelas)
+	// Subject names are reference metadata needed by tutor assessment editors;
+	// the handler limits guru to subjects in their wali classes/teaching loads.
+	api.Get("/mapel", s.simulasiListMapel)
 	api.Get("/kelas/:id/riwayat-wali", s.listRiwayatWali)
 	api.Put("/kelas/:id/peserta-didik-order", s.savePesertaDidikOrder)
 	api.Get("/peserta-didik", s.listSiswa)
@@ -184,15 +189,30 @@ func (s *Server) routes(api fiber.Router) {
 	api.Post("/ujian", s.createUjian)
 	api.Put("/ujian/:id", s.updateUjian)
 	api.Delete("/ujian/:id", s.deleteUjian)
+	api.Get("/ujian/:id/bagian", s.listUjianBagian)
+	api.Put("/ujian/:id/bagian", s.saveUjianBagian)
 	api.Get("/ujian/:id/soal", s.listUjianSoal)
 	api.Post("/ujian/:id/soal", s.addUjianSoal)
+	api.Put("/ujian/:id/soal/:sid/branch", s.updateUjianSoalBranch)
+	api.Put("/ujian/:id/soal/urutan", s.reorderUjianSoal)
 	api.Delete("/ujian/:id/soal/:sid", s.deleteUjianSoal)
 	api.Get("/ujian/:id/print", s.printUjian)
 	api.Get("/ujian/:id/export", s.exportUjianResults)
 	api.Get("/ujian-online/monitor/:ujianId", s.monitorUjianOnline)
+	api.Get("/ujian-online/monitor/:ujianId/attempt/:attemptId", s.getUjianAttemptReview)
+	api.Get("/ujian-online/monitor/:ujianId/attempt/:attemptId/file/:fileId", s.ujianOnlineStaffDownloadAnswerFile)
+	api.Post("/ujian-online/monitor/:ujianId/attempt/:attemptId/answer/:answerId/grade", s.gradeUjianOnlineAnswer)
 
 	// Modul Simulasi ANBK/TKA SD owns a separate schema/routes so historical
 	// Bank Soal and Ujian data keeps its original behaviour.
+	api.Get("/assessment/analytics", s.assessmentAnalytics)
+	api.Get("/assessment/analytics/export", s.exportAssessmentAnalytics)
+	api.Get("/assessment/analytics/report.pdf", s.exportAssessmentAnalyticsPDF)
+	api.Get("/assessment/analytics/questions", s.assessmentQuestionAnalytics)
+	api.Get("/assessment/analytics/questions/export", s.exportAssessmentQuestionAnalytics)
+	api.Get("/assessment/:module/:assessmentId/collaborators", s.assessmentCollaborators)
+	api.Post("/assessment/:module/:assessmentId/collaborators", s.addAssessmentCollaborator)
+	api.Delete("/assessment/:module/:assessmentId/collaborators/:collaboratorId", s.removeAssessmentCollaborator)
 	registerSimulasiRoutes(api, s)
 
 	// Modul Notifikasi — CRUD notifikasi user.
@@ -285,7 +305,6 @@ func (s *Server) routes(api fiber.Router) {
 	readAll.Get("/orang-tua/relasi", s.listRelasiOrtu)
 	readAll.Get("/pokjar", func(c *fiber.Ctx) error { return list[Pokjar](s.db, c) })
 	readAll.Get("/tahun-ajaran", func(c *fiber.Ctx) error { return list[TahunAjaran](s.db.Order("tanggal_mulai desc"), c) })
-	readAll.Get("/mapel", func(c *fiber.Ctx) error { return list[MataPelajaran](s.db, c) })
 	readAll.Get("/users", s.listUsers)
 	readAll.Get("/kelas-mapel", s.listKelasMapel)
 	readAll.Get("/audit-logs", s.listAuditLogs)
@@ -6255,12 +6274,452 @@ func (s *Server) deleteKelasVirtual(c *fiber.Ctx) error {
 // ---------------------------------------------------------------------------
 
 type bankSoalInput struct {
-	MapelID    string  `json:"mapelId"`
-	Tipe       string  `json:"tipe"`
-	Pertanyaan string  `json:"pertanyaan"`
-	Opsi       string  `json:"opsi"` // JSON array string (untuk pg)
-	Kunci      string  `json:"kunci"`
-	Poin       float64 `json:"poin"`
+	MapelID       string               `json:"mapelId"`
+	Domain        *string              `json:"domain"`
+	Topik         *string              `json:"topik"`
+	Kompetensi    *string              `json:"kompetensi"`
+	LevelKognitif *string              `json:"levelKognitif"`
+	Tipe          string               `json:"tipe"`
+	Pertanyaan    string               `json:"pertanyaan"`
+	Opsi          string               `json:"opsi"` // JSON array string (untuk format lama)
+	Konfigurasi   json.RawMessage      `json:"konfigurasi"`
+	Stimulus      []simulasiStimulusIn `json:"stimulus"`
+	Kunci         string               `json:"kunci"`
+	Poin          float64              `json:"poin"`
+}
+
+func optionalBankSoalMetadata(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+var bankSoalTypes = map[string]bool{
+	"pg": true, "checkbox": true, "dropdown": true, "true_false": true,
+	"short_answer": true, "essay": true,
+	"pg_tunggal": true, "pg_kompleks": true, "benar_salah": true,
+	"menjodohkan": true, "isian_singkat": true, "uraian": true,
+	"skala_linear": true, "rating": true, "kisi_pg": true,
+	"kisi_checkbox": true, "tanggal": true, "waktu": true, "susun_urutan": true, "unggah_berkas": true,
+}
+
+func normalizeBankSoalStimulus(items []simulasiStimulusIn) ([]simulasiStimulusIn, error) {
+	if len(items) > 20 {
+		return nil, errors.New("maksimal 20 bahan stimulus per soal")
+	}
+	if len(items) == 0 {
+		return []simulasiStimulusIn{}, nil
+	}
+	result := make([]simulasiStimulusIn, len(items))
+	for index, item := range items {
+		item.Jenis = strings.TrimSpace(item.Jenis)
+		item.Konten = strings.TrimSpace(item.Konten)
+		item.AltText = strings.TrimSpace(item.AltText)
+		if item.Jenis == "image" {
+			return nil, errors.New("gambar stimulus harus diunggah melalui pustaka bahan simulasi")
+		}
+		if len(item.Konten) > 30000 {
+			return nil, errors.New("isi stimulus maksimal 30.000 karakter")
+		}
+		item.Urutan = index + 1
+		if err := validateStimulus(item); err != nil {
+			return nil, err
+		}
+		result[index] = item
+	}
+	return result, nil
+}
+
+func decodeBankSoalStimulus(raw string) ([]simulasiStimulusIn, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []simulasiStimulusIn{}, nil
+	}
+	var items []simulasiStimulusIn
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil, errors.New("data stimulus Bank Soal tidak valid")
+	}
+	return normalizeBankSoalStimulus(items)
+}
+
+func setBankSoalStimulus(row *BankSoal) error {
+	items, err := decodeBankSoalStimulus(row.StimulusJSON)
+	if err != nil {
+		return err
+	}
+	row.Stimulus = items
+	return nil
+}
+
+func bankSoalOptions(raw string) ([]string, error) {
+	var options []string
+	if err := json.Unmarshal([]byte(raw), &options); err != nil {
+		return nil, errors.New("opsi harus berupa daftar pilihan yang valid")
+	}
+	if len(options) < 2 {
+		return nil, errors.New("soal pilihan minimal memiliki dua opsi")
+	}
+	for i, option := range options {
+		if strings.TrimSpace(option) == "" {
+			return nil, fmt.Errorf("opsi %d belum diisi", i+1)
+		}
+	}
+	return options, nil
+}
+
+func bankSoalKeyIndexes(raw string, optionCount int, multiple bool) ([]int, error) {
+	if multiple {
+		var indexes []int
+		if err := json.Unmarshal([]byte(raw), &indexes); err != nil || len(indexes) == 0 {
+			return nil, errors.New("pilih minimal satu kunci jawaban")
+		}
+		seen := map[int]bool{}
+		for _, index := range indexes {
+			if index < 0 || index >= optionCount || seen[index] {
+				return nil, errors.New("kunci jawaban pilihan tidak valid")
+			}
+			seen[index] = true
+		}
+		return indexes, nil
+	}
+	index, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || index < 0 || index >= optionCount {
+		return nil, errors.New("pilih kunci jawaban yang tersedia")
+	}
+	return []int{index}, nil
+}
+
+func acceptedBankShortAnswers(raw string) ([]string, error) {
+	var answers []string
+	if err := json.Unmarshal([]byte(raw), &answers); err != nil {
+		// Older/manual clients may provide one plain accepted answer. Continue to
+		// accept it so existing clients are not forced to learn a new payload.
+		if strings.TrimSpace(raw) == "" {
+			return nil, errors.New("isi minimal satu jawaban yang diterima")
+		}
+		answers = []string{raw}
+	}
+	seen := map[string]bool{}
+	clean := make([]string, 0, len(answers))
+	for _, answer := range answers {
+		answer = strings.TrimSpace(answer)
+		key := normalizeBankShortAnswer(answer)
+		if key == "" {
+			continue
+		}
+		if !seen[key] {
+			seen[key] = true
+			clean = append(clean, answer)
+		}
+	}
+	if len(clean) == 0 {
+		return nil, errors.New("isi minimal satu jawaban yang diterima")
+	}
+	return clean, nil
+}
+
+func normalizeBankShortAnswer(value string) string {
+	runes := []rune(strings.ToLower(strings.TrimSpace(value)))
+	var normalized strings.Builder
+	for i, char := range runes {
+		if char == ',' && i > 0 && i+1 < len(runes) && unicode.IsDigit(runes[i-1]) && unicode.IsDigit(runes[i+1]) {
+			normalized.WriteRune('.')
+			continue
+		}
+		if unicode.IsPunct(char) && !(char == '.' && i > 0 && i+1 < len(runes) && unicode.IsDigit(runes[i-1]) && unicode.IsDigit(runes[i+1])) {
+			normalized.WriteRune(' ')
+			continue
+		}
+		if unicode.IsSpace(char) {
+			normalized.WriteRune(' ')
+			continue
+		}
+		normalized.WriteRune(char)
+	}
+	return strings.Join(strings.Fields(normalized.String()), " ")
+}
+
+func validateBankSoal(b *BankSoal) error {
+	if !bankSoalTypes[b.Tipe] {
+		return errors.New("tipe soal tidak didukung")
+	}
+	if strings.TrimSpace(b.Pertanyaan) == "" {
+		return errors.New("pertanyaan wajib diisi")
+	}
+	for label, metadata := range map[string]struct {
+		value string
+		limit int
+	}{
+		"domain": {b.Domain, 160}, "topik": {b.Topik, 160},
+		"kompetensi": {b.Kompetensi, 2000}, "level kognitif": {b.LevelKognitif, 80},
+	} {
+		if len(metadata.value) > metadata.limit {
+			return fmt.Errorf("%s maksimal %d byte", label, metadata.limit)
+		}
+	}
+	if b.Poin < 0 || math.IsNaN(b.Poin) || math.IsInf(b.Poin, 0) {
+		return errors.New("poin soal tidak valid")
+	}
+	if strings.TrimSpace(b.Konfigurasi) != "" {
+		var config simulasiConfig
+		if err := json.Unmarshal([]byte(b.Konfigurasi), &config); err != nil {
+			return errors.New("konfigurasi jawaban tidak valid")
+		}
+		if b.Tipe == simulasiTipeUnggah {
+			if config.MaxFiles == 0 {
+				config.MaxFiles = 3
+			}
+			if config.MaxFileSizeMB == 0 {
+				config.MaxFileSizeMB = 10
+			}
+		}
+		if err := validateSimulasiConfig(b.Tipe, config); err != nil {
+			return err
+		}
+		canonical, err := json.Marshal(config)
+		if err != nil {
+			return errors.New("konfigurasi jawaban tidak dapat disimpan")
+		}
+		b.Konfigurasi = string(canonical)
+		b.Kunci = ""
+		return nil
+	}
+	switch b.Tipe {
+	case "pg", "dropdown":
+		options, err := bankSoalOptions(b.Opsi)
+		if err != nil {
+			return err
+		}
+		if _, err := bankSoalKeyIndexes(b.Kunci, len(options), false); err != nil {
+			return err
+		}
+	case "true_false":
+		if strings.TrimSpace(b.Opsi) == "" {
+			b.Opsi = `["Benar","Salah"]`
+		}
+		options, err := bankSoalOptions(b.Opsi)
+		if err != nil {
+			return err
+		}
+		if len(options) != 2 || options[0] != "Benar" || options[1] != "Salah" {
+			return errors.New("opsi benar/salah harus menggunakan pilihan Benar dan Salah")
+		}
+		if _, err := bankSoalKeyIndexes(b.Kunci, len(options), false); err != nil {
+			return err
+		}
+	case "checkbox":
+		options, err := bankSoalOptions(b.Opsi)
+		if err != nil {
+			return err
+		}
+		if _, err := bankSoalKeyIndexes(b.Kunci, len(options), true); err != nil {
+			return err
+		}
+	case "short_answer":
+		answers, err := acceptedBankShortAnswers(b.Kunci)
+		if err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(answers)
+		if err != nil {
+			return err
+		}
+		b.Kunci = string(encoded)
+	case "pg_tunggal", "pg_kompleks", "benar_salah", "menjodohkan", "isian_singkat", "uraian", "skala_linear", "rating", "kisi_pg", "kisi_checkbox", "tanggal", "waktu", "susun_urutan", "unggah_berkas":
+		return errors.New("konfigurasi jawaban visual wajib diisi")
+	}
+	return nil
+}
+
+func validateUjianAnswer(tipe, optionsRaw, answer string, configurations ...string) error {
+	answer = strings.TrimSpace(answer)
+	configRaw := ""
+	if len(configurations) > 0 {
+		configRaw = strings.TrimSpace(configurations[0])
+	}
+	if configRaw != "" {
+		var config simulasiConfig
+		if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
+			return errors.New("konfigurasi soal tidak valid")
+		}
+		if answer == "" {
+			return nil
+		}
+		return validateVisualUjianAnswer(tipe, config, answer)
+	}
+	if answer == "" || tipe == "essay" || tipe == "short_answer" {
+		return nil
+	}
+	options, err := bankSoalOptions(optionsRaw)
+	if err != nil {
+		return errors.New("konfigurasi pilihan soal tidak valid")
+	}
+	if tipe == "checkbox" {
+		var selected []int
+		if err := json.Unmarshal([]byte(answer), &selected); err != nil {
+			return errors.New("pilih jawaban menggunakan kotak centang")
+		}
+		seen := map[int]bool{}
+		for _, index := range selected {
+			if index < 0 || index >= len(options) || seen[index] {
+				return errors.New("pilihan jawaban tidak valid")
+			}
+			seen[index] = true
+		}
+		return nil
+	}
+	index, err := strconv.Atoi(answer)
+	if err != nil || index < 0 || index >= len(options) {
+		return errors.New("pilih salah satu jawaban yang tersedia")
+	}
+	return nil
+}
+
+func validateVisualUjianAnswer(tipe string, config simulasiConfig, raw string) error {
+	if tipe == simulasiTipeUraian {
+		var value string
+		if json.Unmarshal([]byte(raw), &value) != nil {
+			return errors.New("jawaban uraian tidak valid")
+		}
+		return nil
+	}
+	if !answerComplete(simulasiSnapshot{Tipe: tipe, Konfigurasi: config}, raw) {
+		return errors.New("jawaban belum lengkap atau formatnya tidak sesuai")
+	}
+	contains := func(values []string, candidate string) bool { return containsString(values, candidate) }
+	switch tipe {
+	case simulasiTipePG, simulasiTipeDropdown:
+		var value string
+		_ = json.Unmarshal([]byte(raw), &value)
+		if !contains(choiceIDs(config.Choices), value) {
+			return errors.New("pilihan jawaban tidak tersedia")
+		}
+	case simulasiTipePGK, simulasiTipeUrutan:
+		var values []string
+		_ = json.Unmarshal([]byte(raw), &values)
+		ids := choiceIDs(config.Choices)
+		seen := map[string]bool{}
+		for _, value := range values {
+			if !contains(ids, value) || seen[value] {
+				return errors.New("daftar pilihan jawaban tidak valid")
+			}
+			seen[value] = true
+		}
+	case simulasiTipeBenarSalah:
+		var values map[string]bool
+		_ = json.Unmarshal([]byte(raw), &values)
+		if len(values) != len(config.Statements) {
+			return errors.New("jawaban pernyataan belum lengkap")
+		}
+		for _, row := range config.Statements {
+			if _, ok := values[row.ID]; !ok {
+				return errors.New("jawaban pernyataan tidak valid")
+			}
+		}
+	case simulasiTipeMenjodohkan:
+		var values map[string]string
+		_ = json.Unmarshal([]byte(raw), &values)
+		if len(values) != len(config.Left) {
+			return errors.New("pasangan jawaban belum lengkap")
+		}
+		for _, row := range config.Left {
+			if !contains(choiceIDs(config.Right), values[row.ID]) {
+				return errors.New("pasangan jawaban tidak tersedia")
+			}
+		}
+	case simulasiTipeSkala, simulasiTipeRating:
+		var value int
+		_ = json.Unmarshal([]byte(raw), &value)
+		min, max := config.ScaleMin, config.ScaleMax
+		if tipe == simulasiTipeRating {
+			min, max = 1, config.RatingMax
+		}
+		if value < min || value > max {
+			return errors.New("nilai berada di luar rentang jawaban")
+		}
+	case simulasiTipeKisiPG:
+		var values map[string]string
+		_ = json.Unmarshal([]byte(raw), &values)
+		columns := choiceIDs(config.Columns)
+		for _, row := range config.Rows {
+			if !contains(columns, values[row.ID]) {
+				return errors.New("jawaban kisi tidak valid")
+			}
+		}
+	case simulasiTipeKisiPGK:
+		var values map[string][]string
+		_ = json.Unmarshal([]byte(raw), &values)
+		columns := choiceIDs(config.Columns)
+		for _, row := range config.Rows {
+			for _, value := range values[row.ID] {
+				if !contains(columns, value) {
+					return errors.New("jawaban kisi tidak valid")
+				}
+			}
+		}
+	case simulasiTipeUnggah:
+		ids, err := decodeSimulasiFileIDs([]byte(raw))
+		if err != nil || len(ids) == 0 || (config.MaxFiles > 0 && len(ids) > config.MaxFiles) {
+			return errors.New("unggah minimal satu berkas sesuai batas soal")
+		}
+		seen := map[string]bool{}
+		for _, id := range ids {
+			if strings.TrimSpace(id) == "" || seen[id] {
+				return errors.New("daftar berkas jawaban tidak valid")
+			}
+			seen[id] = true
+		}
+	}
+	return nil
+}
+
+func bankSoalAnswerCorrect(tipe, optionsRaw, keyRaw, answerRaw string) bool {
+	answer := strings.TrimSpace(answerRaw)
+	if answer == "" {
+		return false
+	}
+	switch tipe {
+	case "short_answer":
+		accepted, err := acceptedBankShortAnswers(keyRaw)
+		if err != nil {
+			return false
+		}
+		normalized := normalizeBankShortAnswer(answer)
+		for _, value := range accepted {
+			if normalizeBankShortAnswer(value) == normalized {
+				return true
+			}
+		}
+		return false
+	case "checkbox":
+		options, err := bankSoalOptions(optionsRaw)
+		if err != nil {
+			return false
+		}
+		correct, err := bankSoalKeyIndexes(keyRaw, len(options), true)
+		if err != nil {
+			return false
+		}
+		var selected []int
+		if json.Unmarshal([]byte(answer), &selected) != nil || len(selected) != len(correct) {
+			return false
+		}
+		selectedSet := map[int]bool{}
+		for _, index := range selected {
+			if selectedSet[index] {
+				return false
+			}
+			selectedSet[index] = true
+		}
+		for _, index := range correct {
+			if !selectedSet[index] {
+				return false
+			}
+		}
+		return true
+	default:
+		return strings.TrimSpace(keyRaw) == answer
+	}
 }
 
 func (s *Server) listBankSoal(c *fiber.Ctx) error {
@@ -6275,6 +6734,11 @@ func (s *Server) listBankSoal(c *fiber.Ctx) error {
 	if e := q.Find(&rows).Error; e != nil {
 		return e
 	}
+	for index := range rows {
+		if err := setBankSoalStimulus(&rows[index]); err != nil {
+			return fiber.NewError(500, "Data stimulus soal tidak valid")
+		}
+	}
 	return c.JSON(rows)
 }
 
@@ -6287,21 +6751,33 @@ func (s *Server) createBankSoal(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
-	if in.Tipe != "pg" && in.Tipe != "essay" {
-		return fiber.NewError(400, "tipe harus pg atau essay")
+	stimulus, err := normalizeBankSoalStimulus(in.Stimulus)
+	if err != nil {
+		return fiber.NewError(400, err.Error())
 	}
-	if strings.TrimSpace(in.Pertanyaan) == "" {
-		return fiber.NewError(400, "pertanyaan wajib diisi")
+	stimulusJSON, err := json.Marshal(stimulus)
+	if err != nil {
+		return fiber.NewError(400, "stimulus tidak dapat disimpan")
 	}
 	uid := c.Locals("userID").(string)
 	b := BankSoal{
 		MapelID:          in.MapelID,
+		Domain:           strings.TrimSpace(optionalBankSoalMetadata(in.Domain)),
+		Topik:            strings.TrimSpace(optionalBankSoalMetadata(in.Topik)),
+		Kompetensi:       strings.TrimSpace(optionalBankSoalMetadata(in.Kompetensi)),
+		LevelKognitif:    strings.TrimSpace(optionalBankSoalMetadata(in.LevelKognitif)),
 		Tipe:             in.Tipe,
 		Pertanyaan:       in.Pertanyaan,
 		Opsi:             in.Opsi,
+		Konfigurasi:      string(in.Konfigurasi),
+		StimulusJSON:     string(stimulusJSON),
+		Stimulus:         stimulus,
 		Kunci:            in.Kunci,
 		Poin:             in.Poin,
 		DibuatOlehUserID: uid,
+	}
+	if err := validateBankSoal(&b); err != nil {
+		return fiber.NewError(400, err.Error())
 	}
 	if e := s.db.Create(&b).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -6323,11 +6799,20 @@ func (s *Server) updateBankSoal(c *fiber.Ctx) error {
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
-	if in.Tipe != "" && in.Tipe != "pg" && in.Tipe != "essay" {
-		return fiber.NewError(400, "tipe harus pg atau essay")
-	}
 	if in.MapelID != "" {
 		b.MapelID = in.MapelID
+	}
+	if in.Domain != nil {
+		b.Domain = strings.TrimSpace(*in.Domain)
+	}
+	if in.Topik != nil {
+		b.Topik = strings.TrimSpace(*in.Topik)
+	}
+	if in.Kompetensi != nil {
+		b.Kompetensi = strings.TrimSpace(*in.Kompetensi)
+	}
+	if in.LevelKognitif != nil {
+		b.LevelKognitif = strings.TrimSpace(*in.LevelKognitif)
 	}
 	if in.Tipe != "" {
 		b.Tipe = in.Tipe
@@ -6336,8 +6821,30 @@ func (s *Server) updateBankSoal(c *fiber.Ctx) error {
 		b.Pertanyaan = in.Pertanyaan
 	}
 	b.Opsi = in.Opsi
+	if in.Konfigurasi != nil {
+		b.Konfigurasi = string(in.Konfigurasi)
+	} else if in.Tipe != "" && in.Tipe != "dropdown" {
+		b.Konfigurasi = ""
+	}
+	if in.Stimulus != nil {
+		stimulus, err := normalizeBankSoalStimulus(in.Stimulus)
+		if err != nil {
+			return fiber.NewError(400, err.Error())
+		}
+		stimulusJSON, err := json.Marshal(stimulus)
+		if err != nil {
+			return fiber.NewError(400, "stimulus tidak dapat disimpan")
+		}
+		b.StimulusJSON = string(stimulusJSON)
+		b.Stimulus = stimulus
+	} else if err := setBankSoalStimulus(&b); err != nil {
+		return fiber.NewError(500, "Data stimulus soal tidak valid")
+	}
 	b.Kunci = in.Kunci
 	b.Poin = in.Poin
+	if err := validateBankSoal(&b); err != nil {
+		return fiber.NewError(400, err.Error())
+	}
 	if e := s.db.Save(&b).Error; e != nil {
 		return fiber.NewError(400, e.Error())
 	}
@@ -6367,23 +6874,44 @@ func (s *Server) deleteBankSoal(c *fiber.Ctx) error {
 }
 
 type ujianInput struct {
-	MapelID          string    `json:"mapelId"`
-	KelasID          string    `json:"kelasId"`
-	Judul            string    `json:"judul"`
-	WaktuMulai       time.Time `json:"waktuMulai"`
-	WaktuSelesai     time.Time `json:"waktuSelesai"`
-	DurasiMenit      int       `json:"durasiMenit"`
-	GracePeriodMenit int       `json:"gracePeriodMenit"`
-	BatasTabSwitch   int       `json:"batasTabSwitch"`
-	AcakSoal         bool      `json:"acakSoal"`
-	AksesKode        string    `json:"aksesKode"` // kode akses siswa ujian online
+	MapelID            string    `json:"mapelId"`
+	KelasID            string    `json:"kelasId"`
+	Judul              string    `json:"judul"`
+	WaktuMulai         time.Time `json:"waktuMulai"`
+	WaktuSelesai       time.Time `json:"waktuSelesai"`
+	DurasiMenit        int       `json:"durasiMenit"`
+	GracePeriodMenit   int       `json:"gracePeriodMenit"`
+	BatasTabSwitch     int       `json:"batasTabSwitch"`
+	AcakSoal           bool      `json:"acakSoal"`
+	IzinkanEditRespons *bool     `json:"izinkanEditRespons"`
+	AksesKode          string    `json:"aksesKode"` // kode akses siswa ujian online
 }
 
 func (s *Server) scopeUjian(c *fiber.Ctx, u *Ujian) error {
 	if c.Locals("role") == "admin" || c.Locals("role") == "kepala_sekolah" {
 		return nil
 	}
-	return s.canManageKelas(c, u.KelasID)
+	if err := s.canManageKelas(c, u.KelasID); err == nil {
+		return nil
+	}
+	if s.assessmentCollaboratorRole(assessmentModuleUjian, u.ID, c.Locals("userID").(string)) != "" {
+		return nil
+	}
+	return fiber.NewError(403, "ujian di luar kewenangan kelas dan tidak dibagikan kepada akun ini")
+}
+
+func (s *Server) requireManageUjian(c *fiber.Ctx, u *Ujian) error {
+	role, _ := c.Locals("role").(string)
+	if role != "admin" && role != "guru" {
+		return fiber.NewError(403, "akses ujian hanya-baca")
+	}
+	if role == "admin" || s.canManageKelas(c, u.KelasID) == nil {
+		return nil
+	}
+	if s.assessmentCollaboratorCanEdit(assessmentModuleUjian, u.ID, c.Locals("userID").(string)) {
+		return nil
+	}
+	return fiber.NewError(403, "perlu kewenangan kelas atau peran editor untuk mengubah ujian")
 }
 
 func (s *Server) listUjian(c *fiber.Ctx) error {
@@ -6395,11 +6923,16 @@ func (s *Server) listUjian(c *fiber.Ctx) error {
 	if !ok {
 		return fiber.NewError(403, "no tutor profile")
 	}
-	if ids != nil {
-		if len(ids) == 0 {
+	if c.Locals("role") == "guru" {
+		sharedIDs := s.assessmentCollaboratorIDs(assessmentModuleUjian, c.Locals("userID").(string))
+		if ids != nil && len(ids) == 0 && len(sharedIDs) == 0 {
 			return c.JSON([]Ujian{})
 		}
-		q = q.Where("kelas_id IN ?", ids)
+		if ids == nil {
+			q = q.Where("id IN ?", sharedIDs)
+		} else {
+			q = q.Where("(kelas_id IN ? OR id IN ?)", ids, sharedIDs)
+		}
 	}
 	var rows []Ujian
 	if e := q.Find(&rows).Error; e != nil {
@@ -6427,18 +6960,19 @@ func (s *Server) createUjian(c *fiber.Ctx) error {
 		return e
 	}
 	uj := Ujian{
-		MapelID:          in.MapelID,
-		KelasID:          in.KelasID,
-		Judul:            in.Judul,
-		WaktuMulai:       in.WaktuMulai,
-		WaktuSelesai:     in.WaktuSelesai,
-		DurasiMenit:      in.DurasiMenit,
-		GracePeriodMenit: in.GracePeriodMenit,
-		BatasTabSwitch:   in.BatasTabSwitch,
-		AcakSoal:         in.AcakSoal,
-		AksesKode:        in.AksesKode,
-		Semester:         s.semester(in.WaktuMulai),
-		DibuatOlehUserID: uid,
+		MapelID:            in.MapelID,
+		KelasID:            in.KelasID,
+		Judul:              in.Judul,
+		WaktuMulai:         in.WaktuMulai,
+		WaktuSelesai:       in.WaktuSelesai,
+		DurasiMenit:        in.DurasiMenit,
+		GracePeriodMenit:   in.GracePeriodMenit,
+		BatasTabSwitch:     in.BatasTabSwitch,
+		AcakSoal:           in.AcakSoal,
+		IzinkanEditRespons: in.IzinkanEditRespons != nil && *in.IzinkanEditRespons,
+		AksesKode:          in.AksesKode,
+		Semester:           s.semester(in.WaktuMulai),
+		DibuatOlehUserID:   uid,
 	}
 	if e := s.db.Create(&uj).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -6454,7 +6988,7 @@ func (s *Server) updateUjian(c *fiber.Ctx) error {
 		return fiber.NewError(404, "record not found")
 	}
 	uid := c.Locals("userID").(string)
-	if c.Locals("role") != "admin" && uj.DibuatOlehUserID != uid {
+	if c.Locals("role") != "admin" && uj.DibuatOlehUserID != uid && !s.assessmentCollaboratorCanEdit(assessmentModuleUjian, uj.ID, uid) {
 		return fiber.NewError(403, "hanya pembuat atau admin yang dapat mengubah")
 	}
 	var in ujianInput
@@ -6490,6 +7024,9 @@ func (s *Server) updateUjian(c *fiber.Ctx) error {
 	uj.GracePeriodMenit = in.GracePeriodMenit
 	uj.BatasTabSwitch = in.BatasTabSwitch
 	uj.AcakSoal = in.AcakSoal
+	if in.IzinkanEditRespons != nil {
+		uj.IzinkanEditRespons = *in.IzinkanEditRespons
+	}
 	uj.AksesKode = in.AksesKode
 	if e := s.db.Save(&uj).Error; e != nil {
 		return fiber.NewError(400, e.Error())
@@ -6508,6 +7045,9 @@ func (s *Server) deleteUjian(c *fiber.Ctx) error {
 		return fiber.NewError(403, "hanya pembuat atau admin yang dapat menghapus")
 	}
 	if e := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("modul = ? AND asesmen_id = ?", assessmentModuleUjian, uj.ID).Delete(&AsesmenKolaborator{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("ujian_id = ?", uj.ID).Delete(&UjianSoal{}).Error; err != nil {
 			return err
 		}
@@ -6519,6 +7059,104 @@ func (s *Server) deleteUjian(c *fiber.Ctx) error {
 	return c.SendStatus(204)
 }
 
+func (s *Server) listUjianBagian(c *fiber.Ctx) error {
+	var uj Ujian
+	if err := s.db.First(&uj, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "ujian not found")
+	}
+	if err := s.scopeUjian(c, &uj); err != nil {
+		return err
+	}
+	var rows []UjianBagian
+	if err := s.db.Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&rows).Error; err != nil {
+		return fiber.NewError(500, "gagal memuat bagian ujian")
+	}
+	return c.JSON(rows)
+}
+
+func (s *Server) saveUjianBagian(c *fiber.Ctx) error {
+	var uj Ujian
+	if err := s.db.First(&uj, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "ujian not found")
+	}
+	if err := s.requireManageUjian(c, &uj); err != nil {
+		return err
+	}
+	var in struct {
+		Bagian []struct {
+			ID        string `json:"id"`
+			Nama      string `json:"nama"`
+			Deskripsi string `json:"deskripsi"`
+		} `json:"bagian"`
+	}
+	if err := c.BodyParser(&in); err != nil || len(in.Bagian) > 100 {
+		return fiber.NewError(400, "daftar bagian tidak valid")
+	}
+	rows := make([]UjianBagian, 0, len(in.Bagian))
+	seen := make(map[string]struct{}, len(in.Bagian))
+	for index, item := range in.Bagian {
+		item.ID = strings.TrimSpace(item.ID)
+		item.Nama = strings.TrimSpace(item.Nama)
+		item.Deskripsi = strings.TrimSpace(item.Deskripsi)
+		if item.ID == "" {
+			item.ID = uuid.NewString()
+		}
+		if len(item.ID) > 64 || item.Nama == "" || len([]rune(item.Nama)) > 120 || len(item.Deskripsi) > 4000 {
+			return fiber.NewError(400, "nama bagian wajib diisi dan deskripsi terlalu panjang")
+		}
+		if _, exists := seen[item.ID]; exists {
+			return fiber.NewError(400, "ID bagian tidak boleh berulang")
+		}
+		seen[item.ID] = struct{}{}
+		rows = append(rows, UjianBagian{UjianID: uj.ID, ClientID: item.ID, Nama: item.Nama, Deskripsi: item.Deskripsi, Urutan: index + 1})
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var existing []UjianBagian
+		if err := tx.Where("ujian_id = ?", uj.ID).Find(&existing).Error; err != nil {
+			return err
+		}
+		allowed := make(map[string]struct{}, len(rows))
+		for _, row := range rows {
+			allowed[row.ClientID] = struct{}{}
+		}
+		for _, old := range existing {
+			if _, keep := allowed[old.ClientID]; !keep {
+				if err := tx.Model(&UjianSoal{}).Where("ujian_id = ? AND bagian_id = ?", uj.ID, old.ClientID).Update("bagian_id", "").Error; err != nil {
+					return err
+				}
+				if err := tx.Delete(&old).Error; err != nil {
+					return err
+				}
+			}
+		}
+		for _, row := range rows {
+			if err := tx.Where("ujian_id = ? AND client_id = ?", uj.ID, row.ClientID).Assign(UjianBagian{Nama: row.Nama, Deskripsi: row.Deskripsi, Urutan: row.Urutan}).FirstOrCreate(&row).Error; err != nil {
+				return err
+			}
+		}
+		var attached []UjianSoal
+		if err := tx.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&attached).Error; err != nil {
+			return err
+		}
+		if err := validateUjianBranchAssignments(attached, rows); err != nil {
+			return fiber.NewError(409, err.Error())
+		}
+		return nil
+	}); err != nil {
+		if fiberErr, ok := err.(*fiber.Error); ok {
+			return fiberErr
+		}
+		return fiber.NewError(500, "gagal menyimpan bagian ujian")
+	}
+	uid, _ := c.Locals("userID").(string)
+	s.audit(&uid, "update", "ujian_bagian", uj.ID)
+	var saved []UjianBagian
+	if err := s.db.Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&saved).Error; err != nil {
+		return fiber.NewError(500, "bagian tersimpan tetapi gagal dimuat ulang")
+	}
+	return c.JSON(saved)
+}
+
 func (s *Server) listUjianSoal(c *fiber.Ctx) error {
 	var uj Ujian
 	if e := s.db.First(&uj, "id = ?", id(c)).Error; e != nil {
@@ -6528,8 +7166,155 @@ func (s *Server) listUjianSoal(c *fiber.Ctx) error {
 		return e
 	}
 	var rows []UjianSoal
-	s.db.Preload("Soal").Preload("Soal.Mapel").Where("ujian_id = ?", uj.ID).Order("created_at").Find(&rows)
+	if err := s.db.Preload("Soal").Preload("Soal.Mapel").Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&rows).Error; err != nil {
+		return fiber.NewError(500, "gagal memuat soal ujian")
+	}
+	for index := range rows {
+		if strings.TrimSpace(rows[index].BranchToByAnswerJSON) != "" {
+			if err := json.Unmarshal([]byte(rows[index].BranchToByAnswerJSON), &rows[index].BranchToByAnswer); err != nil {
+				return fiber.NewError(500, "aturan alur soal ujian tidak valid")
+			}
+		}
+	}
 	return c.JSON(rows)
+}
+
+func validateUjianBranchAssignments(rows []UjianSoal, sections []UjianBagian) error {
+	sectionPosition := make(map[string]int, len(sections))
+	questionsBySection := make(map[string]int, len(sections))
+	for index, section := range sections {
+		sectionPosition[section.ClientID] = index
+	}
+	for _, row := range rows {
+		if row.BagianID != "" {
+			questionsBySection[row.BagianID]++
+		}
+	}
+	branchSourceBySection := make(map[string]string)
+	for _, row := range rows {
+		if strings.TrimSpace(row.BranchToByAnswerJSON) == "" {
+			continue
+		}
+		var routes map[string]string
+		if err := json.Unmarshal([]byte(row.BranchToByAnswerJSON), &routes); err != nil || len(routes) == 0 {
+			return fmt.Errorf("aturan alur soal tidak valid")
+		}
+		position, exists := sectionPosition[row.BagianID]
+		if row.BagianID == "" || !exists {
+			return fmt.Errorf("soal pengatur alur harus berada di dalam bagian")
+		}
+		if previous, exists := branchSourceBySection[row.BagianID]; exists && previous != row.ID {
+			return fmt.Errorf("setiap bagian hanya dapat memiliki satu soal pengatur alur")
+		}
+		branchSourceBySection[row.BagianID] = row.ID
+		if row.Soal.ID == "" {
+			return fmt.Errorf("sumber soal pengatur alur tidak tersedia")
+		}
+		var config simulasiConfig
+		if err := json.Unmarshal([]byte(row.Soal.Konfigurasi), &config); err != nil {
+			return fmt.Errorf("konfigurasi soal pengatur alur tidak valid")
+		}
+		if row.Soal.Tipe != simulasiTipePG && row.Soal.Tipe != simulasiTipeDropdown {
+			return fmt.Errorf("alur berdasarkan jawaban hanya tersedia untuk pilihan ganda tunggal atau dropdown")
+		}
+		validChoiceIDs := choiceIDs(config.Choices)
+		for choiceID, target := range routes {
+			if !containsString(validChoiceIDs, choiceID) {
+				return fmt.Errorf("aturan alur merujuk pilihan yang tidak tersedia")
+			}
+			target = strings.TrimSpace(target)
+			if target == simulasiBranchFinish {
+				continue
+			}
+			targetPosition, targetExists := sectionPosition[target]
+			if !targetExists || targetPosition <= position || questionsBySection[target] == 0 {
+				return fmt.Errorf("tujuan alur harus bagian berikutnya atau setelahnya yang memiliki soal, atau akhir ujian")
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) updateUjianSoalBranch(c *fiber.Ctx) error {
+	var uj Ujian
+	if err := s.db.First(&uj, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "ujian tidak ditemukan")
+	}
+	if err := s.requireManageUjian(c, &uj); err != nil {
+		return err
+	}
+	var row UjianSoal
+	if err := s.db.Preload("Soal").First(&row, "id = ? AND ujian_id = ?", c.Params("sid"), uj.ID).Error; err != nil {
+		return fiber.NewError(404, "soal tidak ditemukan dalam ujian ini")
+	}
+	var input struct {
+		Routes map[string]string `json:"branchToByAnswer"`
+	}
+	if err := c.BodyParser(&input); err != nil {
+		return fiber.NewError(400, "aturan alur tidak valid")
+	}
+	if len(input.Routes) > 50 {
+		return fiber.NewError(400, "jumlah aturan alur terlalu banyak")
+	}
+	branchJSON := ""
+	if len(input.Routes) > 0 {
+		for choiceID, target := range input.Routes {
+			if strings.TrimSpace(choiceID) == "" || len(choiceID) > 160 || len(strings.TrimSpace(target)) > 160 {
+				return fiber.NewError(400, "pilihan atau tujuan alur tidak valid")
+			}
+			input.Routes[choiceID] = strings.TrimSpace(target)
+		}
+		encoded, err := json.Marshal(input.Routes)
+		if err != nil {
+			return fiber.NewError(400, "aturan alur tidak dapat diproses")
+		}
+		branchJSON = string(encoded)
+	}
+	row.BranchToByAnswerJSON = branchJSON
+	var validationErr error
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Serialize edits to a single exam so two concurrent requests cannot
+		// both pass the one-branch-question-per-section validation.
+		var lockedExam Ujian
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedExam, "id = ?", uj.ID).Error; err != nil {
+			return err
+		}
+		var rows []UjianSoal
+		if err := tx.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&rows).Error; err != nil {
+			return err
+		}
+		found := false
+		for index := range rows {
+			if rows[index].ID == row.ID {
+				rows[index].BranchToByAnswerJSON = branchJSON
+				found = true
+			}
+		}
+		if !found {
+			return gorm.ErrRecordNotFound
+		}
+		var sections []UjianBagian
+		if err := tx.Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&sections).Error; err != nil {
+			return err
+		}
+		if err := validateUjianBranchAssignments(rows, sections); err != nil {
+			validationErr = err
+			return err
+		}
+		return tx.Model(&UjianSoal{}).Where("id = ? AND ujian_id = ?", row.ID, uj.ID).Update("branch_to_by_answer_json", branchJSON).Error
+	}); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fiber.NewError(404, "soal tidak ditemukan dalam ujian ini")
+		}
+		if validationErr != nil {
+			return fiber.NewError(400, validationErr.Error())
+		}
+		return fiber.NewError(500, "aturan alur belum dapat disimpan")
+	}
+	row.BranchToByAnswer = input.Routes
+	uid, _ := c.Locals("userID").(string)
+	s.audit(&uid, "update", "ujian_soal_branch", row.ID)
+	return c.JSON(row)
 }
 
 func (s *Server) addUjianSoal(c *fiber.Ctx) error {
@@ -6537,12 +7322,13 @@ func (s *Server) addUjianSoal(c *fiber.Ctx) error {
 	if e := s.db.First(&uj, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "ujian not found")
 	}
-	if e := s.scopeUjian(c, &uj); e != nil {
+	if e := s.requireManageUjian(c, &uj); e != nil {
 		return e
 	}
 	var in struct {
-		SoalID string  `json:"soalId"`
-		Bobot  float64 `json:"bobot"`
+		SoalID   string  `json:"soalId"`
+		Bobot    float64 `json:"bobot"`
+		BagianID *string `json:"bagianId"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
@@ -6554,20 +7340,122 @@ func (s *Server) addUjianSoal(c *fiber.Ctx) error {
 	if s.db.First(&b, "id = ?", in.SoalID).Error != nil {
 		return fiber.NewError(400, "soal tidak ditemukan")
 	}
+	bagianID := ""
+	if in.BagianID != nil {
+		bagianID = strings.TrimSpace(*in.BagianID)
+		if bagianID != "" {
+			var section UjianBagian
+			if err := s.db.Where("ujian_id = ? AND client_id = ?", uj.ID, bagianID).First(&section).Error; err != nil {
+				return fiber.NewError(400, "bagian tidak ditemukan pada ujian ini")
+			}
+		}
+	}
 	// upsert via uniqueIndex (ujianId+soalId)
 	var us UjianSoal
-	if s.db.Where("ujian_id = ? AND soal_id = ?", uj.ID, in.SoalID).First(&us).Error == nil {
+	existingErr := s.db.Where("ujian_id = ? AND soal_id = ?", uj.ID, in.SoalID).First(&us).Error
+	if existingErr == nil {
 		us.Bobot = in.Bobot
-		s.db.Save(&us)
-	} else {
-		us = UjianSoal{UjianID: uj.ID, SoalID: in.SoalID, Bobot: in.Bobot}
-		if e := s.db.Create(&us).Error; e != nil {
-			return fiber.NewError(400, e.Error())
+		if in.BagianID != nil {
+			us.BagianID = bagianID
 		}
+	} else if errors.Is(existingErr, gorm.ErrRecordNotFound) {
+		var maxOrder int
+		if err := s.db.Model(&UjianSoal{}).Where("ujian_id = ?", uj.ID).Select("COALESCE(MAX(urutan), 0)").Scan(&maxOrder).Error; err != nil {
+			return fiber.NewError(500, "gagal menentukan urutan soal")
+		}
+		us = UjianSoal{UjianID: uj.ID, SoalID: in.SoalID, BagianID: bagianID, Urutan: maxOrder + 1, Bobot: in.Bobot}
+	} else {
+		return fiber.NewError(500, "gagal memuat kaitan soal ujian")
+	}
+	us.Soal = b
+	var attached []UjianSoal
+	if err := s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&attached).Error; err != nil {
+		return fiber.NewError(500, "gagal memeriksa soal ujian")
+	}
+	replaced := false
+	for index := range attached {
+		if attached[index].ID == us.ID && us.ID != "" {
+			attached[index] = us
+			replaced = true
+		}
+	}
+	if !replaced {
+		attached = append(attached, us)
+	}
+	var sections []UjianBagian
+	if err := s.db.Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&sections).Error; err != nil {
+		return fiber.NewError(500, "gagal memeriksa bagian ujian")
+	}
+	if err := validateUjianBranchAssignments(attached, sections); err != nil {
+		return fiber.NewError(409, err.Error())
+	}
+	if us.ID != "" {
+		if err := s.db.Save(&us).Error; err != nil {
+			return fiber.NewError(500, "gagal menyimpan kaitan soal ujian")
+		}
+	} else if err := s.db.Create(&us).Error; err != nil {
+		return fiber.NewError(400, err.Error())
 	}
 	uid := c.Locals("userID").(string)
 	s.audit(&uid, "create", "ujian_soal", us.ID)
 	return c.Status(201).JSON(us)
+}
+
+func (s *Server) reorderUjianSoal(c *fiber.Ctx) error {
+	var uj Ujian
+	if err := s.db.First(&uj, "id = ?", id(c)).Error; err != nil {
+		return fiber.NewError(404, "ujian not found")
+	}
+	if err := s.requireManageUjian(c, &uj); err != nil {
+		return err
+	}
+	var in struct {
+		UrutanIDs []string `json:"urutanIds"`
+	}
+	if err := c.BodyParser(&in); err != nil || len(in.UrutanIDs) == 0 {
+		return fiber.NewError(400, "urutanIds wajib berisi daftar soal ujian")
+	}
+	var current []UjianSoal
+	if err := s.db.Where("ujian_id = ?", uj.ID).Find(&current).Error; err != nil {
+		return err
+	}
+	if len(current) != len(in.UrutanIDs) {
+		return fiber.NewError(400, "daftar urutan tidak sesuai dengan jumlah soal ujian")
+	}
+	allowed := make(map[string]struct{}, len(current))
+	for _, row := range current {
+		allowed[row.ID] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(in.UrutanIDs))
+	for _, itemID := range in.UrutanIDs {
+		if _, ok := allowed[itemID]; !ok {
+			return fiber.NewError(400, "daftar urutan memuat soal yang bukan milik ujian ini")
+		}
+		if _, duplicate := seen[itemID]; duplicate {
+			return fiber.NewError(400, "soal tidak boleh muncul lebih dari sekali dalam urutan")
+		}
+		seen[itemID] = struct{}{}
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		for index, itemID := range in.UrutanIDs {
+			result := tx.Model(&UjianSoal{}).Where("ujian_id = ? AND id = ?", uj.ID, itemID).Update("urutan", index+1)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fiber.NewError(409, "soal ujian berubah saat urutan disimpan; muat ulang halaman")
+			}
+		}
+		return nil
+	}); err != nil {
+		if fiberErr, ok := err.(*fiber.Error); ok {
+			return fiberErr
+		}
+		return fiber.NewError(500, "gagal menyimpan urutan soal")
+	}
+	uid, _ := c.Locals("userID").(string)
+	s.audit(&uid, "reorder", "ujian_soal", uj.ID)
+	return c.JSON(fiber.Map{"status": "ok", "jumlah": len(in.UrutanIDs)})
 }
 
 func (s *Server) deleteUjianSoal(c *fiber.Ctx) error {
@@ -6575,8 +7463,30 @@ func (s *Server) deleteUjianSoal(c *fiber.Ctx) error {
 	if e := s.db.First(&uj, "id = ?", id(c)).Error; e != nil {
 		return fiber.NewError(404, "ujian not found")
 	}
-	if e := s.scopeUjian(c, &uj); e != nil {
+	if e := s.requireManageUjian(c, &uj); e != nil {
 		return e
+	}
+	var attached []UjianSoal
+	if err := s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Find(&attached).Error; err != nil {
+		return fiber.NewError(500, "gagal memeriksa soal ujian")
+	}
+	remaining := make([]UjianSoal, 0, len(attached))
+	found := false
+	for _, row := range attached {
+		if row.SoalID == c.Params("sid") {
+			found = true
+			continue
+		}
+		remaining = append(remaining, row)
+	}
+	if found {
+		var sections []UjianBagian
+		if err := s.db.Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&sections).Error; err != nil {
+			return fiber.NewError(500, "gagal memeriksa bagian ujian")
+		}
+		if err := validateUjianBranchAssignments(remaining, sections); err != nil {
+			return fiber.NewError(409, "soal belum dapat dihapus: "+err.Error())
+		}
 	}
 	if e := s.db.Where("ujian_id = ? AND soal_id = ?", uj.ID, c.Params("sid")).Delete(&UjianSoal{}).Error; e != nil {
 		return e
@@ -6599,28 +7509,38 @@ func seedFromID(s string) int64 {
 // shuffleOpsi deterministically reorders PG options and returns the new position of
 // the originally-correct option (kunciIdx). Used by printUjian for AcakSoal.
 func shuffleOpsi(opsi []string, kunciIdx int, seed int64) ([]string, int) {
-	n := len(opsi)
-	if n == 0 {
-		return opsi, -1
+	shuffled, indices := shuffleBankOptionList(opsi, seed)
+	if len(indices) == 0 {
+		return shuffled, -1
 	}
-	if kunciIdx < 0 || kunciIdx >= n {
+	if kunciIdx < 0 || kunciIdx >= len(opsi) {
 		kunciIdx = 0
 	}
-	idx := make([]int, n)
-	for i := range idx {
-		idx[i] = i
-	}
-	r := rand.New(rand.NewSource(seed))
-	r.Shuffle(n, func(i, j int) { idx[i], idx[j] = idx[j], idx[i] })
-	out := make([]string, n)
 	newKunci := -1
-	for newpos, orig := range idx {
-		out[newpos] = opsi[orig]
+	for newpos, orig := range indices {
 		if orig == kunciIdx {
 			newKunci = newpos
 		}
 	}
-	return out, newKunci
+	return shuffled, newKunci
+}
+
+// shuffleBankOptionList returns both the shuffled display options and their
+// original indexes. Student answers continue to store stable source indexes,
+// so a resumed attempt is graded against its immutable snapshot correctly.
+func shuffleBankOptionList(options []string, seed int64) ([]string, []int) {
+	indices := make([]int, len(options))
+	for i := range indices {
+		indices[i] = i
+	}
+	rand.New(rand.NewSource(seed)).Shuffle(len(indices), func(i, j int) {
+		indices[i], indices[j] = indices[j], indices[i]
+	})
+	shuffled := make([]string, len(options))
+	for position, original := range indices {
+		shuffled[position] = options[original]
+	}
+	return shuffled, indices
 }
 
 func (s *Server) printUjian(c *fiber.Ctx) error {
@@ -6632,18 +7552,17 @@ func (s *Server) printUjian(c *fiber.Ctx) error {
 		return e
 	}
 	var us []UjianSoal
-	s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Order("created_at").Find(&us)
+	s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&us)
+	var sections []UjianBagian
+	s.db.Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&sections)
 	kunciMode := c.Query("kunci") == "1" || c.Query("kunci") == "true"
 
-	// urutan soal (acak deterministik bila AcakSoal)
-	order := us
-	if uj.AcakSoal {
-		seed := seedFromID(uj.ID)
-		cp := make([]UjianSoal, len(us))
-		copy(cp, us)
-		r := rand.New(rand.NewSource(seed))
-		r.Shuffle(len(cp), func(i, j int) { cp[i], cp[j] = cp[j], cp[i] })
-		order = cp
+	// The printed question paper and answer key use the same stable order. If
+	// sections exist, question randomization stays inside each authored section.
+	order := orderUjianQuestions(us, sections, uj.ID, uj.AcakSoal)
+	sectionByID := make(map[string]UjianBagian, len(sections))
+	for _, section := range sections {
+		sectionByID[section.ClientID] = section
 	}
 
 	pdf := gofpdf.New("P", "mm", "A4", "")
@@ -6698,37 +7617,72 @@ func (s *Server) printUjian(c *fiber.Ctx) error {
 	pdf.CellFormat(180, 5, fmt.Sprintf("Jumlah soal: %d  |  Total bobot: %.0f", len(order), totalBobot), "", 1, "L", false, 0, "")
 	pdf.Ln(3)
 
+	lastSectionID := ""
 	for i, item := range order {
+		if item.BagianID != "" && item.BagianID != lastSectionID {
+			if section, ok := sectionByID[item.BagianID]; ok {
+				pdf.Ln(2)
+				pdf.SetFont("Helvetica", "B", 12)
+				pdf.SetTextColor(29, 111, 168)
+				pdf.MultiCell(180, 7, section.Nama, "", "L", false)
+				if strings.TrimSpace(section.Deskripsi) != "" {
+					pdf.SetFont("Helvetica", "I", 9)
+					pdf.SetTextColor(71, 85, 105)
+					pdf.MultiCell(180, 5, section.Deskripsi, "", "L", false)
+				}
+				pdf.SetTextColor(0, 0, 0)
+			}
+		}
+		lastSectionID = item.BagianID
 		soal := item.Soal
 		pdf.SetFont("Helvetica", "B", 11)
 		pdf.MultiCell(180, 6, fmt.Sprintf("%d. (%.0f poin) %s", i+1, item.Bobot, soal.Pertanyaan), "", "L", false)
-		if soal.Tipe == "pg" {
+		if soal.Tipe == "pg" || soal.Tipe == "dropdown" || soal.Tipe == "true_false" || soal.Tipe == "checkbox" {
 			var opsi []string
 			if soal.Opsi != "" {
 				_ = json.Unmarshal([]byte(soal.Opsi), &opsi)
 			}
-			kunciIdx, _ := strconv.Atoi(soal.Kunci)
-			var displayOpsi []string
-			markIdx := -1
-			if uj.AcakSoal {
-				displayOpsi, markIdx = shuffleOpsi(opsi, kunciIdx, seedFromID(uj.ID)+int64(i))
+			var correctIndexes []int
+			if soal.Tipe == "checkbox" {
+				correctIndexes, _ = bankSoalKeyIndexes(soal.Kunci, len(opsi), true)
 			} else {
-				displayOpsi = opsi
-				markIdx = kunciIdx
+				correctIndexes, _ = bankSoalKeyIndexes(soal.Kunci, len(opsi), false)
+			}
+			displayOpsi, displayIndexes := opsi, make([]int, len(opsi))
+			for index := range displayIndexes {
+				displayIndexes[index] = index
+			}
+			if uj.AcakSoal {
+				displayOpsi, displayIndexes = shuffleBankOptionList(opsi, seedFromID(uj.ID)+int64(i))
+			}
+			correctSet := make(map[int]bool, len(correctIndexes))
+			for _, index := range correctIndexes {
+				correctSet[index] = true
 			}
 			for j, op := range displayOpsi {
 				label := string(rune('A' + j))
 				mark := ""
-				if kunciMode && j == markIdx {
-					mark = "   ✓"
+				if kunciMode && correctSet[displayIndexes[j]] {
+					mark = "   ✓ Jawaban benar"
+				}
+				if soal.Tipe == "checkbox" {
+					label = "[ ]"
 				}
 				pdf.SetFont("Helvetica", "", 10)
 				pdf.MultiCell(180, 5, fmt.Sprintf("   %s. %s%s", label, op, mark), "", "L", false)
 			}
+		} else if soal.Tipe == "short_answer" {
+			if kunciMode {
+				if accepted, err := acceptedBankShortAnswers(soal.Kunci); err == nil {
+					pdf.SetFont("Helvetica", "I", 9)
+					pdf.MultiCell(180, 5, "   Jawaban diterima: "+strings.Join(accepted, " / "), "", "L", false)
+				}
+			}
 		} else {
 			if kunciMode && strings.TrimSpace(soal.Kunci) != "" {
 				pdf.SetFont("Helvetica", "I", 9)
-				pdf.MultiCell(180, 5, "   Kunci: "+soal.Kunci, "", "L", false)
+				label := "Kunci / rubrik: "
+				pdf.MultiCell(180, 5, "   "+label+soal.Kunci, "", "L", false)
 			}
 		}
 		pdf.Ln(2)
@@ -6743,7 +7697,7 @@ func (s *Server) printUjian(c *fiber.Ctx) error {
 	return pdf.Output(c.Response().BodyWriter())
 }
 
-// exportUjianResults exports ujian participants and their scores as CSV.
+// exportUjianResults exports attempt history; CSV remains the default for old clients.
 func (s *Server) exportUjianResults(c *fiber.Ctx) error {
 	var uj Ujian
 	if e := s.db.First(&uj, "id = ?", id(c)).Error; e != nil {
@@ -6753,71 +7707,207 @@ func (s *Server) exportUjianResults(c *fiber.Ctx) error {
 		return e
 	}
 
-	// Get participants with their answers
 	var participants []UjianPeserta
-	s.db.Preload("PesertaDidik").Preload("PesertaDidik.Kelas").
-		Where("ujian_id = ?", uj.ID).Find(&participants)
-
-	var participantIDs []string
+	if err := s.db.Preload("PesertaDidik").Preload("PesertaDidik.Kelas").Where("ujian_id = ?", uj.ID).Order("created_at asc").Find(&participants).Error; err != nil {
+		return fiber.NewError(500, "gagal memuat peserta ujian")
+	}
+	participantIDs := make([]string, 0, len(participants))
 	for _, p := range participants {
 		participantIDs = append(participantIDs, p.ID)
 	}
 	var answers []UjianJawaban
-	s.db.Where("ujian_peserta_id IN ?", participantIDs).Find(&answers)
-
-	// Build answer map: participantID -> soalID -> jawaban
-	answerMap := map[string]map[string]string{}
-	for _, a := range answers {
-		if answerMap[a.UjianPesertaID] == nil {
-			answerMap[a.UjianPesertaID] = map[string]string{}
+	if len(participantIDs) > 0 {
+		if err := s.db.Where("ujian_peserta_id IN ?", participantIDs).Find(&answers).Error; err != nil {
+			return fiber.NewError(500, "gagal memuat jawaban ujian")
 		}
-		answerMap[a.UjianPesertaID][a.SoalID] = a.Jawaban
 	}
-
-	// Get soal count
-	var soalCount int64
-	s.db.Model(&UjianSoal{}).Where("ujian_id = ?", uj.ID).Count(&soalCount)
-
-	// Get soal IDs in order for consistent column layout
-	var soalIDs []string
-	s.db.Model(&UjianSoal{}).Where("ujian_id = ?", uj.ID).Order("created_at").Pluck("soal_id", &soalIDs)
-
-	// Build CSV
-	var buf bytes.Buffer
-	w := csv.NewWriter(&buf)
-	// Header
+	answerMap := map[string]string{}
+	for _, a := range answers {
+		answerMap[a.UjianPesertaID+"\x00"+a.SoalID] = a.Jawaban
+	}
+	var currentItems []UjianSoal
+	if err := s.db.Preload("Soal").Where("ujian_id = ?", uj.ID).Order("urutan asc").Order("created_at asc").Find(&currentItems).Error; err != nil {
+		return fiber.NewError(500, "gagal memuat susunan soal")
+	}
+	type questionColumn struct {
+		id, prompt string
+		order      int
+	}
+	columns := make([]questionColumn, 0, len(currentItems))
+	columnSeen := make(map[string]bool)
+	snapshotQuestionIDs := make(map[string]bool)
+	currentPromptByID := make(map[string]string, len(currentItems))
+	currentOrderByID := make(map[string]int, len(currentItems))
+	for _, item := range currentItems {
+		currentPromptByID[item.SoalID] = item.Soal.Pertanyaan
+		currentOrderByID[item.SoalID] = item.Urutan
+	}
+	columnKey := func(id, prompt string) string { return id + "\x00" + prompt }
+	frozenByAttempt := make(map[string][]UjianPesertaSoal, len(participants))
+	snapshotPromptByAttempt := make(map[string]map[string]string, len(participants))
+	for _, participant := range participants {
+		var frozen []UjianPesertaSoal
+		if err := s.db.Where("ujian_peserta_id = ?", participant.ID).Order("urutan asc").Find(&frozen).Error; err != nil {
+			return fiber.NewError(500, "gagal memuat snapshot soal")
+		}
+		frozenByAttempt[participant.ID] = frozen
+		for _, item := range frozen {
+			if item.SoalID == "" {
+				continue
+			}
+			snapshotQuestionIDs[item.SoalID] = true
+			prompt := ""
+			if snapshot, err := loadUjianQuestionSnapshot(item.SnapshotJSON); err == nil {
+				prompt = snapshot.Pertanyaan
+			}
+			if prompt == "" {
+				prompt = currentPromptByID[item.SoalID]
+			}
+			if snapshotPromptByAttempt[participant.ID] == nil {
+				snapshotPromptByAttempt[participant.ID] = make(map[string]string)
+			}
+			snapshotPromptByAttempt[participant.ID][item.SoalID] = prompt
+			key := columnKey(item.SoalID, prompt)
+			if columnSeen[key] {
+				continue
+			}
+			columns = append(columns, questionColumn{id: item.SoalID, prompt: prompt, order: item.Urutan})
+			columnSeen[key] = true
+		}
+	}
+	// Keep current questions with no attempts in the report, but never let their
+	// live prompt overwrite the prompt captured in a historical attempt snapshot.
+	for _, item := range currentItems {
+		if snapshotQuestionIDs[item.SoalID] {
+			continue
+		}
+		key := columnKey(item.SoalID, item.Soal.Pertanyaan)
+		if columnSeen[key] {
+			continue
+		}
+		columns = append(columns, questionColumn{id: item.SoalID, prompt: item.Soal.Pertanyaan, order: item.Urutan})
+		columnSeen[key] = true
+	}
+	sort.SliceStable(columns, func(i, j int) bool { return columns[i].order < columns[j].order })
+	classIDs := make([]string, 0, len(participants))
+	classIDSeen := map[string]bool{}
+	for _, participant := range participants {
+		classID := participant.KelasIDSaatUjian
+		if classID == "" {
+			classID = participant.PesertaDidik.KelasID
+		}
+		if classID != "" && !classIDSeen[classID] {
+			classIDSeen[classID] = true
+			classIDs = append(classIDs, classID)
+		}
+	}
+	var classRows []Kelas
+	classByID := map[string]Kelas{}
+	if len(classIDs) > 0 {
+		if err := s.db.Where("id IN ?", classIDs).Find(&classRows).Error; err != nil {
+			return fiber.NewError(500, "gagal memuat kelas ujian")
+		}
+		for _, class := range classRows {
+			classByID[class.ID] = class
+		}
+	}
 	header := []string{"No", "Nama Siswa", "NISN", "Kelas", "Status", "Skor"}
-	for i := range soalIDs {
-		header = append(header, fmt.Sprintf("Soal %d", i+1))
+	for index, question := range columns {
+		label := fmt.Sprintf("Soal %d", index+1)
+		if strings.TrimSpace(question.prompt) != "" {
+			label += " - " + strings.TrimSpace(question.prompt)
+		}
+		header = append(header, label)
 	}
-	w.Write(header)
-
-	// Data rows
+	reportRows := make([][]string, 0, len(participants))
 	for i, p := range participants {
 		score := "-"
 		if p.Skor != nil {
 			score = fmt.Sprintf("%.1f", *p.Skor)
 		}
+		classID := p.KelasIDSaatUjian
+		if classID == "" {
+			classID = p.PesertaDidik.KelasID
+		}
+		classLabel := "Belum tercatat"
+		if class, ok := classByID[classID]; ok {
+			classLabel = fmt.Sprintf("Kelas %d%s", class.Jenjang, class.NamaRombel)
+		} else if classID != "" {
+			classLabel = "Kelas historis (data kelas tidak tersedia)"
+		}
 		row := []string{
 			strconv.Itoa(i + 1),
 			p.PesertaDidik.Nama,
 			p.PesertaDidik.NISN,
-			fmt.Sprintf("Kelas %d%s", p.PesertaDidik.Kelas.Jenjang, p.PesertaDidik.Kelas.NamaRombel),
+			classLabel,
 			p.Status,
 			score,
 		}
-		if pMap, ok := answerMap[p.ID]; ok {
-			for _, sid := range soalIDs {
-				row = append(row, pMap[sid])
+		knownIDs := map[string]bool{}
+		for _, frozen := range frozenByAttempt[p.ID] {
+			knownIDs[frozen.SoalID] = true
+		}
+		for _, question := range columns {
+			if len(frozenByAttempt[p.ID]) > 0 && snapshotPromptByAttempt[p.ID][question.id] != question.prompt {
+				row = append(row, "")
+				continue
+			}
+			if len(frozenByAttempt[p.ID]) == 0 && knownIDs[question.id] {
+				row = append(row, "")
+				continue
+			}
+			row = append(row, answerMap[p.ID+"\x00"+question.id])
+		}
+		reportRows = append(reportRows, row)
+	}
+	if strings.EqualFold(c.Query("format"), "xlsx") {
+		file := excelize.NewFile()
+		const sheet = "Hasil Ujian"
+		file.SetSheetName("Sheet1", sheet)
+		for column, value := range header {
+			cell, _ := excelize.CoordinatesToCellName(column+1, 1)
+			_ = file.SetCellValue(sheet, cell, csvSafeField(value))
+		}
+		for rowIndex, row := range reportRows {
+			for column, value := range row {
+				cell, _ := excelize.CoordinatesToCellName(column+1, rowIndex+2)
+				_ = file.SetCellValue(sheet, cell, csvSafeField(value))
 			}
 		}
-		w.Write(row)
+		_ = file.SetColWidth(sheet, "A", "F", 18)
+		_ = file.SetColWidth(sheet, "B", "B", 30)
+		if len(header) > 6 {
+			lastColumn, _ := excelize.ColumnNumberToName(len(header))
+			_ = file.SetColWidth(sheet, "G", lastColumn, 36)
+		}
+		var output bytes.Buffer
+		if err := file.Write(&output); err != nil {
+			return fiber.NewError(500, "gagal membuat file hasil ujian")
+		}
+		c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		c.Attachment("hasil-ujian-" + sanitizeFilename(uj.Judul) + ".xlsx")
+		return c.Send(output.Bytes())
+	}
+	var output bytes.Buffer
+	w := csv.NewWriter(&output)
+	if err := w.Write(header); err != nil {
+		return fiber.NewError(500, "gagal menulis hasil ujian")
+	}
+	for _, row := range reportRows {
+		for index := range row {
+			row[index] = csvSafeField(row[index])
+		}
+		if err := w.Write(row); err != nil {
+			return fiber.NewError(500, "gagal menulis hasil ujian")
+		}
 	}
 	w.Flush()
-
-	c.Set(fiber.HeaderContentType, "text/csv")
-	c.Attachment("hasil-ujian-" + uj.Judul + ".csv")
-	return c.Send(buf.Bytes())
+	if err := w.Error(); err != nil {
+		return fiber.NewError(500, "gagal menulis hasil ujian")
+	}
+	c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
+	c.Attachment("hasil-ujian-" + sanitizeFilename(uj.Judul) + ".csv")
+	return c.Send(output.Bytes())
 }
 
 // ---------------------------------------------------------------------------

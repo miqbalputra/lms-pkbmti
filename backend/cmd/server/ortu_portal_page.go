@@ -468,8 +468,8 @@ async function loadUjian(c){
     const r=await fetch(API+'/orang-tua/anak/'+state.anakId+'/ujian-skor',{headers:hdr()});
     const d=await r.json();if(!r.ok)throw new Error(d.error);
     if(!Array.isArray(d)||!d.length){c.innerHTML='<div class="empty-state">Belum ada data ujian</div>';return}
-    c.innerHTML='<div class="table-wrap"><table class="table"><thead><tr><th>Ujian</th><th>Mapel</th><th>Skor</th><th>Tanggal</th></tr></thead><tbody>'+
-    d.map(p=>'<tr><td>'+esc(p.ujian?.judul||'-')+'</td><td>'+esc(p.ujian?.mapel?.namaMapel||'-')+'</td><td><strong>'+(p.skor!=null?Number(p.skor).toFixed(1):'-')+'</strong></td><td>'+String(p.selesai||'').slice(0,10)+'</td></tr>').join('')+
+    c.innerHTML='<div class="table-wrap"><table class="table"><thead><tr><th>Ujian</th><th>Mapel</th><th>Status</th><th>Skor</th><th>Tanggal</th></tr></thead><tbody>'+
+    d.map(p=>'<tr><td>'+esc(p.ujian?.judul||'-')+'</td><td>'+esc(p.ujian?.mapel?.namaMapel||'-')+'</td><td>'+ (p.status==='menunggu_nilai'?'Menunggu penilaian':p.status==='dikunci'?'Dikunci':'Selesai') +'</td><td><strong>'+(p.skor!=null?Number(p.skor).toFixed(1):'-')+'</strong></td><td>'+String(p.selesai||'').slice(0,10)+'</td></tr>').join('')+
     '</tbody></table></div>';
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
 }

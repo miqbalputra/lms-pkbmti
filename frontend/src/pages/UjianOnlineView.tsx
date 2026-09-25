@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Monitor, ExternalLink } from 'lucide-react'
+import { BarChart3, Monitor, ExternalLink } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
 import { PageToolbar } from '../components/ui/page'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { request } from '../lib/api'
+import { AssessmentCollaboratorManager } from '../components/AssessmentCollaborators'
 
 type UjianRow = Record<string, unknown> & { id: string }
 
@@ -25,9 +26,14 @@ export function UjianOnlineView({ token }: { token: string }) {
         title="Ujian Online"
         description="Daftar ujian online yang memiliki kode akses. Siswa mengerjakan via halaman publik."
         actions={
-          <Button variant="outline" onClick={() => window.open('/ujian', '_blank')}>
-            <ExternalLink className="h-4 w-4" /> Buka Halaman Siswa
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => window.location.assign('/simulasi?tab=hasil')}>
+              <BarChart3 className="h-4 w-4" /> Analitik & laporan gabungan
+            </Button>
+            <Button variant="outline" onClick={() => window.open('/ujian', '_blank')}>
+              <ExternalLink className="h-4 w-4" /> Buka Halaman Siswa
+            </Button>
+          </div>
         }
       />
 
@@ -67,9 +73,12 @@ export function UjianOnlineView({ token }: { token: string }) {
                         <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">{String(u.aksesKode)}</code>
                       </TableCell>
                       <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => window.open('/ujian', '_blank')}>
-                          🎓 Halaman Siswa
-                        </Button>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <AssessmentCollaboratorManager token={token} module="ujian_online" assessmentId={u.id} />
+                          <Button size="sm" className="min-h-11" variant="outline" onClick={() => window.open('/ujian', '_blank')}>
+                            🎓 Halaman Siswa
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )

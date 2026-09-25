@@ -615,67 +615,157 @@ type KelasVirtual struct {
 }
 
 // Modul D — Bank Soal + Ujian Luring (prd_fitur_simpkbm.md). Tutor membuat bank soal
-// per mapel (PG/essay) & menyusun ujian luring (cetak naskah). Tidak ada pengerjaan
+// per mapel (pilihan tunggal/multi, dropdown, benar-salah, isian, uraian) & menyusun ujian luring (cetak naskah). Tidak ada pengerjaan
 // online (JawabanUjian/SesiUjian dihapus). UjianSoal mengaitkan soal ke ujian + bobot.
 type BankSoal struct {
 	Base
-	MapelID          string        `gorm:"index" json:"mapelId"`
-	Tipe             string        `json:"tipe"` // "pg" | "essay"
-	Pertanyaan       string        `gorm:"type:text" json:"pertanyaan"`
-	Opsi             string        `gorm:"type:text" json:"opsi"` // JSON array string (untuk pg)
-	Kunci            string        `json:"kunci"`                 // pg: index (0..n) | essay: teks kunci
-	Poin             float64       `json:"poin"`
-	DibuatOlehUserID string        `gorm:"index" json:"dibuatOlehUserId"`
-	Mapel            MataPelajaran `json:"mapel"`
+	MapelID          string               `gorm:"index" json:"mapelId"`
+	Domain           string               `gorm:"index" json:"domain,omitempty"`
+	Topik            string               `gorm:"index" json:"topik,omitempty"`
+	Kompetensi       string               `gorm:"type:text" json:"kompetensi,omitempty"`
+	LevelKognitif    string               `json:"levelKognitif,omitempty"`
+	Tipe             string               `json:"tipe"`
+	Pertanyaan       string               `gorm:"type:text" json:"pertanyaan"`
+	Opsi             string               `gorm:"type:text" json:"opsi"`                  // JSON array of options; blank for free response
+	Konfigurasi      string               `gorm:"type:text" json:"konfigurasi,omitempty"` // Visual question config; answer keys are staff-only.
+	StimulusJSON     string               `gorm:"type:text" json:"-"`                     // Optional text/table/HTTPS stimulus; kept separate from legacy question keys.
+	Stimulus         []simulasiStimulusIn `gorm:"-" json:"stimulus,omitempty"`
+	Kunci            string               `json:"kunci"` // Staff-only: option index(es), accepted short answers, or essay rubric
+	Poin             float64              `json:"poin"`
+	DibuatOlehUserID string               `gorm:"index" json:"dibuatOlehUserId"`
+	Mapel            MataPelajaran        `json:"mapel"`
 }
 type Ujian struct {
 	Base
-	MapelID          string        `gorm:"index" json:"mapelId"`
-	KelasID          string        `gorm:"index" json:"kelasId"`
-	Judul            string        `gorm:"not null" json:"judul"`
-	WaktuMulai       time.Time     `json:"waktuMulai"`
-	WaktuSelesai     time.Time     `json:"waktuSelesai"`
-	DurasiMenit      int           `json:"durasiMenit"`
-	GracePeriodMenit int           `json:"gracePeriodMenit"` // waktu toleransi setelah durasi habis (default 5 mnt)
-	BatasTabSwitch   int           `json:"batasTabSwitch"`   // 0 = tanpa batas; jika terlampaui ujian dikunci otomatis
-	AcakSoal         bool          `json:"acakSoal"`
-	AksesKode        string        `gorm:"index" json:"aksesKode"` // kode akses siswa (tanpa login)
-	Semester         string        `json:"semester"`
-	DibuatOlehUserID string        `gorm:"index" json:"dibuatOlehUserId"`
-	Mapel            MataPelajaran `json:"mapel"`
-	Kelas            Kelas         `json:"kelas"`
+	MapelID            string        `gorm:"index" json:"mapelId"`
+	KelasID            string        `gorm:"index" json:"kelasId"`
+	Judul              string        `gorm:"not null" json:"judul"`
+	WaktuMulai         time.Time     `json:"waktuMulai"`
+	WaktuSelesai       time.Time     `json:"waktuSelesai"`
+	DurasiMenit        int           `json:"durasiMenit"`
+	GracePeriodMenit   int           `json:"gracePeriodMenit"` // waktu toleransi setelah durasi habis (default 5 mnt)
+	BatasTabSwitch     int           `json:"batasTabSwitch"`   // 0 = tanpa batas; jika terlampaui ujian dikunci otomatis
+	AcakSoal           bool          `json:"acakSoal"`
+	IzinkanEditRespons bool          `json:"izinkanEditRespons"`
+	AksesKode          string        `gorm:"index" json:"aksesKode"` // kode akses siswa (tanpa login)
+	Semester           string        `json:"semester"`
+	DibuatOlehUserID   string        `gorm:"index" json:"dibuatOlehUserId"`
+	Mapel              MataPelajaran `json:"mapel"`
+	Kelas              Kelas         `json:"kelas"`
 }
 type UjianSoal struct {
 	Base
-	UjianID string   `gorm:"uniqueIndex:ujian_soal" json:"ujianId"`
-	SoalID  string   `gorm:"uniqueIndex:ujian_soal" json:"soalId"`
-	Bobot   float64  `json:"bobot"`
-	Soal    BankSoal `json:"soal"`
+	UjianID              string            `gorm:"uniqueIndex:ujian_soal" json:"ujianId"`
+	SoalID               string            `gorm:"uniqueIndex:ujian_soal" json:"soalId"`
+	BagianID             string            `gorm:"index" json:"bagianId,omitempty"`
+	Urutan               int               `gorm:"index" json:"urutan"`
+	Bobot                float64           `json:"bobot"`
+	BranchToByAnswerJSON string            `gorm:"type:text" json:"-"`
+	BranchToByAnswer     map[string]string `gorm:"-" json:"branchToByAnswer,omitempty"`
+	Soal                 BankSoal          `json:"soal"`
+}
+
+// UjianBagian groups questions for the online learner flow. ClientID is a
+// stable editor ID so autosave can upsert sections without changing question
+// references or historical attempt snapshots.
+type UjianBagian struct {
+	Base
+	UjianID   string `gorm:"index;uniqueIndex:ujian_bagian_client" json:"ujianId"`
+	ClientID  string `gorm:"uniqueIndex:ujian_bagian_client;not null" json:"id"`
+	Nama      string `gorm:"not null" json:"nama"`
+	Deskripsi string `gorm:"type:text" json:"deskripsi"`
+	Urutan    int    `gorm:"not null;default:1" json:"urutan"`
+}
+
+// AsesmenKolaborator gives an assessment owner a constrained way to share
+// authoring, grading, or read access without broadening class membership.
+// The module/id pair keeps legacy Ujian and Simulasi data fully separate.
+type AsesmenKolaborator struct {
+	Base
+	Modul            string `gorm:"uniqueIndex:asesmen_kolaborator" json:"modul"`
+	AsesmenID        string `gorm:"uniqueIndex:asesmen_kolaborator;index" json:"asesmenId"`
+	UserID           string `gorm:"uniqueIndex:asesmen_kolaborator;index" json:"userId"`
+	Peran            string `gorm:"not null" json:"peran"` // editor | grader | viewer
+	DibuatOlehUserID string `gorm:"index;not null" json:"dibuatOlehUserId"`
 }
 
 // Ujian Online — Sesi pengerjaan ujian online oleh peserta didik.
 type UjianPeserta struct {
 	Base
-	UjianID        string       `gorm:"uniqueIndex:ujian_peserta_uniq" json:"ujianId"`
-	PesertaDidikID string       `gorm:"index;uniqueIndex:ujian_peserta_uniq" json:"pesertaDidikId"`
-	Mulai          *time.Time   `json:"mulai"`
-	Selesai        *time.Time   `json:"selesai"`
-	Skor           *float64     `gorm:"type:decimal(6,2)" json:"skor"`
-	Status         string       `gorm:"default:mulai;index" json:"status"` // "mulai"|"selesai"|"dikunci"
-	TabSwitch      int          `json:"tabSwitch"`
-	Ujian          Ujian        `gorm:"foreignKey:UjianID" json:"ujian"`
-	PesertaDidik   PesertaDidik `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik"`
+	UjianID           string       `gorm:"uniqueIndex:ujian_peserta_uniq" json:"ujianId"`
+	PesertaDidikID    string       `gorm:"index;uniqueIndex:ujian_peserta_uniq" json:"pesertaDidikId"`
+	KelasIDSaatUjian  string       `gorm:"index" json:"-"`
+	Mulai             *time.Time   `json:"mulai"`
+	Selesai           *time.Time   `json:"selesai"`
+	Skor              *float64     `gorm:"type:decimal(6,2)" json:"skor"`
+	Status            string       `gorm:"default:mulai;index" json:"status"` // "mulai"|"selesai"|"dikunci"
+	PenutupanOtomatis bool         `gorm:"not null;default:false" json:"-"`
+	TabSwitch         int          `json:"tabSwitch"`
+	Ujian             Ujian        `gorm:"foreignKey:UjianID" json:"ujian"`
+	PesertaDidik      PesertaDidik `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik"`
+}
+
+// UjianPesertaSoal freezes the question content, answer key, weight and order
+// for a single online attempt. Existing attempts without rows are backfilled
+// lazily from their current exam the next time they are resumed/graded.
+type UjianPesertaSoal struct {
+	Base
+	UjianPesertaID  string  `gorm:"uniqueIndex:ujian_peserta_soal" json:"ujianPesertaId"`
+	UjianSoalID     string  `gorm:"uniqueIndex:ujian_peserta_soal;index" json:"ujianSoalId"`
+	SoalID          string  `gorm:"index" json:"soalId"`
+	Urutan          int     `gorm:"index" json:"urutan"`
+	BagianID        string  `gorm:"index" json:"bagianId,omitempty"`
+	NamaBagian      string  `json:"namaBagian,omitempty"`
+	DeskripsiBagian string  `gorm:"type:text" json:"deskripsiBagian,omitempty"`
+	UrutanBagian    int     `json:"urutanBagian,omitempty"`
+	Bobot           float64 `gorm:"type:decimal(8,2)" json:"bobot"`
+	SnapshotJSON    string  `gorm:"type:text;not null" json:"-"`
 }
 
 // UjianJawaban — jawaban per soal oleh peserta didik ujian online.
 type UjianJawaban struct {
 	Base
-	UjianPesertaID string   `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"ujianPesertaId"`
-	SoalID         string   `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"soalId"`
-	Jawaban        string   `gorm:"type:text" json:"jawaban"`
-	Benar          *bool    `json:"benar"`
-	Nilai          float64  `gorm:"type:decimal(6,2)" json:"nilai"`
-	Soal           BankSoal `gorm:"foreignKey:SoalID" json:"soal"`
+	UjianPesertaID    string     `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"ujianPesertaId"`
+	SoalID            string     `gorm:"uniqueIndex:ujian_jawaban_uniq" json:"soalId"`
+	Jawaban           string     `gorm:"type:text" json:"jawaban"`
+	Benar             *bool      `json:"benar"`
+	Nilai             float64    `gorm:"type:decimal(6,2)" json:"nilai"`
+	NilaiManual       *float64   `gorm:"type:decimal(6,2)" json:"-"`
+	KomentarGuru      string     `gorm:"type:text" json:"-"`
+	DinilaiOlehUserID *string    `gorm:"index" json:"-"`
+	DinilaiPada       *time.Time `json:"-"`
+	Soal              BankSoal   `gorm:"foreignKey:SoalID" json:"soal"`
+}
+
+// UjianJawabanRevisi keeps an immutable, key-free audit trail when a teacher
+// explicitly allows students to edit submitted responses. The revision record
+// stores response/grading states only and is never returned from learner APIs.
+type UjianJawabanRevisi struct {
+	Base
+	UjianPesertaID       string `gorm:"index;uniqueIndex:ujian_jawaban_revision_idempotency,priority:1;not null" json:"ujianPesertaId"`
+	IdempotencyKey       string `gorm:"size:64;uniqueIndex:ujian_jawaban_revision_idempotency,priority:2;not null" json:"-"`
+	UjianSoalID          string `gorm:"index;uniqueIndex:ujian_jawaban_revision_number,priority:1;not null" json:"ujianSoalId"`
+	Nomor                int    `gorm:"uniqueIndex:ujian_jawaban_revision_number,priority:2;not null" json:"nomor"`
+	PesertaDidikID       string `gorm:"index;not null" json:"pesertaDidikId"`
+	AktorID              string `gorm:"index;not null" json:"-"` // participant identity for legacy NISN-authenticated exams
+	RequestHash          string `gorm:"size:64;not null" json:"-"`
+	JawabanSebelum       string `gorm:"type:text" json:"-"`
+	JawabanSesudah       string `gorm:"type:text" json:"-"`
+	PenilaianSebelumJSON string `gorm:"type:text" json:"-"`
+	PenilaianSesudahJSON string `gorm:"type:text" json:"-"`
+}
+
+// UjianJawabanBerkas stores student uploads outside the public static tree.
+// Access is always rechecked against the attempt owner or the exam's staff scope.
+type UjianJawabanBerkas struct {
+	Base
+	UjianPesertaID string `gorm:"index;not null" json:"ujianPesertaId"`
+	UjianSoalID    string `gorm:"index;not null" json:"ujianSoalId"`
+	SoalID         string `gorm:"index;not null" json:"soalId"`
+	FilePath       string `gorm:"type:text;not null" json:"-"`
+	NamaFile       string `gorm:"not null" json:"namaFile"`
+	ContentType    string `gorm:"not null" json:"contentType"`
+	Ukuran         int64  `json:"ukuran"`
 }
 
 // Simulasi ANBK/TKA SD is separate from the legacy BankSoal and Ujian models
@@ -754,6 +844,9 @@ type SimulasiPaket struct {
 	TampilkanNilai      bool           `json:"tampilkanNilai"`
 	TampilkanRingkasan  bool           `json:"tampilkanRingkasan"`
 	TampilkanPembahasan bool           `json:"tampilkanPembahasan"`
+	IzinkanEditRespons  bool           `json:"izinkanEditRespons"`
+	TemaWarna           string         `gorm:"size:7;default:#1c5d94" json:"temaWarna"`
+	PesanKonfirmasi     string         `gorm:"type:text" json:"pesanKonfirmasi"`
 	Status              string         `gorm:"index;default:draf" json:"status"`
 	DibuatOlehUserID    string         `gorm:"index;not null" json:"dibuatOlehUserId"`
 	Revision            int            `gorm:"not null;default:1" json:"revision"`
@@ -765,9 +858,22 @@ type SimulasiPaketSoal struct {
 	Base
 	PaketID      string  `gorm:"index;uniqueIndex:simulasi_paket_urutan" json:"paketId"`
 	SoalID       *string `gorm:"index" json:"soalId,omitempty"`
+	BagianID     string  `gorm:"index" json:"bagianId,omitempty"`
 	Urutan       int     `gorm:"uniqueIndex:simulasi_paket_urutan" json:"urutan"`
 	Bobot        float64 `gorm:"type:decimal(8,2)" json:"bobot"`
 	SnapshotJSON string  `gorm:"type:text;not null" json:"-"`
+}
+
+// SimulasiBagian groups questions into learner-facing sections. The section ID
+// is package-scoped and is included in attempt snapshots so later edits to a
+// draft can never rewrite a learner's historical form structure.
+type SimulasiBagian struct {
+	Base
+	PaketID   string `gorm:"index;uniqueIndex:simulasi_paket_bagian" json:"paketId"`
+	ClientID  string `gorm:"uniqueIndex:simulasi_paket_bagian;not null" json:"id"`
+	Nama      string `gorm:"not null" json:"nama"`
+	Deskripsi string `gorm:"type:text" json:"deskripsi"`
+	Urutan    int    `json:"urutan"`
 }
 
 type SimulasiPenugasan struct {
@@ -786,6 +892,8 @@ type SimulasiAksesToken struct {
 	TokenHash        string     `gorm:"uniqueIndex;not null" json:"-"`
 	TokenPrefix      string     `gorm:"index;not null" json:"tokenPrefix"`
 	Label            string     `json:"label"`
+	PrefillJSON      string     `gorm:"type:text" json:"-"`
+	EmbedOriginsJSON string     `gorm:"type:text" json:"-"`
 	DibuatOlehUserID string     `gorm:"index;not null" json:"dibuatOlehUserId"`
 	ExpiresAt        *time.Time `gorm:"index" json:"expiresAt,omitempty"`
 	RevokedAt        *time.Time `gorm:"index" json:"revokedAt,omitempty"`
@@ -794,26 +902,32 @@ type SimulasiAksesToken struct {
 
 type SimulasiUpaya struct {
 	Base
-	PaketID        string        `gorm:"index;uniqueIndex:simulasi_upaya_nomor" json:"paketId"`
-	PesertaDidikID string        `gorm:"index;uniqueIndex:simulasi_upaya_nomor" json:"pesertaDidikId"`
-	Nomor          int           `gorm:"uniqueIndex:simulasi_upaya_nomor" json:"nomor"`
-	Status         string        `gorm:"index;not null" json:"status"`
-	Mulai          *time.Time    `json:"mulai,omitempty"`
-	BatasWaktu     *time.Time    `gorm:"index" json:"batasWaktu,omitempty"`
-	Selesai        *time.Time    `json:"selesai,omitempty"`
-	SeedUrutan     string        `gorm:"not null" json:"seedUrutan"`
-	SkorOtomatis   float64       `gorm:"type:decimal(8,2)" json:"skorOtomatis"`
-	SkorAkhir      *float64      `gorm:"type:decimal(8,2)" json:"skorAkhir,omitempty"`
-	Paket          SimulasiPaket `gorm:"foreignKey:PaketID" json:"paket,omitempty"`
-	PesertaDidik   PesertaDidik  `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik,omitempty"`
+	PaketID          string        `gorm:"index;uniqueIndex:simulasi_upaya_nomor" json:"paketId"`
+	PesertaDidikID   string        `gorm:"index;uniqueIndex:simulasi_upaya_nomor" json:"pesertaDidikId"`
+	KelasIDSaatUjian string        `gorm:"index" json:"-"`
+	Nomor            int           `gorm:"uniqueIndex:simulasi_upaya_nomor" json:"nomor"`
+	Status           string        `gorm:"index;not null" json:"status"`
+	Mulai            *time.Time    `json:"mulai,omitempty"`
+	BatasWaktu       *time.Time    `gorm:"index" json:"batasWaktu,omitempty"`
+	Selesai          *time.Time    `json:"selesai,omitempty"`
+	SeedUrutan       string        `gorm:"not null" json:"seedUrutan"`
+	SkorOtomatis     float64       `gorm:"type:decimal(8,2)" json:"skorOtomatis"`
+	SkorAkhir        *float64      `gorm:"type:decimal(8,2)" json:"skorAkhir,omitempty"`
+	Paket            SimulasiPaket `gorm:"foreignKey:PaketID" json:"paket,omitempty"`
+	PesertaDidik     PesertaDidik  `gorm:"foreignKey:PesertaDidikID" json:"pesertaDidik,omitempty"`
 }
 
 type SimulasiUpayaSoal struct {
 	Base
-	UpayaID      string `gorm:"index;uniqueIndex:simulasi_upaya_soal" json:"upayaId"`
-	PaketSoalID  string `gorm:"index;uniqueIndex:simulasi_upaya_soal" json:"paketSoalId"`
-	UrutanTampil int    `gorm:"index" json:"urutanTampil"`
-	Ditandai     bool   `json:"ditandai"`
+	UpayaID         string `gorm:"index;uniqueIndex:simulasi_upaya_soal" json:"upayaId"`
+	PaketSoalID     string `gorm:"index;uniqueIndex:simulasi_upaya_soal" json:"paketSoalId"`
+	UrutanTampil    int    `gorm:"index" json:"urutanTampil"`
+	Aktif           bool   `gorm:"index;not null;default:true" json:"aktif"`
+	BagianID        string `gorm:"index" json:"bagianId,omitempty"`
+	NamaBagian      string `json:"namaBagian,omitempty"`
+	DeskripsiBagian string `gorm:"type:text" json:"deskripsiBagian,omitempty"`
+	UrutanBagian    int    `json:"urutanBagian,omitempty"`
+	Ditandai        bool   `json:"ditandai"`
 }
 
 type SimulasiJawaban struct {
@@ -829,6 +943,24 @@ type SimulasiJawaban struct {
 	DinilaiPada       *time.Time `json:"dinilaiPada,omitempty"`
 }
 
+// SimulasiJawabanRevisi is an immutable audit record for an explicitly
+// permitted post-submit response edit. It stores only the learner's response
+// and grading state; answer keys and question snapshots are never copied here.
+type SimulasiJawabanRevisi struct {
+	Base
+	UpayaID              string `gorm:"index;uniqueIndex:simulasi_jawaban_revision_idempotency,priority:1;not null" json:"upayaId"`
+	IdempotencyKey       string `gorm:"size:64;uniqueIndex:simulasi_jawaban_revision_idempotency,priority:2;not null" json:"-"`
+	UpayaSoalID          string `gorm:"index;uniqueIndex:simulasi_jawaban_revision_number,priority:1;not null" json:"upayaSoalId"`
+	Nomor                int    `gorm:"uniqueIndex:simulasi_jawaban_revision_number,priority:2;not null" json:"nomor"`
+	PesertaDidikID       string `gorm:"index;not null" json:"pesertaDidikId"`
+	AktorUserID          string `gorm:"index;not null" json:"aktorUserId"`
+	RequestHash          string `gorm:"size:64;not null" json:"-"`
+	JawabanSebelumJSON   string `gorm:"type:text" json:"-"`
+	JawabanSesudahJSON   string `gorm:"type:text" json:"-"`
+	PenilaianSebelumJSON string `gorm:"type:text" json:"-"`
+	PenilaianSesudahJSON string `gorm:"type:text" json:"-"`
+}
+
 // SimulasiJawabanFile stores learner uploads outside public static storage.
 // The private path is only served by handlers that re-check attempt ownership.
 type SimulasiJawabanFile struct {
@@ -839,6 +971,7 @@ type SimulasiJawabanFile struct {
 	NamaFile         string `gorm:"not null" json:"namaFile"`
 	ContentType      string `gorm:"not null" json:"contentType"`
 	Ukuran           int64  `json:"ukuran"`
+	Aktif            bool   `gorm:"index;not null;default:true" json:"aktif"`
 }
 
 // Notifikasi — push notification internal untuk user.
@@ -1193,7 +1326,20 @@ func main() {
 			// The two public legacy pages contain small inline UI scripts/styles;
 			// authorize only the per-request nonce instead of enabling arbitrary
 			// inline script execution.
-			c.Set("Content-Security-Policy", productionContentSecurityPolicy(cspNonce))
+			frameAncestors := "'none'"
+			// A shared assessment can be embedded only by origins explicitly
+			// allowlisted on its revocable link. All other application pages retain
+			// the global anti-clickjacking policy.
+			if c.Method() == fiber.MethodGet && strings.TrimSuffix(c.Path(), "/") == "/simulasi" {
+				if rawShare := strings.TrimSpace(c.Query("share")); rawShare != "" {
+					frameAncestors = s.simulasiFrameAncestors(rawShare)
+					if frameAncestors != "'none'" {
+						c.Response().Header.Del("X-Frame-Options")
+					}
+					c.Set("Cache-Control", "no-store")
+				}
+			}
+			c.Set("Content-Security-Policy", productionContentSecurityPolicyWithFrameAncestors(cspNonce, frameAncestors))
 		}
 		if strings.HasPrefix(c.Path(), "/api") || c.Path() == "/health" {
 			c.Set("Cache-Control", "no-store")
@@ -1225,18 +1371,43 @@ func main() {
 	app.Get("/ujian", s.serveUjianOnlinePage)
 	app.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api := app.Group("/api")
-	loginLimiterMax := 30
-	if cfg.Env == "production" || strings.EqualFold(env("SERVE_STATIC", "false"), "true") {
-		loginLimiterMax = 5
-	}
-	api.Post("/auth/login", limiter.New(limiter.Config{
-		Max:        loginLimiterMax,
-		Expiration: time.Minute,
+	// A public school network can put an entire class behind one IP address.
+	// Keep a generous per-IP ceiling for bursts, while applying the meaningful
+	// brute-force budget to the normalized account identifier below. Failed
+	// passwords are also capped and locked by login() itself.
+	loginLimiterMax := 300
+	loginIPLimiter := limiter.New(limiter.Config{
+		Max: loginLimiterMax, Expiration: time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string { return "login-ip:" + c.IP() },
 		LimitReached: func(c *fiber.Ctx) error {
-			return c.Status(429).JSON(fiber.Map{"error": "Batas percobaan login terlampaui. Silakan tunggu 1 menit."})
+			return c.Status(429).JSON(fiber.Map{"error": "Terlalu banyak permintaan login dari jaringan ini. Silakan tunggu sebentar."})
 		},
-	}), s.login)
-	api.Post("/auth/refresh", limiter.New(limiter.Config{Max: 10, Expiration: time.Minute}), s.refresh)
+	})
+	loginAccountLimiter := limiter.New(limiter.Config{
+		Max: 20, Expiration: time.Minute,
+		KeyGenerator:           loginRateLimitKey,
+		SkipSuccessfulRequests: true,
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{"error": "Terlalu banyak percobaan untuk akun ini. Silakan tunggu sebentar."})
+		},
+	})
+	api.Post("/auth/login", loginIPLimiter, loginAccountLimiter, s.login)
+	refreshIPLimiter := limiter.New(limiter.Config{
+		Max: 1200, Expiration: time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string { return "refresh-ip:" + c.IP() },
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{"error": "Terlalu banyak permintaan pemulihan sesi dari jaringan ini."})
+		},
+	})
+	refreshTokenLimiter := limiter.New(limiter.Config{
+		Max: 10, Expiration: time.Minute,
+		Next:         func(c *fiber.Ctx) bool { return strings.TrimSpace(c.Cookies("refresh_token")) == "" },
+		KeyGenerator: refreshRateLimitKey,
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{"error": "Sesi ini terlalu sering diperbarui. Silakan coba lagi sebentar."})
+		},
+	})
+	api.Post("/auth/refresh", refreshIPLimiter, refreshTokenLimiter, s.refresh)
 	// Logout is intentionally idempotent and does not require a valid access
 	// token: an expired access token must not prevent revoking the refresh cookie.
 	api.Post("/auth/logout", s.logout)
@@ -1298,6 +1469,9 @@ func main() {
 	api.Post("/ujian-online/logout", s.logoutUjianOnline)
 	api.Post("/ujian-online/:ujianId/mulai", s.mulaiUjianOnline)
 	api.Get("/ujian-online/:ujianId/soal", s.getSoalUjianOnline)
+	api.Post("/ujian-online/:ujianId/soal/:ujianSoalId/file", s.ujianOnlineUploadAnswerFile)
+	api.Delete("/ujian-online/:ujianId/soal/:ujianSoalId/file/:fileId", s.ujianOnlineDeleteAnswerFile)
+	api.Get("/ujian-online/:ujianId/soal/:ujianSoalId/file/:fileId", s.ujianOnlineDownloadAnswerFile)
 	api.Post("/ujian-online/:ujianId/jawab", s.jawabSoal)
 	api.Post("/ujian-online/:ujianId/selesai", s.selesaiUjianOnline)
 	api.Post("/ujian-online/:ujianId/tab-switch", s.tabSwitchUjianOnline)
@@ -1352,7 +1526,14 @@ func main() {
 // inline scripts and styles in one place. Omitting the style nonce causes the
 // pages to render as unstyled HTML in browsers enforcing CSP.
 func productionContentSecurityPolicy(cspNonce string) string {
-	return "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-" + cspNonce + "' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-" + cspNonce + "' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com"
+	return productionContentSecurityPolicyWithFrameAncestors(cspNonce, "'none'")
+}
+
+func productionContentSecurityPolicyWithFrameAncestors(cspNonce, frameAncestors string) string {
+	if strings.TrimSpace(frameAncestors) == "" {
+		frameAncestors = "'none'"
+	}
+	return "default-src 'self'; base-uri 'self'; frame-ancestors " + frameAncestors + "; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-" + cspNonce + "' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-" + cspNonce + "' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com"
 }
 
 func validateConfig(cfg Config) error {
@@ -1620,7 +1801,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianPeserta{}, &UjianJawaban{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiAksesToken{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &SimulasiJawabanFile{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &Kompetensi{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianBagian{}, &AsesmenKolaborator{}, &UjianPeserta{}, &UjianPesertaSoal{}, &UjianJawaban{}, &UjianJawabanRevisi{}, &UjianJawabanBerkas{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiBagian{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiAksesToken{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &SimulasiJawabanRevisi{}, &SimulasiJawabanFile{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {
@@ -1814,6 +1995,28 @@ func (s *Server) parseAccessToken(raw string) (jwt.MapClaims, string, string, er
 		return nil, "", "", errors.New("invalid access token claims")
 	}
 	return claims, uid, role, nil
+}
+
+func loginRateLimitKey(c *fiber.Ctx) string {
+	var request struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(c.Body(), &request); err != nil {
+		return "login-ip:" + c.IP()
+	}
+	identity := strings.ToLower(strings.TrimSpace(request.Login))
+	if identity == "" {
+		return "login-ip:" + c.IP()
+	}
+	return "login:" + hash(identity)
+}
+
+func refreshRateLimitKey(c *fiber.Ctx) string {
+	token := strings.TrimSpace(c.Cookies("refresh_token"))
+	if token == "" {
+		return "refresh-ip:" + c.IP()
+	}
+	return "refresh:" + hash(token)
 }
 
 func hash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }

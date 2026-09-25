@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Dices, KeyRound, Pencil, Plus, Printer, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, BookOpen, Dices, Download, GripVertical, KeyRound, Pencil, Plus, Printer, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -29,7 +29,7 @@ import {
   DialogTitle,
 } from '../components/ui/dialog'
 import type { User } from '../App'
-import { request } from '../lib/api'
+import { downloadFile, request } from '../lib/api'
 import { formatWibDateTime, wibDateTimeLocalToISO, wibDateTimeLocalValue } from '../lib/wib'
 import { useNavigate } from 'react-router-dom'
 import { pathFor } from '../lib/router'
@@ -37,6 +37,16 @@ import { pathFor } from '../lib/router'
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
 type Row = Record<string, unknown> & { id: string }
+
+function visualChoices(question: Row | undefined): Row[] {
+  if (!question) return []
+  let config = question.konfigurasi
+  if (typeof config === 'string') {
+    try { config = JSON.parse(config) } catch { return [] }
+  }
+  const choices = (config as Record<string, unknown> | undefined)?.choices
+  return Array.isArray(choices) ? choices.filter((choice): choice is Row => Boolean(choice && typeof choice === 'object' && 'id' in choice)) : []
+}
 
 function kelasLabel(k: Row): string {
   return `Kelas ${String(k.jenjang ?? '')}${String(k.namaRombel ?? '')}`
@@ -56,6 +66,7 @@ const emptyForm = {
   gracePeriodMenit: '5',
   batasTabSwitch: '0',
   acakSoal: false,
+  izinkanEditRespons: false,
   aksesKode: '',
 }
 
@@ -120,6 +131,7 @@ export function UjianView({
       gracePeriodMenit: String(r.gracePeriodMenit ?? '5'),
       batasTabSwitch: String(r.batasTabSwitch ?? '0'),
       acakSoal: !!r.acakSoal,
+      izinkanEditRespons: !!r.izinkanEditRespons,
       aksesKode: String(r.aksesKode || ''),
     })
     setAdding(true)
@@ -146,6 +158,7 @@ export function UjianView({
       gracePeriodMenit: Number(form.gracePeriodMenit) || 0,
       batasTabSwitch: Number(form.batasTabSwitch) || 0,
       acakSoal: form.acakSoal,
+      izinkanEditRespons: form.izinkanEditRespons,
       aksesKode: form.aksesKode || '',
     }
     setSubmitting(true)
@@ -206,14 +219,10 @@ export function UjianView({
       <PageToolbar
         title="Ujian (Luring)"
         description="Susun ujian dari bank soal & cetak naskah + kunci jawaban (PDF)."
-        actions={
-          !readOnly && (
-            <Button onClick={openAdd}>
-              <Plus className="h-4 w-4" />
-              Buat ujian
-            </Button>
-          )
-        }
+        actions={<div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => navigate(pathFor('bank-soal-ujian'))}><BookOpen className="h-4 w-4" /> Bank soal Ujian Online</Button>
+          {!readOnly && <Button onClick={openAdd}><Plus className="h-4 w-4" />Buat ujian</Button>}
+        </div>}
       />
 
       {adding && !readOnly && (
@@ -266,6 +275,13 @@ export function UjianView({
             <div className="flex items-center gap-2">
               <Checkbox id="acak" checked={form.acakSoal} onChange={(e) => setForm({ ...form, acakSoal: e.target.checked })} />
               <Label htmlFor="acak" className="cursor-pointer">Acak soal & opsi (deterministik per ujian)</Label>
+            </div>
+            <div className="grid gap-1 sm:col-span-2">
+              <div className="flex items-center gap-2">
+                <Checkbox id="edit-respons" checked={form.izinkanEditRespons} onChange={(e) => setForm({ ...form, izinkanEditRespons: e.target.checked })} />
+                <Label htmlFor="edit-respons" className="cursor-pointer">Izinkan siswa memperbaiki jawaban setelah dikirim (Ujian Online)</Label>
+              </div>
+              <p className="pl-6 text-xs text-muted-foreground">Setiap perubahan disimpan sebagai riwayat. Opsi ini tidak membuka kembali ujian yang dikunci dan berakhir otomatis.</p>
             </div>
             <div className="grid gap-2">
               <Label>Kode Akses Ujian Online (opsional)</Label>
@@ -395,6 +411,22 @@ export function UjianView({
                           🎓 Siswa
                         </Button>
                       )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void downloadFile(`/ujian/${r.id}/export`, token, 'hasil-ujian.csv').catch((error: any) => toast.error(error.message || 'Hasil ujian tidak dapat diunduh.'))}
+                        title="Unduh seluruh hasil jawaban dalam CSV"
+                      >
+                        <Download className="h-3.5 w-3.5" /> CSV
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void downloadFile(`/ujian/${r.id}/export?format=xlsx`, token, 'hasil-ujian.xlsx').catch((error: any) => toast.error(error.message || 'Hasil ujian tidak dapat diunduh.'))}
+                        title="Unduh seluruh hasil jawaban dalam Excel"
+                      >
+                        <Download className="h-3.5 w-3.5" /> XLSX
+                      </Button>
                       {Boolean(r.aksesKode) && (
                         <Button
                           size="sm"
@@ -463,11 +495,22 @@ function PilihSoalDialog({
 }) {
   const [bank, setBank] = useState<Row[]>([])
   const [attached, setAttached] = useState<Row[]>([])
+  const [sections, setSections] = useState<Row[]>([])
+  const [newSectionName, setNewSectionName] = useState('')
+  const [newSectionDescription, setNewSectionDescription] = useState('')
+  const [targetSectionID, setTargetSectionID] = useState('')
   const [bobotMap, setBobotMap] = useState<Record<string, string>>({})
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
+  const [savingBranchID, setSavingBranchID] = useState('')
 
   const load = () => {
     void request('/bank-soal', token).then((r: Row[]) => setBank(r || [])).catch(() => setBank([]))
     void request('/ujian/' + ujian.id + '/soal', token).then((r: Row[]) => setAttached(r || [])).catch(() => setAttached([]))
+    void request('/ujian/' + ujian.id + '/bagian', token).then((r: Row[]) => {
+      const list = r || []
+      setSections(list)
+      setTargetSectionID((current) => list.some((section) => String(section.id) === current) ? current : String(list[0]?.id || ''))
+    }).catch(() => setSections([]))
   }
 
   useEffect(() => {
@@ -475,6 +518,60 @@ function PilihSoalDialog({
   }, [ujian.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const attachedBySoal = new Map(attached.map((a) => [String(a.soalId), a]))
+  const sectionOrder = new Map(sections.map((section, index) => [String(section.id), index]))
+  const orderedAttached = [...attached].sort((left, right) => {
+    const leftSection = String(left.bagianId || '')
+    const rightSection = String(right.bagianId || '')
+    const leftRank = sectionOrder.get(leftSection) ?? sections.length
+    const rightRank = sectionOrder.get(rightSection) ?? sections.length
+    if (leftRank !== rightRank) return leftRank - rightRank
+    return Number(left.urutan || 0) - Number(right.urutan || 0)
+  })
+
+  async function persistSections(next: Row[]) {
+    const previous = sections
+    setSections(next)
+    try {
+      const saved = await request('/ujian/' + ujian.id + '/bagian', token, 'PUT', {
+        bagian: next.map((item, index) => ({ id: String(item.id || ''), nama: String(item.nama || ''), deskripsi: String(item.deskripsi || ''), urutan: index + 1 })),
+      }) as Row[]
+      setSections(saved || [])
+      setTargetSectionID((current) => current || String(saved?.[0]?.id || ''))
+      const validIDs = new Set((saved || []).map((section) => String(section.id)))
+      setAttached((current) => current.map((item) => validIDs.has(String(item.bagianId || '')) ? item : { ...item, bagianId: '' }))
+    } catch (err: any) {
+      setSections(previous)
+      toast.error(err.message || 'Bagian belum dapat disimpan.')
+      throw err
+    }
+  }
+
+  async function addSection() {
+    const name = newSectionName.trim()
+    if (!name) {
+      toast.error('Isi nama bagian terlebih dahulu.')
+      return
+    }
+    const id = globalThis.crypto?.randomUUID?.() || `section-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const next = [...sections, { id, nama: name, deskripsi: newSectionDescription.trim(), urutan: sections.length + 1 }]
+    await persistSections(next)
+    setNewSectionName('')
+    setNewSectionDescription('')
+    setTargetSectionID(id)
+    toast.success('Bagian ditambahkan.')
+  }
+
+  async function changeQuestionSection(item: Row, sectionID: string) {
+    try {
+      await request('/ujian/' + ujian.id + '/soal', token, 'POST', {
+        soalId: String(item.soalId), bobot: Number(item.bobot) || 0, bagianId: sectionID,
+      })
+      setAttached((current) => current.map((row) => row.id === item.id ? { ...row, bagianId: sectionID } : row))
+    } catch (err: any) {
+      toast.error(err.message || 'Bagian soal belum dapat disimpan.')
+      load()
+    }
+  }
 
   function bobotOf(soalId: string, fallback: number): string {
     if (bobotMap[soalId] !== undefined) return bobotMap[soalId]
@@ -493,6 +590,7 @@ function PilihSoalDialog({
         await request('/ujian/' + ujian.id + '/soal', token, 'POST', {
           soalId: sid,
           bobot: Number(bobotOf(sid, Number(soal.poin) || 1)) || 0,
+          bagianId: targetSectionID,
         })
       }
       load()
@@ -518,6 +616,46 @@ function PilihSoalDialog({
     }
   }
 
+  async function saveBranchRoute(item: Row, choiceID: string, target: string) {
+    const previous = (item.branchToByAnswer && typeof item.branchToByAnswer === 'object' ? item.branchToByAnswer : {}) as Record<string, string>
+    const next = { ...previous }
+    if (target) next[choiceID] = target
+    else delete next[choiceID]
+    setSavingBranchID(item.id)
+    try {
+      await request(`/ujian/${ujian.id}/soal/${item.id}/branch`, token, 'PUT', { branchToByAnswer: next })
+      setAttached((current) => current.map((row) => row.id === item.id ? { ...row, branchToByAnswer: next } : row))
+      toast.success('Alur berdasarkan jawaban tersimpan.')
+    } catch (err: any) {
+      toast.error(err.message || 'Alur jawaban belum dapat disimpan.')
+      load()
+    } finally {
+      setSavingBranchID('')
+    }
+  }
+
+  async function saveOrder(next: Row[]) {
+    const previous = attached
+    setAttached(next)
+    try {
+      await request(`/ujian/${ujian.id}/soal/urutan`, token, 'PUT', { urutanIds: next.map((row) => row.id) })
+      setAttached(next.map((row, index) => ({ ...row, urutan: index + 1 })))
+    } catch (err: any) {
+      setAttached(previous)
+      toast.error(err.message || 'Urutan soal belum dapat disimpan.')
+      load()
+    }
+  }
+
+  function moveAttached(from: number, to: number) {
+    if (to < 0 || to >= orderedAttached.length || from === to) return
+    if (String(orderedAttached[from]?.bagianId || '') !== String(orderedAttached[to]?.bagianId || '')) return
+    const next = [...orderedAttached]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    void saveOrder(next)
+  }
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-3xl">
@@ -525,6 +663,32 @@ function PilihSoalDialog({
           <DialogTitle>Pilih Soal — {String(ujian.judul || '')}</DialogTitle>
           <DialogDescription>Centang soal dari bank untuk dimasukkan ke ujian. Atur bobot per soal.</DialogDescription>
         </DialogHeader>
+        <section aria-label="Bagian ujian" className="space-y-3 rounded-xl border bg-muted/20 p-3">
+          <div><h3 className="text-sm font-semibold">Bagian ujian</h3><p className="text-xs text-muted-foreground">Kelompokkan pertanyaan agar siswa lebih mudah memahami dan mengerjakan ujian. Soal acak tetap berada di bagiannya.</p></div>
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <Input aria-label="Nama bagian baru" placeholder="Contoh: Literasi Membaca" value={newSectionName} onChange={(event) => setNewSectionName(event.target.value)} disabled={readOnly} />
+            <Input aria-label="Petunjuk bagian baru" placeholder="Petunjuk singkat (opsional)" value={newSectionDescription} onChange={(event) => setNewSectionDescription(event.target.value)} disabled={readOnly} />
+            <Button type="button" variant="outline" onClick={() => void addSection()} disabled={readOnly || !newSectionName.trim()}><Plus className="mr-1 h-4 w-4" />Tambah bagian</Button>
+          </div>
+          {sections.map((section, index) => <div key={section.id} className="grid items-center gap-2 rounded-lg border bg-background p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <Input aria-label={`Nama bagian ${index + 1}`} value={String(section.nama || '')} disabled={readOnly} onChange={(event) => setSections((current) => current.map((row) => row.id === section.id ? { ...row, nama: event.target.value } : row))} onBlur={() => { if (!readOnly) void persistSections(sections) }} />
+            <Input aria-label={`Petunjuk bagian ${index + 1}`} value={String(section.deskripsi || '')} placeholder="Petunjuk siswa (opsional)" disabled={readOnly} onChange={(event) => setSections((current) => current.map((row) => row.id === section.id ? { ...row, deskripsi: event.target.value } : row))} onBlur={() => { if (!readOnly) void persistSections(sections) }} />
+            <div className="flex gap-1">
+              <Button type="button" size="icon" variant="outline" className="h-11 w-11" disabled={readOnly || index === 0} onClick={() => { const next = [...sections]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; void persistSections(next) }} aria-label={`Naikkan bagian ${index + 1}`}><ArrowUp className="h-4 w-4" /></Button>
+              <Button type="button" size="icon" variant="outline" className="h-11 w-11" disabled={readOnly || index === sections.length - 1} onClick={() => { const next = [...sections]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; void persistSections(next) }} aria-label={`Turunkan bagian ${index + 1}`}><ArrowDown className="h-4 w-4" /></Button>
+              <Button type="button" size="icon" variant="outline" className="h-11 w-11" disabled={readOnly} onClick={() => void persistSections(sections.filter((row) => row.id !== section.id))} aria-label={`Hapus bagian ${index + 1}`}><Trash2 className="h-4 w-4" /></Button>
+            </div>
+          </div>)}
+          {!!sections.length && <div className="max-w-xs"><Label htmlFor="exam-default-section">Bagian untuk soal baru</Label><Select id="exam-default-section" value={targetSectionID} onChange={(event) => setTargetSectionID(event.target.value)} disabled={readOnly}><option value="">Tanpa bagian</option>{sections.map((section) => <option key={section.id} value={section.id}>{String(section.nama)}</option>)}</Select></div>}
+        </section>
+        <section aria-label="Urutan soal ujian" className="space-y-2 rounded-xl border bg-muted/20 p-3">
+          <div><h3 className="text-sm font-semibold">Urutan soal ({attached.length})</h3><p className="text-xs text-muted-foreground">Seret kartu atau gunakan tombol panah untuk menyusun urutan. Pengaturan acak akan mengikuti susunan dasar ini.</p></div>
+          {!attached.length && <p className="text-xs text-muted-foreground">Pilih soal dari bank di bawah untuk mulai menyusun ujian.</p>}
+          {orderedAttached.map((item, index) => <div key={item.id} className="space-y-2"><div draggable={!readOnly} onDragStart={(event) => { if (readOnly) return; setDraggedIndex(index); event.dataTransfer.setData('application/x-pkbm-ujian-soal-index', String(index)); event.dataTransfer.effectAllowed = 'move' }} onDragOver={(event) => { if (!readOnly) event.preventDefault() }} onDrop={(event) => { if (readOnly || !event.dataTransfer.types.includes('application/x-pkbm-ujian-soal-index')) return; event.preventDefault(); const source = Number(event.dataTransfer.getData('application/x-pkbm-ujian-soal-index')); if (Number.isInteger(source)) moveAttached(source, index); setDraggedIndex(null) }} className={`flex min-h-11 items-center gap-2 rounded-lg border bg-background p-2 ${readOnly ? '' : 'cursor-grab'} ${draggedIndex === index ? 'opacity-50' : ''}`}>
+            <span className="text-muted-foreground" aria-hidden="true"><GripVertical className="h-4 w-4" /></span><span className="w-6 text-center text-xs font-bold">{index + 1}</span><span className="min-w-0 flex-1 truncate text-sm">{String((item.soal as Record<string, unknown> | undefined)?.pertanyaan || 'Soal')}</span><Badge variant="outline" className="max-w-32 truncate">{String(sections.find((section) => String(section.id) === String(item.bagianId || ''))?.nama || 'Tanpa bagian')}</Badge><div className="flex gap-1"><Button type="button" size="icon" variant="outline" className="h-10 w-10" disabled={readOnly || index === 0 || String(orderedAttached[index - 1]?.bagianId || '') !== String(item.bagianId || '')} onClick={() => moveAttached(index, index - 1)} aria-label={`Naikkan soal ${index + 1}`}><ArrowUp className="h-4 w-4" /></Button><Button type="button" size="icon" variant="outline" className="h-10 w-10" disabled={readOnly || index === orderedAttached.length - 1 || String(orderedAttached[index + 1]?.bagianId || '') !== String(item.bagianId || '')} onClick={() => moveAttached(index, index + 1)} aria-label={`Turunkan soal ${index + 1}`}><ArrowDown className="h-4 w-4" /></Button></div>
+            {sections.length > 0 && <Select aria-label={`Bagian soal ${index + 1}`} className="max-w-48" value={String(item.bagianId || '')} disabled={readOnly} onChange={(event) => void changeQuestionSection(item, event.target.value)}><option value="">Tanpa bagian</option>{sections.map((section) => <option key={section.id} value={section.id}>{String(section.nama)}</option>)}</Select>}
+          </div><UjianBranchEditor item={item} sections={sections} attached={attached} readOnly={readOnly} saving={savingBranchID === item.id} onSave={(choiceID, target) => void saveBranchRoute(item, choiceID, target)} /></div>)}
+        </section>
         <div className="max-h-[55vh] overflow-y-auto">
           <Table>
             <TableHeader>
@@ -581,4 +745,40 @@ function PilihSoalDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function UjianBranchEditor({ item, sections, attached, readOnly, saving, onSave }: {
+  item: Row
+  sections: Row[]
+  attached: Row[]
+  readOnly: boolean
+  saving: boolean
+  onSave: (choiceID: string, target: string) => void
+}) {
+  const question = item.soal as Row | undefined
+  const type = String(question?.tipe || '')
+  const choices = visualChoices(question)
+  const sectionID = String(item.bagianId || '')
+  const sourcePosition = sections.findIndex((section) => String(section.id) === sectionID)
+  if (!['pg_tunggal', 'dropdown'].includes(type) || !choices.length || sourcePosition < 0) return null
+  const routes = (item.branchToByAnswer && typeof item.branchToByAnswer === 'object' ? item.branchToByAnswer : {}) as Record<string, string>
+  const targetSections = sections.filter((section, index) => index > sourcePosition && attached.some((row) => String(row.bagianId || '') === String(section.id)))
+  return <details className="rounded-lg border bg-background px-3 py-2">
+    <summary className="min-h-10 cursor-pointer py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">Alur berdasarkan jawaban <span className="font-normal text-muted-foreground">(opsional)</span></summary>
+    <p className="pb-2 text-xs text-muted-foreground">Pilih bagian lanjutan untuk setiap jawaban. Jawaban tanpa aturan mengikuti urutan normal. Rute hanya dapat menuju bagian setelahnya agar siswa tidak terjebak dalam putaran.</p>
+    <div className="space-y-2 pb-2">{choices.map((choice, index) => {
+      const choiceID = String(choice.id)
+      const label = String(choice.text || `Pilihan ${index + 1}`)
+      return <label key={choiceID} className="grid gap-1 text-xs sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)] sm:items-center">
+        <span className="line-clamp-2">{label}</span>
+        <Select aria-label={`Arah untuk jawaban ${label}`} value={routes[choiceID] || ''} disabled={readOnly || saving} onChange={(event) => onSave(choiceID, event.target.value)}>
+          <option value="">Lanjut urutan berikutnya</option>
+          {targetSections.map((section) => <option key={section.id} value={String(section.id)}>Lanjut ke: {String(section.nama || 'Bagian')}</option>)}
+          <option value="__selesai__">Akhiri ujian</option>
+        </Select>
+      </label>
+    })}</div>
+    {saving && <p className="pb-2 text-xs text-primary" role="status">Menyimpan alur…</p>}
+    {!readOnly && !targetSections.length && <p className="pb-2 text-xs text-amber-700">Tambahkan soal ke bagian berikutnya untuk membuat tujuan lompatan.</p>}
+  </details>
 }

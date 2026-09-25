@@ -12,6 +12,16 @@ async function login(page: import('@playwright/test').Page, username: string, pa
   await page.getByRole('button', { name: 'Masuk', exact: true }).click()
 }
 
+async function expectVisibleControlsNamed(page: import('@playwright/test').Page) {
+  const roleNames = ['button', 'link', 'textbox', 'combobox', 'checkbox', 'radio'] as const
+  for (const role of roleNames) {
+    const controls = await page.getByRole(role).all()
+    for (const control of controls) {
+      if (await control.isVisible()) await expect(control, `${role} harus memiliki nama aksesibel`).toHaveAccessibleName(/\S+/)
+    }
+  }
+}
+
 test('staf dapat memperbesar teks dan tetap tidak overflow di mobile', async ({ page }) => {
   test.skip(!teacher || !teacherPassword, 'Set E2E_ACCESSIBILITY_TEACHER dan password untuk menjalankan audit aksesibilitas staf.')
   await page.setViewportSize({ width: 375, height: 812 })
@@ -31,4 +41,18 @@ test('siswa memiliki kontrol tampilan yang dapat dioperasikan keyboard', async (
   await control.focus()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('button', { name: 'Kontras tinggi' })).toBeVisible()
+})
+
+test('kontrol editor soal tutor memiliki nama yang terbaca teknologi bantu', async ({ page }) => {
+  test.skip(!teacher || !teacherPassword, 'Set E2E_ACCESSIBILITY_TEACHER dan password untuk menjalankan audit aksesibilitas staf.')
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await login(page, teacher!, teacherPassword!)
+  const workspace = page.getByRole('navigation', { name: 'Menu aplikasi' }).getByRole('button', { name: 'Simulasi & Bank Soal', exact: true })
+  await expect(workspace).toBeVisible()
+  await workspace.click()
+  await page.getByRole('tab', { name: 'Soal' }).click()
+  await page.getByRole('button', { name: 'Buat soal' }).click()
+  await expect(page.getByRole('textbox', { name: 'Tulis pertanyaan untuk siswa', exact: true })).toBeVisible()
+
+  await expectVisibleControlsNamed(page)
 })
