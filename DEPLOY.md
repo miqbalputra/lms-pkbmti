@@ -101,6 +101,29 @@ Panduan lengkap konfigurasi, endpoint, pengujian, dan restore tersedia di [BACKU
 2. Add your domain (e.g., `lms.example.com`)
 3. Enable SSL (Let's Encrypt or your own certificate)
 
+## CBT mandiri dan cutover asesmen
+
+CBT dipasang sebagai aplikasi dan PostgreSQL **terpisah** dari LMS, dari
+repository `https://github.com/miqbalputra/lms-pkbmti-ujian.git`. Jangan
+menggunakan database, volume unggahan, atau credential database LMS pada
+stack CBT.
+
+1. Deploy repo CBT terlebih dahulu dengan domain `cbt.pkbmtunasilmu.web.id`,
+   PostgreSQL sendiri, volume unggahan, dan backup harian.
+2. Buat satu secret HMAC acak minimal 32 karakter. Isi nilai dan key ID yang
+   sama di LMS (`CBT_INTEGRATION_*`) dan CBT (`LMS_INTEGRATION_*`).
+3. Jalankan sinkronisasi master serta import salin-data dari panel CBT. Cocokkan
+   jumlah data, snapshot, nilai, relasi siswa-kelas, dan berkas. Sumber LMS
+   tidak dihapus atau ditulis ulang oleh proses ini.
+4. Setelah backup kedua database dan verifikasi selesai, isi
+   `CBT_PUBLIC_URL=https://cbt.pkbmtunasilmu.web.id` pada LMS lalu redeploy.
+   Sebelum variabel itu diisi, seluruh rute asesmen LMS tetap bekerja seperti
+   semula; sesudahnya `/ujian`, `/simulasi`, `/bank-soal`, `/ujian-online`, dan
+   `/ujian-monitor` mengarahkan pengguna ke CBT.
+
+Jangan mengaktifkan `CBT_PUBLIC_URL` jika probe HMAC, import, atau pemulihan
+percobaan lama belum lulus. Data presensi dan modul LMS lain tidak disentuh.
+
 ## 6. Deploy
 
 1. Click **Deploy** in Coolify

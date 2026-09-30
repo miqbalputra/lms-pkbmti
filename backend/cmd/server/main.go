@@ -1388,8 +1388,27 @@ func main() {
 	// Register these before the production SPA fallback so they do not render the
 	// administrator login page instead.
 	app.Get("/ujian", s.serveUjianCBTApp)
+	// Assessment workspaces migrate to the standalone CBT only after operators
+	// configure CBT_PUBLIC_URL. Until then c.Next() reaches the existing SPA,
+	// so historic data and links retain their current behavior.
+	for _, legacyPath := range []string{"/simulasi", "/bank-soal", "/bank-soal-ujian", "/ujian-online", "/ujian-monitor"} {
+		path := legacyPath
+		app.Get(path, func(c *fiber.Ctx) error {
+			if target := strings.TrimRight(strings.TrimSpace(os.Getenv("CBT_PUBLIC_URL")), "/"); target != "" {
+				return c.Redirect(target+path, fiber.StatusTemporaryRedirect)
+			}
+			return c.Next()
+		})
+	}
 	app.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api := app.Group("/api")
+	// Private server-to-server bridge for the standalone CBT deployment. This is
+	// registered before browser-auth routes and authenticates every request with
+	// an HMAC timestamp + one-time nonce; it never accepts LMS user JWTs.
+	cbtIntegration := api.Group("/integrations/cbt/v1", s.cbtIntegrationAuth)
+	cbtIntegration.Get("/master", s.cbtMasterFeed)
+	cbtIntegration.Get("/migration/export", s.cbtMigrationExport)
+	cbtIntegration.Post("/results", s.cbtResultReceiver)
 	// A public school network can put an entire class behind one IP address.
 	// Keep a generous per-IP ceiling for bursts, while applying the meaningful
 	// brute-force budget to the normalized account identifier below. Failed
@@ -1823,7 +1842,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianBagian{}, &AsesmenKolaborator{}, &UjianPeserta{}, &UjianPesertaSoal{}, &UjianJawaban{}, &UjianJawabanRevisi{}, &UjianJawabanBerkas{}, &UjianJawabanPemulihan{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiBagian{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiAksesToken{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &SimulasiJawabanRevisi{}, &SimulasiJawabanFile{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianBagian{}, &AsesmenKolaborator{}, &UjianPeserta{}, &UjianPesertaSoal{}, &UjianJawaban{}, &UjianJawabanRevisi{}, &UjianJawabanBerkas{}, &UjianJawabanPemulihan{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiBagian{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiAksesToken{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &SimulasiJawabanRevisi{}, &SimulasiJawabanFile{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}, &CBTIntegrationNonce{}, &CBTIntegrationEvent{}, &CBTExternalAssessment{}, &CBTExternalAttempt{}, &CBTExternalAnswer{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {

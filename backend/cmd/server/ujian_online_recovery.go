@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"time"
 
@@ -13,6 +14,12 @@ import (
 )
 
 func (s *Server) serveUjianCBTApp(c *fiber.Ctx) error {
+	// Cutover is explicitly configuration-gated. Leaving CBT_PUBLIC_URL empty
+	// preserves the current local/legacy route; production is redirected only
+	// after the independent CBT stack, migration, and verification are ready.
+	if target := strings.TrimRight(strings.TrimSpace(os.Getenv("CBT_PUBLIC_URL")), "/"); target != "" {
+		return c.Redirect(target+"/ujian", fiber.StatusTemporaryRedirect)
+	}
 	// Production serves the built React app here. Keep the old embedded page as
 	// a safe fallback for local backend-only runs and older deployment bundles.
 	if err := c.SendFile("./public/index.html"); err == nil {
