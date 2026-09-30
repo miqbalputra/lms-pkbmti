@@ -200,6 +200,8 @@ func (s *Server) routes(api fiber.Router) {
 	api.Get("/ujian/:id/export", s.exportUjianResults)
 	api.Get("/ujian-online/monitor/:ujianId", s.monitorUjianOnline)
 	api.Get("/ujian-online/monitor/:ujianId/attempt/:attemptId", s.getUjianAttemptReview)
+	api.Get("/ujian-online/monitor/:ujianId/recoveries", s.listUjianOnlineRecoveries)
+	api.Put("/ujian-online/recoveries/:recoveryId/review", s.reviewUjianOnlineRecovery)
 	api.Get("/ujian-online/monitor/:ujianId/attempt/:attemptId/file/:fileId", s.ujianOnlineStaffDownloadAnswerFile)
 	api.Post("/ujian-online/monitor/:ujianId/attempt/:attemptId/answer/:answerId/grade", s.gradeUjianOnlineAnswer)
 

@@ -719,6 +719,7 @@ type UjianPesertaSoal struct {
 	DeskripsiBagian string  `gorm:"type:text" json:"deskripsiBagian,omitempty"`
 	UrutanBagian    int     `json:"urutanBagian,omitempty"`
 	Bobot           float64 `gorm:"type:decimal(8,2)" json:"bobot"`
+	Ditandai        bool    `gorm:"not null;default:false" json:"ditandai"`
 	SnapshotJSON    string  `gorm:"type:text;not null" json:"-"`
 }
 
@@ -734,7 +735,25 @@ type UjianJawaban struct {
 	KomentarGuru      string     `gorm:"type:text" json:"-"`
 	DinilaiOlehUserID *string    `gorm:"index" json:"-"`
 	DinilaiPada       *time.Time `json:"-"`
+	Revision          int        `gorm:"not null;default:0" json:"revision"`
+	LastRequestID     string     `gorm:"size:64" json:"-"`
 	Soal              BankSoal   `gorm:"foreignKey:SoalID" json:"soal"`
+}
+
+// UjianJawabanPemulihan stores responses that could not reach the server
+// before the deadline. It is separate from UjianJawaban: teacher review is
+// required before any late response can affect a grade.
+type UjianJawabanPemulihan struct {
+	Base
+	UjianID          string     `gorm:"index;not null" json:"ujianId"`
+	UjianPesertaID   string     `gorm:"uniqueIndex:ujian_pemulihan_attempt;not null" json:"ujianPesertaId"`
+	PesertaDidikID   string     `gorm:"index;not null" json:"pesertaDidikId"`
+	IdempotencyKey   string     `gorm:"size:64;uniqueIndex:ujian_pemulihan_idempotency,priority:1;not null" json:"-"`
+	JawabanJSON      string     `gorm:"type:text;not null" json:"-"`
+	Status           string     `gorm:"size:24;not null;default:menunggu" json:"status"`
+	DitinjauOlehID   *string    `gorm:"index" json:"ditinjauOlehId,omitempty"`
+	DitinjauPada     *time.Time `json:"ditinjauPada,omitempty"`
+	KomentarPeninjau string     `gorm:"type:text" json:"komentarPeninjau,omitempty"`
 }
 
 // UjianJawabanRevisi keeps an immutable, key-free audit trail when a teacher
@@ -1368,7 +1387,7 @@ func main() {
 	// Short public entry points. The page still calls its JSON endpoints under /api.
 	// Register these before the production SPA fallback so they do not render the
 	// administrator login page instead.
-	app.Get("/ujian", s.serveUjianOnlinePage)
+	app.Get("/ujian", s.serveUjianCBTApp)
 	app.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api := app.Group("/api")
 	// A public school network can put an entire class behind one IP address.
@@ -1453,7 +1472,8 @@ func main() {
 	// Public Ujian Online API — no auth. Halaman siswa sendiri tersedia pada
 	// /ujian (di luar prefix /api); jangan daftarkan halaman HTML di /api/ujian
 	// karena endpoint itu dipakai dashboard untuk daftar ujian terproteksi.
-	api.Get("/ujian-online/page", s.serveUjianOnlinePage) // backward compat redirect
+	api.Get("/ujian-online/page", s.serveUjianOnlinePage) // legacy page remains available for older deployments
+	api.Get("/ujian-online/public-config", s.ujianOnlinePublicConfig)
 	publicExamLoginMax := 60
 	publicParentLoginMax := 30
 	if cfg.Env == "production" {
@@ -1469,6 +1489,8 @@ func main() {
 	api.Post("/ujian-online/logout", s.logoutUjianOnline)
 	api.Post("/ujian-online/:ujianId/mulai", s.mulaiUjianOnline)
 	api.Get("/ujian-online/:ujianId/soal", s.getSoalUjianOnline)
+	api.Post("/ujian-online/:ujianId/tandai", s.tandaiSoalUjianOnline)
+	api.Post("/ujian-online/:ujianId/pemulihan", s.submitUjianOnlineRecovery)
 	api.Post("/ujian-online/:ujianId/soal/:ujianSoalId/file", s.ujianOnlineUploadAnswerFile)
 	api.Delete("/ujian-online/:ujianId/soal/:ujianSoalId/file/:fileId", s.ujianOnlineDeleteAnswerFile)
 	api.Get("/ujian-online/:ujianId/soal/:ujianSoalId/file/:fileId", s.ujianOnlineDownloadAnswerFile)
@@ -1801,7 +1823,7 @@ func (s *Server) migrate() error {
 // does NOT seed comprehensive dummy data — used by e2e tests so their own
 // fixtures are the sole source of data.
 func (s *Server) migrateSchema() error {
-	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianBagian{}, &AsesmenKolaborator{}, &UjianPeserta{}, &UjianPesertaSoal{}, &UjianJawaban{}, &UjianJawabanRevisi{}, &UjianJawabanBerkas{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiBagian{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiAksesToken{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &SimulasiJawabanRevisi{}, &SimulasiJawabanFile{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
+	if e := s.db.AutoMigrate(&User{}, &RefreshToken{}, &AuditLog{}, &R2BackupJob{}, &operationAlertState{}, &Tutor{}, &DokumenSistem{}, &SuratSiswa{}, &SuratSiswaFile{}, &OrangTua{}, &Pokjar{}, &TahunAjaran{}, &Semester{}, &Kelas{}, &RiwayatWaliKelas{}, &MataPelajaran{}, &KelasMapel{}, &PenugasanGuruMapel{}, &PesertaDidik{}, &RiwayatKelasPesertaDidik{}, &PengaturanJadwal{}, &Presensi{}, &PresensiDetail{}, &Tema{}, &CapaianPembelajaran{}, &NilaiCP{}, &NilaiUM{}, &PengaturanBobotNilai{}, &AmbangPredikat{}, &RekapNilaiAkhir{}, &Buku{}, &BukuKelas{}, &Peminjaman{}, &Pengembalian{}, &Pengumuman{}, &JurnalBatch{}, &JurnalMengajar{}, &PortofolioBelajar{}, &TindakLanjutBelajar{}, &Tugas{}, &PengumpulanTugas{}, &Materi{}, &KomentarMateri{}, &RPP{}, &KelasVirtual{}, &BankSoal{}, &Ujian{}, &UjianSoal{}, &UjianBagian{}, &AsesmenKolaborator{}, &UjianPeserta{}, &UjianPesertaSoal{}, &UjianJawaban{}, &UjianJawabanRevisi{}, &UjianJawabanBerkas{}, &UjianJawabanPemulihan{}, &SimulasiSoal{}, &SimulasiBahan{}, &SimulasiStimulus{}, &SimulasiPaket{}, &SimulasiBagian{}, &SimulasiPaketSoal{}, &SimulasiPenugasan{}, &SimulasiAksesToken{}, &SimulasiUpaya{}, &SimulasiUpayaSoal{}, &SimulasiJawaban{}, &SimulasiJawabanRevisi{}, &SimulasiJawabanFile{}, &Notifikasi{}, &KalenderEvent{}, &Program{}, &Fase{}, &Sertifikat{}, &CatatanPerilaku{}, &CatatanRapor{}, &SumberNilai{}, &BobotSumberNilai{}, &ModulBelajar{}, &CapaianModul{}, &CapaianKompetensi{}, &NilaiKompetensi{}, &RombelKompetensi{}, &ImportLog{}, &ChatMessage{}); e != nil {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {

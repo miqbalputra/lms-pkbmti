@@ -7,6 +7,7 @@ import { Card } from '../components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { QuestionAnswerControl, StimulusContent, type FontScale } from '../components/simulasi/QuestionAnswerControl'
 import { apiBase, request } from '../lib/api'
+import { enqueueStudentChange, listStudentChanges, removeStudentChange, type StudentAnswerChange } from '../lib/draftQueue'
 
 type Row = Record<string, any> & { id: string }
 function parse(value: any, fallback: any) { try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback } catch { return fallback } }
@@ -33,7 +34,7 @@ function answered(question: Row, value: any) {
   if (Array.isArray(value)) return value.length > 0
   return typeof value === 'object' ? Object.keys(value).length > 0 : true
 }
-function scalePx(scale: FontScale) { return scale === 'small' ? 15 : scale === 'large' ? 20 : 17 }
+function scalePx(scale: FontScale) { return scale === 'small' ? 15 : scale === 'large' ? 22 : 18 }
 function newIdempotencyKey() { return globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => { const value = Math.floor(Math.random() * 16); return (char === 'x' ? value : (value & 0x3) | 0x8).toString(16) }) }
 function persistedIdempotencyKey(storageKey: string) {
   try {
@@ -140,6 +141,11 @@ export function SimulasiSiswaView({ token, onLogout }: { token: string; onLogout
       try { saved = parse(sessionStorage.getItem(`simulasi-pending:${id}`), {}) } catch { /* storage optional */ }
       for (const item of Array.isArray(saved.answers) ? saved.answers : []) if (item?.id && item.pending && Object.prototype.hasOwnProperty.call(item.pending, 'value')) pendingAnswersRef.current.set(item.id, item.pending)
       for (const item of Array.isArray(saved.flags) ? saved.flags : []) if (item?.id && item.pending && typeof item.pending.value === 'boolean') pendingFlagsRef.current.set(item.id, item.pending)
+      const offlineEntries = await listStudentChanges(id).catch(() => [])
+      for (const entry of offlineEntries.filter((item) => item.key.startsWith('simulasi:'))) {
+        if (entry.kind === 'answer') pendingAnswersRef.current.set(entry.questionId, { value: entry.value, sequence: ++answerSequenceRef.current, idempotencyKey: entry.requestId })
+        if (entry.kind === 'flag' && typeof entry.value === 'boolean') pendingFlagsRef.current.set(entry.questionId, { value: entry.value, sequence: ++answerSequenceRef.current })
+      }
       answerSequenceRef.current = Number(saved.sequence) || 0
       setWorkspace(data); setInstruction(null); setResult(null); setIndex(0); setRemaining(Number(data.sisaDetik || 0)); setSaveState('Autosave aktif')
       const initialAnswers: Record<string, any> = {}; const initialFlags: Record<string, boolean> = {}
@@ -152,6 +158,25 @@ export function SimulasiSiswaView({ token, onLogout }: { token: string; onLogout
   }
   function persistPending(attemptId = activeAttemptRef.current) {
     if (!attemptId) return
+    const packetId = String(workspace?.paket?.id || 'simulasi')
+    const desired: StudentAnswerChange[] = []
+    for (const [questionId, pending] of pendingAnswersRef.current) {
+      const requestId = pending.idempotencyKey || newIdempotencyKey()
+      pending.idempotencyKey = requestId
+      desired.push({ key: `simulasi:${attemptId}:answer:${questionId}`, attemptId, examId: packetId, questionId, kind: 'answer', value: pending.value, revision: 0, requestId, queuedAt: Date.now() })
+    }
+    for (const [questionId, pending] of pendingFlagsRef.current) {
+      const requestId = newIdempotencyKey()
+      desired.push({ key: `simulasi:${attemptId}:flag:${questionId}`, attemptId, examId: packetId, questionId, kind: 'flag', value: pending.value, revision: 0, requestId, queuedAt: Date.now() })
+    }
+    void (async () => {
+      try {
+        const existing = (await listStudentChanges(attemptId)).filter((item) => item.key.startsWith('simulasi:'))
+        const desiredKeys = new Set(desired.map((item) => item.key))
+        for (const item of existing) if (!desiredKeys.has(item.key)) await removeStudentChange(item.key)
+        for (const item of desired) await enqueueStudentChange(item)
+      } catch { /* session storage fallback and server autosave remain available */ }
+    })()
     try {
       sessionStorage.setItem(`simulasi-pending:${attemptId}`, JSON.stringify({
         sequence: answerSequenceRef.current,

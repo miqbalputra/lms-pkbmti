@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.tsx'
 import { ThemeProvider } from './context/ThemeContext.tsx'
 import { AccessibilityProvider } from './context/AccessibilityContext.tsx'
+import UjianCBTView from './pages/UjianCBTView.tsx'
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -18,7 +19,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AccessibilityProvider>
       <ThemeProvider>
-        <App />
+        {window.location.pathname === '/ujian' ? <UjianCBTView /> : <App />}
       </ThemeProvider>
     </AccessibilityProvider>
   </StrictMode>,

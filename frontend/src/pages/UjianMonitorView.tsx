@@ -30,6 +30,25 @@ type AttemptReview = {
   attempt: { id: string; status: string; skor: number | null; pesertaDidik: { nama: string; nis: string } }
   soal: ReviewQuestion[]
 }
+type RecoveryReview = {
+  id: string
+  ujianPesertaId: string
+  pesertaDidikId: string
+  namaPeserta: string
+  status: 'menunggu' | 'diterima' | 'ditolak'
+  dibuatPada: string
+  komentarPeninjau?: string
+  jawaban: Array<{ ujianSoalId: string; urutan: number; pertanyaan: string; jawaban: string }>
+}
+
+function formatRecoveryAnswer(value: string) {
+  try {
+    const parsed = JSON.parse(value)
+    if (Array.isArray(parsed)) return parsed.map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join(' · ') || 'Tidak dijawab'
+    if (parsed && typeof parsed === 'object') return Object.entries(parsed).map(([key, answer]) => `${key}: ${String(answer)}`).join(' · ') || 'Tidak dijawab'
+    return parsed == null ? 'Tidak dijawab' : String(parsed)
+  } catch { return value || 'Tidak dijawab' }
+}
 
 function formatQuestionKey(question: ReviewQuestion): string {
   if (question.kunci) return question.kunci
@@ -55,6 +74,10 @@ export function UjianMonitorView({
   const [reviewLoading, setReviewLoading] = useState(false)
   const [savingAnswer, setSavingAnswer] = useState('')
   const [manualDrafts, setManualDrafts] = useState<Record<string, { nilai: string; komentar: string }>>({})
+  const [recoveries, setRecoveries] = useState<RecoveryReview[]>([])
+  const [recoveryComments, setRecoveryComments] = useState<Record<string, string>>({})
+  const [recoveryLoading, setRecoveryLoading] = useState(false)
+  const [savingRecovery, setSavingRecovery] = useState('')
 
   useEffect(() => {
     request('/ujian', token)
@@ -64,11 +87,34 @@ export function UjianMonitorView({
 
   const loadMonitor = (ujianId: string) => {
     setSelected(ujianId)
+    setReview(null)
     setLoading(true)
     request(`/ujian-online/monitor/${ujianId}`, token)
       .then((d) => setPesertas(Array.isArray(d) ? d : []))
       .catch(() => setPesertas([]))
       .finally(() => setLoading(false))
+    setRecoveryLoading(true)
+    request(`/ujian-online/monitor/${ujianId}/recoveries`, token)
+      .then((d) => setRecoveries(Array.isArray(d) ? d : []))
+      .catch(() => setRecoveries([]))
+      .finally(() => setRecoveryLoading(false))
+  }
+
+  const reviewRecovery = async (recovery: RecoveryReview, status: 'diterima' | 'ditolak') => {
+    setSavingRecovery(recovery.id)
+    try {
+      await request(`/ujian-online/recoveries/${recovery.id}/review`, token, 'PUT', {
+        status,
+        komentar: recoveryComments[recovery.id] || '',
+      })
+      toast.success(status === 'diterima' ? 'Jawaban pemulihan diterima untuk catatan guru.' : 'Jawaban pemulihan ditolak.')
+      const latest = await request(`/ujian-online/monitor/${selected}/recoveries`, token)
+      setRecoveries(Array.isArray(latest) ? latest : [])
+    } catch (error) {
+      toast.error(String((error as Error).message || 'Gagal menyimpan tinjauan jawaban pemulihan.'))
+    } finally {
+      setSavingRecovery('')
+    }
   }
 
   const exportResults = async () => {
@@ -228,6 +274,45 @@ export function UjianMonitorView({
               </TableBody>
             </Table>
           </div>
+        )}
+
+        {selected && (
+          <section className="mt-6 space-y-3 border-t border-border pt-5" aria-labelledby="recovery-review-title">
+            <div>
+              <h2 id="recovery-review-title" className="text-lg font-semibold">Jawaban lokal untuk ditinjau</h2>
+              <p className="text-sm text-muted-foreground">Jawaban ini terlambat tersinkron dan tidak mengubah nilai otomatis. Keputusan guru hanya menjadi catatan tinjauan.</p>
+            </div>
+            {recoveryLoading ? <p role="status" className="py-3 text-sm text-muted-foreground">Memuat jawaban pemulihan…</p> : recoveries.length === 0 ? <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">Tidak ada jawaban pemulihan untuk ditinjau.</p> : recoveries.map((recovery) => (
+              <article key={recovery.id} className="space-y-3 rounded-xl border border-border bg-background p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-semibold">{recovery.namaPeserta || `Siswa ${recovery.pesertaDidikId}`}</h3>
+                    <p className="text-xs text-muted-foreground">Dikirim {fmt(recovery.dibuatPada)} · Sesi {recovery.ujianPesertaId.slice(0, 8)}</p>
+                  </div>
+                  <Badge variant={recovery.status === 'menunggu' ? 'secondary' : 'default'}>{recovery.status === 'menunggu' ? 'Menunggu tinjauan' : recovery.status === 'diterima' ? 'Diterima guru' : 'Ditolak guru'}</Badge>
+                </div>
+                <div className="space-y-2">
+                  {recovery.jawaban.map((answer, index) => (
+                    <div key={`${answer.ujianSoalId}-${index}`} className="rounded-lg bg-muted/40 p-3 text-sm">
+                      <p className="font-medium">Soal {answer.urutan || index + 1}: {answer.pertanyaan || 'Isi soal tidak tersedia'}</p>
+                      <p className="mt-1 whitespace-pre-wrap text-muted-foreground">Jawaban yang diajukan: {formatRecoveryAnswer(answer.jawaban)}</p>
+                    </div>
+                  ))}
+                </div>
+                {recovery.status === 'menunggu' ? (
+                  <div className="space-y-2">
+                    <label className="block space-y-1 text-sm font-medium">Catatan tinjauan (opsional)
+                      <textarea className="min-h-20 w-full rounded-lg border border-border bg-background px-3 py-2 font-normal" maxLength={4000} value={recoveryComments[recovery.id] || ''} onChange={(event) => setRecoveryComments((current) => ({ ...current, [recovery.id]: event.target.value }))} />
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" className="min-h-11" disabled={savingRecovery === recovery.id} onClick={() => void reviewRecovery(recovery, 'diterima')}>{savingRecovery === recovery.id ? 'Menyimpan…' : 'Terima sebagai catatan'}</Button>
+                      <Button variant="outline" className="min-h-11" disabled={savingRecovery === recovery.id} onClick={() => void reviewRecovery(recovery, 'ditolak')}>Tolak kiriman</Button>
+                    </div>
+                  </div>
+                ) : recovery.komentarPeninjau ? <p className="rounded-lg bg-muted/40 p-3 text-sm">Catatan guru: {recovery.komentarPeninjau}</p> : null}
+              </article>
+            ))}
+          </section>
         )}
 
         {reviewLoading && <div className="py-6 text-sm text-muted-foreground" role="status">Memuat jawaban peserta…</div>}

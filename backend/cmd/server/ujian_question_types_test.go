@@ -382,6 +382,28 @@ func TestUjianQuestionOrderKeepsSectionsAndShufflesOnlyWithinEachSection(t *test
 	}
 }
 
+func TestUjianQuestionShuffleKeepsSharedStimulusTogether(t *testing.T) {
+	sharedStimulus := `[{"jenis":"text","konten":"Bacaan yang digunakan bersama."}]`
+	source := []UjianSoal{
+		{Base: Base{ID: "shared-1"}, Urutan: 1, Soal: BankSoal{StimulusJSON: sharedStimulus}},
+		{Base: Base{ID: "standalone"}, Urutan: 2},
+		{Base: Base{ID: "shared-2"}, Urutan: 3, Soal: BankSoal{StimulusJSON: sharedStimulus}},
+		{Base: Base{ID: "standalone-2"}, Urutan: 4},
+	}
+	first := orderUjianQuestions(append([]UjianSoal(nil), source...), nil, "stimulus-group-seed", true)
+	second := orderUjianQuestions(append([]UjianSoal(nil), source...), nil, "stimulus-group-seed", true)
+	if jsonValue(first) != jsonValue(second) {
+		t.Fatal("same attempt seed must reproduce the grouped question order")
+	}
+	positions := map[string]int{}
+	for index, question := range first {
+		positions[question.ID] = index
+	}
+	if positions["shared-2"] != positions["shared-1"]+1 {
+		t.Fatalf("questions sharing a stimulus must remain adjacent and preserve authored order: %+v", first)
+	}
+}
+
 func jsonValue(value interface{}) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)

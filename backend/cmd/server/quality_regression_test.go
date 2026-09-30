@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -265,10 +266,14 @@ func TestParentSimulationSummaryHonorsResultPolicy(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("parent simulation result failed: %d %s", res.StatusCode, body)
 	}
-	if strings.Contains(body, "91") || strings.Contains(body, "kunci") {
+	var summaries []parentSimulasiSummary
+	if err := json.Unmarshal([]byte(body), &summaries); err != nil || len(summaries) != 1 {
+		t.Fatalf("parent response is not a valid simulation summary: %s, err=%v", body, err)
+	}
+	if summaries[0].TampilkanNilai || len(summaries[0].Percobaan) != 1 || summaries[0].Percobaan[0].SkorTersedia || summaries[0].Percobaan[0].Skor != nil || strings.Contains(body, `"kunci"`) {
 		t.Fatalf("parent response leaked hidden result or internal fields: %s", body)
 	}
-	if !strings.Contains(body, `"nama":"Literasi aman"`) || !strings.Contains(body, `"status":"selesai"`) {
+	if summaries[0].Nama != "Literasi aman" || summaries[0].Percobaan[0].Status != "selesai" {
 		t.Fatalf("parent response missing safe simulation summary: %s", body)
 	}
 }

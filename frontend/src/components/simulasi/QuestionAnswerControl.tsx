@@ -5,7 +5,7 @@ import { apiBase } from '../../lib/api'
 type Question = Record<string, any> & { tipe?: string; pertanyaan?: string }
 export type FontScale = 'small' | 'medium' | 'large'
 
-function scalePx(scale: FontScale) { return scale === 'small' ? 15 : scale === 'large' ? 20 : 17 }
+function scalePx(scale: FontScale) { return scale === 'small' ? 15 : scale === 'large' ? 22 : 18 }
 function parseTable(value: string) { return value.split('\n').filter((row) => row.trim() !== '').map((row) => row.split('\t')) }
 
 export function QuestionAnswerControl({ question, questionId, value, onChange, fontScale = 'medium', onFileUpload, onFileRemove, onFileDownload, token, shareToken }: {
@@ -30,7 +30,7 @@ export function QuestionAnswerControl({ question, questionId, value, onChange, f
   useEffect(() => setActiveLeft(null), [questionId, question.tipe])
 
   if (question.tipe === 'unggah_berkas') {
-    const files: Question[] = Array.isArray(value) ? value : []
+    const files: Question[] = Array.isArray(value) ? value.map((file) => typeof file === 'string' ? { id: file, namaFile: `Berkas ${file.slice(0, 6)}` } : file) : []
     const allowed: string[] = config.allowedFileTypes || ['pdf', 'docx', 'xlsx', 'png', 'jpg', 'jpeg']
     const maxFiles = Number(config.maxFiles || 3)
     const maxBytes = Number(config.maxFileSizeMB || 10) * 1024 * 1024

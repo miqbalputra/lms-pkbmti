@@ -108,8 +108,7 @@ func orderUjianQuestions(source []UjianSoal, sections []UjianBagian, seedKey str
 	}
 	if len(sections) == 0 {
 		if shuffle {
-			random := rand.New(rand.NewSource(seedFromID(seedKey)))
-			random.Shuffle(len(source), func(i, j int) { source[i], source[j] = source[j], source[i] })
+			return shuffleUjianQuestionGroups(source, seedFromID(seedKey))
 		}
 		return source
 	}
@@ -136,12 +135,51 @@ func orderUjianQuestions(source []UjianSoal, sections []UjianBagian, seedKey str
 			if sectionSeedID == "" {
 				sectionSeedID = "unassigned"
 			}
-			random := rand.New(rand.NewSource(seedFromID(seedKey + ":section:" + sectionSeedID)))
-			random.Shuffle(end-start, func(i, j int) { source[start+i], source[start+j] = source[start+j], source[start+i] })
+			ordered := shuffleUjianQuestionGroups(source[start:end], seedFromID(seedKey+":section:"+sectionSeedID))
+			copy(source[start:end], ordered)
 			start = end
 		}
 	}
 	return source
+}
+
+// shuffleUjianQuestionGroups keeps questions that use the same non-empty
+// stimulus together. Each standalone question is its own unit. This means a
+// deterministic shuffle changes presentation without separating a passage,
+// table, or media block from its related questions.
+func shuffleUjianQuestionGroups(source []UjianSoal, seed int64) []UjianSoal {
+	type questionGroup struct {
+		questions []UjianSoal
+	}
+	groups := make([]questionGroup, 0, len(source))
+	groupIndexes := make(map[string]int, len(source))
+	for index, question := range source {
+		groupKey := ""
+		if strings.TrimSpace(question.Soal.StimulusJSON) != "" {
+			if stimulus, err := decodeBankSoalStimulus(question.Soal.StimulusJSON); err == nil && len(stimulus) > 0 {
+				canonical, marshalErr := json.Marshal(stimulus)
+				if marshalErr == nil {
+					groupKey = "stimulus:" + string(canonical)
+				}
+			}
+		}
+		if groupKey == "" {
+			groupKey = fmt.Sprintf("question:%s:%d", question.ID, index)
+		}
+		if groupIndex, exists := groupIndexes[groupKey]; exists {
+			groups[groupIndex].questions = append(groups[groupIndex].questions, question)
+			continue
+		}
+		groupIndexes[groupKey] = len(groups)
+		groups = append(groups, questionGroup{questions: []UjianSoal{question}})
+	}
+	random := rand.New(rand.NewSource(seed))
+	random.Shuffle(len(groups), func(i, j int) { groups[i], groups[j] = groups[j], groups[i] })
+	ordered := make([]UjianSoal, 0, len(source))
+	for _, group := range groups {
+		ordered = append(ordered, group.questions...)
+	}
+	return ordered
 }
 
 func loadUjianAttemptQuestionsTx(tx *gorm.DB, up *UjianPeserta, uj *Ujian, persist bool) ([]UjianPesertaSoal, error) {
@@ -371,6 +409,8 @@ type publicExamMeta struct {
 type publicExamItem struct {
 	ID               string          `json:"id"`
 	Judul            string          `json:"judul"`
+	NamaPeserta      string          `json:"namaPeserta"`
+	DapatDikerjakan  bool            `json:"dapatDikerjakan"`
 	WaktuMulai       time.Time       `json:"waktuMulai"`
 	WaktuSelesai     time.Time       `json:"waktuSelesai"`
 	DurasiMenit      int             `json:"durasiMenit"`
@@ -779,7 +819,10 @@ func (s *Server) ujianOnlineKodeAuth(c *fiber.Ctx, ujianID string) (*PesertaDidi
 		return nil, nil, fiber.NewError(403, "Ujian belum dimulai")
 	}
 	if now.After(uj.WaktuSelesai) {
-		return nil, nil, fiber.NewError(403, "Ujian sudah berakhir")
+		var attempt UjianPeserta
+		if s.db.Where("ujian_id = ? AND peserta_didik_id = ?", uj.ID, pd.ID).First(&attempt).Error != nil || attempt.Status != "mulai" || attempt.Mulai == nil || uj.DurasiMenit <= 0 || now.After(batasGrace(&attempt, &uj)) {
+			return nil, nil, fiber.NewError(403, "Ujian sudah berakhir")
+		}
 	}
 	return pd, &uj, nil
 }
@@ -806,7 +849,6 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	var ujians []Ujian
 	queryErr := s.db.Preload("Mapel").Preload("Kelas").
 		Where("akses_kode = ? AND kelas_id = ?", strings.TrimSpace(kode), pd.KelasID).
-		Where("waktu_mulai <= ? AND waktu_selesai >= ?", time.Now(), time.Now()).
 		Order("waktu_mulai desc").
 		Find(&ujians).Error
 	if queryErr != nil {
@@ -814,9 +856,6 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	}
 	if len(ujians) == 0 {
 		return fiber.NewError(404, "Tidak ada ujian aktif dengan kode akses tersebut untuk kelas Anda")
-	}
-	if err := s.issueExamSession(c, &pd, kode); err != nil {
-		return fiber.NewError(500, "Gagal menyiapkan sesi ujian")
 	}
 	// Load all existing sessions in one query instead of one query per exam.
 	ujianIDs := make([]string, 0, len(ujians))
@@ -831,10 +870,29 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 	for _, session := range sessions {
 		sessionByExam[session.UjianID] = session
 	}
+	// Include an expired exam only when this student already has an attempt. This
+	// lets a student re-authenticate to upload an offline recovery without
+	// exposing closed exams to students who never started them.
+	now := time.Now()
+	available := make([]Ujian, 0, len(ujians))
+	for _, uj := range ujians {
+		_, attempted := sessionByExam[uj.ID]
+		if attempted || (!now.Before(uj.WaktuMulai) && !now.After(uj.WaktuSelesai)) {
+			available = append(available, uj)
+		}
+	}
+	ujians = available
+	if len(ujians) == 0 {
+		return fiber.NewError(404, "Tidak ada ujian aktif dengan kode akses tersebut untuk kelas Anda")
+	}
+	if err := s.issueExamSession(c, &pd, kode); err != nil {
+		return fiber.NewError(500, "Gagal menyiapkan sesi ujian")
+	}
 	res := make([]publicExamItem, 0, len(ujians))
 	for _, uj := range ujians {
 		r := publicExamItem{
-			ID: uj.ID, Judul: uj.Judul, WaktuMulai: uj.WaktuMulai,
+			ID: uj.ID, Judul: uj.Judul, NamaPeserta: pd.Nama,
+			DapatDikerjakan: !now.Before(uj.WaktuMulai) && !now.After(uj.WaktuSelesai), WaktuMulai: uj.WaktuMulai,
 			WaktuSelesai: uj.WaktuSelesai, DurasiMenit: uj.DurasiMenit,
 			GracePeriodMenit: uj.GracePeriodMenit, AcakSoal: uj.AcakSoal,
 			BolehEditRespons: false,
@@ -845,6 +903,9 @@ func (s *Server) cekUjianOnline(c *fiber.Ctx) error {
 			r.Status = up.Status
 			r.Skor = up.Skor
 			r.BolehEditRespons = ujianResponseEditAllowed(up, uj, time.Now())
+			if up.Status == "mulai" || r.BolehEditRespons {
+				r.DapatDikerjakan = true
+			}
 		}
 		res = append(res, r)
 	}
@@ -980,6 +1041,7 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 		DeskripsiBagian string                     `json:"deskripsiBagian,omitempty"`
 		UrutanBagian    int                        `json:"urutanBagian,omitempty"`
 		HasBranching    bool                       `json:"hasBranching,omitempty"`
+		Ditandai        bool                       `json:"ditandai"`
 		// Benar/Kunci are intentionally excluded
 	}
 	var res []soalRes
@@ -1000,7 +1062,7 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 			Stimulus:   snapshot.Stimulus,
 			BagianID:   item.BagianID, NamaBagian: item.NamaBagian,
 			DeskripsiBagian: item.DeskripsiBagian, UrutanBagian: item.UrutanBagian,
-			HasBranching: len(snapshot.Konfigurasi.BranchToByAnswer) > 0,
+			HasBranching: len(snapshot.Konfigurasi.BranchToByAnswer) > 0, Ditandai: item.Ditandai,
 		}
 		if hasUjianVisualConfig(snapshot.Konfigurasi) {
 			publicConfig := studentSafeUjianConfig(snapshot.Konfigurasi)
@@ -1040,6 +1102,7 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 	type jawabanRes struct {
 		UjianSoalID string                 `json:"ujianSoalId"`
 		Jawaban     string                 `json:"jawaban"`
+		Revision    int                    `json:"revision"`
 		Berkas      []publicExamAnswerFile `json:"berkas,omitempty"`
 	}
 	var files []UjianJawabanBerkas
@@ -1060,7 +1123,7 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 		if !ok || !activeQuestions[ujianSoalID] {
 			continue
 		}
-		row := jawabanRes{UjianSoalID: ujianSoalID, Jawaban: j.Jawaban}
+		row := jawabanRes{UjianSoalID: ujianSoalID, Jawaban: j.Jawaban, Revision: j.Revision}
 		if ids, decodeErr := decodeSimulasiFileIDs([]byte(j.Jawaban)); decodeErr == nil {
 			for _, fileID := range ids {
 				if file, exists := filesByID[fileID]; exists && file.UjianSoalID == ujianSoalID {
@@ -1070,8 +1133,20 @@ func (s *Server) getSoalUjianOnline(c *fiber.Ctx) error {
 		}
 		jawabanList = append(jawabanList, row)
 	}
+	serverNow := time.Now()
+	var deadlineAt, graceDeadlineAt interface{}
+	if deadline := batasWaktu(&up, uj); !deadline.IsZero() {
+		deadlineAt = deadline
+	}
+	if deadline := batasGrace(&up, uj); !deadline.IsZero() {
+		graceDeadlineAt = deadline
+	}
 	return c.JSON(fiber.Map{
 		"ujianPesertaId":   up.ID,
+		"namaPeserta":      pd.Nama,
+		"serverTime":       serverNow,
+		"deadlineAt":       deadlineAt,
+		"graceDeadlineAt":  graceDeadlineAt,
 		"sisaWaktu":        s.sisaWaktu(&up, uj),
 		"gracePeriodMenit": uj.GracePeriodMenit,
 		"bolehEditRespons": ujianResponseEditAllowed(up, *uj, time.Now()),
@@ -1390,14 +1465,21 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 		}
 	}
 	var in struct {
-		UjianSoalID string `json:"ujianSoalId"`
-		Jawaban     string `json:"jawaban"`
+		UjianSoalID  string `json:"ujianSoalId"`
+		Jawaban      string `json:"jawaban"`
+		BaseRevision *int   `json:"baseRevision"`
 	}
 	if e := c.BodyParser(&in); e != nil {
 		return fiber.NewError(400, "invalid request body")
 	}
 	if in.UjianSoalID == "" {
 		return fiber.NewError(400, "ujianSoalId wajib diisi")
+	}
+	requestID := strings.TrimSpace(c.Get("Idempotency-Key"))
+	if requestID != "" {
+		if _, parseErr := uuid.Parse(requestID); parseErr != nil {
+			return fiber.NewError(400, "Idempotency-Key tidak valid")
+		}
 	}
 	in.Jawaban = strings.TrimSpace(in.Jawaban)
 	if len([]byte(in.Jawaban)) > 64*1024 {
@@ -1468,16 +1550,51 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 	// Upsert jawaban
 	var jawaban UjianJawaban
 	findAnswerErr := s.db.Where("ujian_peserta_id = ? AND soal_id = ?", up.ID, frozen.SoalID).First(&jawaban).Error
+	requestAlreadyApplied := false
 	if findAnswerErr == nil {
-		jawaban.Jawaban = in.Jawaban
-		if e := s.db.Model(&UjianJawaban{}).Where("id = ?", jawaban.ID).Updates(map[string]interface{}{"jawaban": jawaban.Jawaban}).Error; e != nil {
-			return fiber.NewError(500, "Gagal menyimpan jawaban")
+		if requestID != "" && jawaban.LastRequestID == requestID {
+			if jawaban.Jawaban != in.Jawaban {
+				return c.Status(409).JSON(fiber.Map{"error": "Idempotency-Key sudah dipakai untuk jawaban lain.", "revision": jawaban.Revision})
+			}
+			requestAlreadyApplied = true
+		} else if in.BaseRevision != nil && jawaban.Revision != *in.BaseRevision {
+			return c.Status(409).JSON(fiber.Map{"error": "Jawaban sudah diperbarui dari sesi lain. Muat jawaban terbaru sebelum menyimpan lagi.", "revision": jawaban.Revision, "jawaban": jawaban.Jawaban})
+		}
+		if requestAlreadyApplied {
+			// Acknowledged retry: continue through branch evaluation without
+			// incrementing the server revision or repeating the write.
+		} else {
+			previousRevision := jawaban.Revision
+			jawaban.Jawaban = in.Jawaban
+			jawaban.Revision++
+			jawaban.LastRequestID = requestID
+			updates := map[string]interface{}{"jawaban": jawaban.Jawaban, "revision": jawaban.Revision, "last_request_id": jawaban.LastRequestID}
+			write := s.db.Model(&UjianJawaban{}).Where("id = ?", jawaban.ID)
+			if in.BaseRevision != nil {
+				write = write.Where("revision = ?", previousRevision)
+			}
+			result := write.Updates(updates)
+			if result.Error != nil {
+				return fiber.NewError(500, "Gagal menyimpan jawaban")
+			}
+			if in.BaseRevision != nil && result.RowsAffected == 0 {
+				var latest UjianJawaban
+				if err := s.db.First(&latest, "id = ?", jawaban.ID).Error; err != nil {
+					return fiber.NewError(500, "Gagal memuat jawaban terbaru")
+				}
+				return c.Status(409).JSON(fiber.Map{"error": "Jawaban sudah diperbarui dari sesi lain.", "revision": latest.Revision, "jawaban": latest.Jawaban})
+			}
 		}
 	} else if errors.Is(findAnswerErr, gorm.ErrRecordNotFound) {
+		if in.BaseRevision != nil && *in.BaseRevision != 0 {
+			return c.Status(409).JSON(fiber.Map{"error": "Jawaban di server belum tersedia. Muat ulang sesi sebelum menyimpan lagi.", "revision": 0, "jawaban": ""})
+		}
 		jawaban = UjianJawaban{
 			UjianPesertaID: up.ID,
 			SoalID:         frozen.SoalID,
 			Jawaban:        in.Jawaban,
+			Revision:       1,
+			LastRequestID:  requestID,
 		}
 		if e := s.db.Create(&jawaban).Error; e != nil {
 			// Concurrent tabs may both submit the first answer. Let the unique
@@ -1489,8 +1606,19 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 			if lookupErr := s.db.Where("ujian_peserta_id = ? AND soal_id = ?", up.ID, frozen.SoalID).First(&jawaban).Error; lookupErr != nil {
 				return fiber.NewError(500, "Gagal memuat jawaban ujian")
 			}
-			if updateErr := s.db.Model(&UjianJawaban{}).Where("id = ?", jawaban.ID).Updates(map[string]interface{}{"jawaban": in.Jawaban}).Error; updateErr != nil {
-				return fiber.NewError(500, "Gagal menyimpan jawaban")
+			if requestID != "" && jawaban.LastRequestID == requestID && jawaban.Jawaban == in.Jawaban {
+				requestAlreadyApplied = true
+			} else if in.BaseRevision != nil {
+				return c.Status(409).JSON(fiber.Map{"error": "Jawaban sudah tersimpan di sesi lain.", "revision": jawaban.Revision, "jawaban": jawaban.Jawaban})
+			}
+			if requestAlreadyApplied {
+				// The concurrent create belonged to this exact idempotent request.
+			} else {
+				jawaban.Revision++
+				jawaban.LastRequestID = requestID
+				if updateErr := s.db.Model(&UjianJawaban{}).Where("id = ?", jawaban.ID).Updates(map[string]interface{}{"jawaban": in.Jawaban, "revision": jawaban.Revision, "last_request_id": requestID}).Error; updateErr != nil {
+					return fiber.NewError(500, "Gagal menyimpan jawaban")
+				}
 			}
 		}
 	} else {
@@ -1517,7 +1645,7 @@ func (s *Server) jawabSoal(c *fiber.Ctx) error {
 			activeIDs = append(activeIDs, question.UjianSoalID)
 		}
 	}
-	return c.JSON(fiber.Map{"status": "ok", "activeSoalIds": activeIDs, "hasBranching": len(snapshot.Konfigurasi.BranchToByAnswer) > 0})
+	return c.JSON(fiber.Map{"status": "ok", "revision": jawaban.Revision, "activeSoalIds": activeIDs, "hasBranching": len(snapshot.Konfigurasi.BranchToByAnswer) > 0})
 }
 
 func ujianAttemptWritable(s *Server, attempt *UjianPeserta, ujian *Ujian) error {
