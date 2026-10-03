@@ -60,30 +60,42 @@ type CBTExternalAnswer struct {
 }
 
 type cbtAccountDTO struct {
-	ID, Username, Nama, Role, TutorID, PesertaDidikID string
-	Active                                            bool
-	UpdatedAt                                         time.Time
+	ID             string    `json:"id"`
+	Username       string    `json:"username"`
+	Nama           string    `json:"nama"`
+	Role           string    `json:"role"`
+	TutorID        string    `json:"tutorId"`
+	PesertaDidikID string    `json:"pesertaDidikId"`
+	Active         bool      `json:"active"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 type cbtKelasDTO struct {
-	ID, Nama  string
-	Jenjang   int
-	Active    bool
-	UpdatedAt time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	Jenjang   int       `json:"jenjang"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type cbtPesertaDTO struct {
-	ID, Nama, NISN, KelasID string
-	Active                  bool
-	UpdatedAt               time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	NISN      string    `json:"nisn"`
+	KelasID   string    `json:"kelasId"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type cbtTutorDTO struct {
-	ID, Nama  string
-	Active    bool
-	UpdatedAt time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type cbtMapelDTO struct {
-	ID, Nama, Kode string
-	Active         bool
-	UpdatedAt      time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	Kode      string    `json:"kode"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type cbtMasterDTO struct {
 	Cursor       string          `json:"cursor"`
@@ -137,7 +149,10 @@ func (s *Server) cbtMasterFeed(c *fiber.Ctx) error {
 		if since.IsZero() {
 			return db
 		}
-		return db.Where("updated_at > ?", since)
+		// Include the boundary. Multiple source records can share the same
+		// UpdatedAt (bulk import/edit); the CBT upsert is idempotent, so replaying
+		// boundary rows is safer than silently losing tied updates.
+		return db.Where("updated_at >= ?", since)
 	}
 	var users []User
 	var classes []Kelas
@@ -182,7 +197,7 @@ func (s *Server) cbtMasterFeed(c *fiber.Ctx) error {
 		bump(row.UpdatedAt)
 	}
 	for _, row := range students {
-		result.PesertaDidik = append(result.PesertaDidik, cbtPesertaDTO{ID: row.ID, Nama: row.Nama, NISN: row.NISN, KelasID: row.KelasID, Active: row.Status == "aktif", UpdatedAt: row.UpdatedAt})
+		result.PesertaDidik = append(result.PesertaDidik, cbtPesertaDTO{ID: row.ID, Nama: row.Nama, NISN: row.NISN, KelasID: row.KelasID, Active: strings.EqualFold(strings.TrimSpace(row.Status), "aktif"), UpdatedAt: row.UpdatedAt})
 		bump(row.UpdatedAt)
 	}
 	for _, row := range tutors {
