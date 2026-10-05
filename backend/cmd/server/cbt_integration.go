@@ -152,19 +152,55 @@ type cbtAccountDTO struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 type cbtKelasDTO struct {
+	ID            string    `json:"id"`
+	Nama          string    `json:"nama"`
+	Jenjang       int       `json:"jenjang"`
+	PokjarID      string    `json:"pokjarId"`
+	TahunAjaranID string    `json:"tahunAjaranId"`
+	WaliKelasID   *string   `json:"waliKelasId,omitempty"`
+	ProgramID     *string   `json:"programId,omitempty"`
+	FaseID        *string   `json:"faseId,omitempty"`
+	Active        bool      `json:"active"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+type cbtPesertaDTO struct {
+	ID           string    `json:"id"`
+	Nama         string    `json:"nama"`
+	NIS          string    `json:"nis"`
+	NISN         string    `json:"nisn"`
+	JenisKelamin string    `json:"jenisKelamin"`
+	KelasID      string    `json:"kelasId"`
+	PokjarID     string    `json:"pokjarId"`
+	ProgramID    *string   `json:"programId,omitempty"`
+	Urutan       int       `json:"urutan"`
+	Active       bool      `json:"active"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+type cbtPokjarDTO struct {
 	ID        string    `json:"id"`
-	Nama      string    `json:"nama"`
-	Jenjang   int       `json:"jenjang"`
+	Nama      string    `json:"namaPokjar"`
+	Tipe      string    `json:"tipe"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+type cbtTahunAjaranDTO struct {
+	ID        string    `json:"id"`
+	Nama      string    `json:"namaTahunAjaran"`
 	Active    bool      `json:"active"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
-type cbtPesertaDTO struct {
-	ID        string    `json:"id"`
-	Nama      string    `json:"nama"`
-	NISN      string    `json:"nisn"`
-	KelasID   string    `json:"kelasId"`
-	Active    bool      `json:"active"`
-	UpdatedAt time.Time `json:"updatedAt"`
+type cbtProgramDTO struct {
+	ID            string    `json:"id"`
+	Kode          string    `json:"kode"`
+	Nama          string    `json:"nama"`
+	JenjangSetara string    `json:"jenjangSetara"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+type cbtFaseDTO struct {
+	ID            string    `json:"id"`
+	Kode          string    `json:"kode"`
+	Nama          string    `json:"nama"`
+	JenjangSetara string    `json:"jenjangSetara"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 type cbtTutorDTO struct {
 	ID        string    `json:"id"`
@@ -180,12 +216,17 @@ type cbtMapelDTO struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 type cbtMasterDTO struct {
-	Cursor       string          `json:"cursor"`
-	Accounts     []cbtAccountDTO `json:"accounts"`
-	Kelas        []cbtKelasDTO   `json:"kelas"`
-	PesertaDidik []cbtPesertaDTO `json:"pesertaDidik"`
-	Tutor        []cbtTutorDTO   `json:"tutor"`
-	Mapel        []cbtMapelDTO   `json:"mapel"`
+	SchemaVersion   int                 `json:"schemaVersion"`
+	Cursor          string              `json:"cursor"`
+	Accounts        []cbtAccountDTO     `json:"accounts"`
+	Kelas           []cbtKelasDTO       `json:"kelas"`
+	PesertaDidik    []cbtPesertaDTO     `json:"pesertaDidik"`
+	KelompokBelajar []cbtPokjarDTO      `json:"kelompokBelajar"`
+	TahunAjaran     []cbtTahunAjaranDTO `json:"tahunAjaran"`
+	Program         []cbtProgramDTO     `json:"program"`
+	Fase            []cbtFaseDTO        `json:"fase"`
+	Tutor           []cbtTutorDTO       `json:"tutor"`
+	Mapel           []cbtMapelDTO       `json:"mapel"`
 }
 
 func cbtIntegrationSecret() string {
@@ -239,6 +280,10 @@ func (s *Server) cbtMasterFeed(c *fiber.Ctx) error {
 	var users []User
 	var classes []Kelas
 	var students []PesertaDidik
+	var pokjars []Pokjar
+	var academicYears []TahunAjaran
+	var programs []Program
+	var phases []Fase
 	var tutors []Tutor
 	var subjects []MataPelajaran
 	if err := filter(s.db).Find(&users).Error; err != nil {
@@ -250,13 +295,31 @@ func (s *Server) cbtMasterFeed(c *fiber.Ctx) error {
 	if err := filter(s.db).Find(&students).Error; err != nil {
 		return err
 	}
+	if err := filter(s.db).Find(&pokjars).Error; err != nil {
+		return err
+	}
+	if err := filter(s.db).Find(&academicYears).Error; err != nil {
+		return err
+	}
+	if err := filter(s.db).Find(&programs).Error; err != nil {
+		return err
+	}
+	if err := filter(s.db).Find(&phases).Error; err != nil {
+		return err
+	}
 	if err := filter(s.db).Find(&tutors).Error; err != nil {
 		return err
 	}
 	if err := filter(s.db).Find(&subjects).Error; err != nil {
 		return err
 	}
-	result := cbtMasterDTO{Accounts: make([]cbtAccountDTO, 0, len(users)), Kelas: make([]cbtKelasDTO, 0, len(classes)), PesertaDidik: make([]cbtPesertaDTO, 0, len(students)), Tutor: make([]cbtTutorDTO, 0, len(tutors)), Mapel: make([]cbtMapelDTO, 0, len(subjects))}
+	result := cbtMasterDTO{
+		SchemaVersion: 2,
+		Accounts:      make([]cbtAccountDTO, 0, len(users)), Kelas: make([]cbtKelasDTO, 0, len(classes)),
+		PesertaDidik: make([]cbtPesertaDTO, 0, len(students)), KelompokBelajar: make([]cbtPokjarDTO, 0, len(pokjars)),
+		TahunAjaran: make([]cbtTahunAjaranDTO, 0, len(academicYears)), Program: make([]cbtProgramDTO, 0, len(programs)),
+		Fase: make([]cbtFaseDTO, 0, len(phases)), Tutor: make([]cbtTutorDTO, 0, len(tutors)), Mapel: make([]cbtMapelDTO, 0, len(subjects)),
+	}
 	latest := since
 	bump := func(value time.Time) {
 		if value.After(latest) {
@@ -275,11 +338,27 @@ func (s *Server) cbtMasterFeed(c *fiber.Ctx) error {
 		bump(row.UpdatedAt)
 	}
 	for _, row := range classes {
-		result.Kelas = append(result.Kelas, cbtKelasDTO{ID: row.ID, Nama: row.NamaRombel, Jenjang: row.Jenjang, Active: true, UpdatedAt: row.UpdatedAt})
+		result.Kelas = append(result.Kelas, cbtKelasDTO{ID: row.ID, Nama: row.NamaRombel, Jenjang: row.Jenjang, PokjarID: row.PokjarID, TahunAjaranID: row.TahunAjaranID, WaliKelasID: row.WaliKelasID, ProgramID: row.ProgramID, FaseID: row.FaseID, Active: true, UpdatedAt: row.UpdatedAt})
 		bump(row.UpdatedAt)
 	}
 	for _, row := range students {
-		result.PesertaDidik = append(result.PesertaDidik, cbtPesertaDTO{ID: row.ID, Nama: row.Nama, NISN: row.NISN, KelasID: row.KelasID, Active: strings.EqualFold(strings.TrimSpace(row.Status), "aktif"), UpdatedAt: row.UpdatedAt})
+		result.PesertaDidik = append(result.PesertaDidik, cbtPesertaDTO{ID: row.ID, Nama: row.Nama, NIS: row.NIS, NISN: row.NISN, JenisKelamin: row.JenisKelamin, KelasID: row.KelasID, PokjarID: row.PokjarID, ProgramID: row.ProgramID, Urutan: row.Urutan, Active: strings.EqualFold(strings.TrimSpace(row.Status), "aktif"), UpdatedAt: row.UpdatedAt})
+		bump(row.UpdatedAt)
+	}
+	for _, row := range pokjars {
+		result.KelompokBelajar = append(result.KelompokBelajar, cbtPokjarDTO{ID: row.ID, Nama: row.NamaPokjar, Tipe: row.Tipe, UpdatedAt: row.UpdatedAt})
+		bump(row.UpdatedAt)
+	}
+	for _, row := range academicYears {
+		result.TahunAjaran = append(result.TahunAjaran, cbtTahunAjaranDTO{ID: row.ID, Nama: row.NamaTahunAjaran, Active: row.IsAktif, UpdatedAt: row.UpdatedAt})
+		bump(row.UpdatedAt)
+	}
+	for _, row := range programs {
+		result.Program = append(result.Program, cbtProgramDTO{ID: row.ID, Kode: row.Kode, Nama: row.Nama, JenjangSetara: row.JenjangSetara, UpdatedAt: row.UpdatedAt})
+		bump(row.UpdatedAt)
+	}
+	for _, row := range phases {
+		result.Fase = append(result.Fase, cbtFaseDTO{ID: row.ID, Kode: row.Kode, Nama: row.Nama, JenjangSetara: row.JenjangSetara, UpdatedAt: row.UpdatedAt})
 		bump(row.UpdatedAt)
 	}
 	for _, row := range tutors {
