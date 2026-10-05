@@ -98,6 +98,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     groupLabel: 'UJIAN & SERTIFIKAT',
     items: [
+      { id: 'cbt', label: 'CBT & Asesmen', icon: Monitor, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'simulasi', label: 'Simulasi & Bank Soal', icon: ClipboardCheck, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'ujian', label: 'Ujian (Luring)', icon: ClipboardList, roles: ['admin', 'kepala_sekolah', 'guru'] },
       { id: 'ujian-online', label: 'Ujian Online', icon: Monitor, roles: ['admin', 'kepala_sekolah', 'guru'] },

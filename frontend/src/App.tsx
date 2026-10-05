@@ -1,4 +1,4 @@
-import { Component, type ReactNode, useCallback, useEffect, useState, lazy, Suspense } from 'react'
+import { Component, type ReactNode, useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react'
 import {
   Bell,
   CalendarCheck,
@@ -206,6 +206,8 @@ export default function App() {
     }
   }, [token])
 
+  const isCBTSSOLaunch = window.location.pathname === '/cbt-sso/launch'
+
   return (
     <>
       <InstallPrompt />
@@ -227,6 +229,8 @@ export default function App() {
             requestFn={request}
           />
         </>
+      ) : isCBTSSOLaunch ? (
+        <CBTSSOLaunch token={token} />
       ) : user.role === 'siswa' ? (
         <>
           <Toaster position="top-right" />
@@ -267,6 +271,34 @@ export default function App() {
       )}
     </>
   )
+}
+
+function CBTSSOLaunch({ token }: { token: string }) {
+  const [error, setError] = useState('')
+  const started = useRef(false)
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    const state = new URLSearchParams(window.location.search).get('state') || ''
+    if (!state) {
+      setError('Permintaan masuk CBT tidak lengkap. Mulai kembali dari menu CBT di LMS.')
+      return
+    }
+    void request('/auth/cbt-sso/ticket', token, 'POST', { state })
+      .then((result: { ticket: string }) => {
+        const { ticket } = result
+        const destination = `https://ujian.pkbmtunasilmu.sch.id/sso/callback#ticket=${encodeURIComponent(ticket)}`
+        window.location.replace(destination)
+      })
+      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Sesi LMS tidak dapat diteruskan ke CBT.'))
+  }, [token])
+  return <main className="grid min-h-screen place-items-center bg-background p-4"><section className="w-full max-w-lg rounded-2xl border bg-card p-6 text-center shadow-sm"><div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" role="status" aria-label="Memverifikasi akun"/><h1 className="text-xl font-bold">Menghubungkan akun LMS ke CBT</h1><p className="mt-2 text-sm text-muted-foreground">Identitas dan peran diperiksa oleh LMS. Password tidak dikirim ke aplikasi CBT.</p>{error && <div role="alert" className="mt-4 rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}<a className="mt-3 inline-block font-semibold underline" href="/">Kembali ke LMS</a></div>}</section></main>
+}
+
+function CBTLaunchRedirect() {
+  const destination = 'https://ujian.pkbmtunasilmu.sch.id/sso/start'
+  useEffect(() => { window.location.assign(destination) }, [])
+  return <section className="mx-auto max-w-2xl rounded-2xl border bg-card p-6"><h1 className="text-xl font-bold">Membuka CBT & Asesmen</h1><p className="mt-2 text-sm text-muted-foreground">Sesi LMS akan digunakan untuk masuk ke CBT dengan aman.</p><a className="mt-4 inline-flex min-h-11 items-center rounded-xl bg-primary px-4 font-semibold text-primary-foreground" href={destination}>Lanjut ke CBT</a></section>
 }
 
 function AccessibilityFloatingControls() {
@@ -371,6 +403,7 @@ function Workspace({
   if (page === 'rpp') return <RppView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'kelas-virtual') return <KelasVirtualView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
   if (page === 'bank-soal') return <SimulasiView token={token} user={user} />
+  if (page === 'cbt') return user.role === 'admin' || user.role === 'guru' || user.role === 'kepala_sekolah' ? <CBTLaunchRedirect /> : <Restricted />
   if (page === 'bank-soal-ujian') return user.role === 'admin' || user.role === 'guru' || user.role === 'kepala_sekolah'
     ? <BankSoalView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
     : <Restricted />

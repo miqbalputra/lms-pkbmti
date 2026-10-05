@@ -12,8 +12,90 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+const (
+	cbtSSOIssuer   = "pkbmti-lms"
+	cbtSSOAudience = "pkbmti-cbt"
+)
+
+type cbtSSOClaims struct {
+	Username       string `json:"username"`
+	Nama           string `json:"nama"`
+	Role           string `json:"role"`
+	TutorID        string `json:"tutorId,omitempty"`
+	PesertaDidikID string `json:"pesertaDidikId,omitempty"`
+	State          string `json:"state"`
+	jwt.RegisteredClaims
+}
+
+// issueCBTSSOTicket exchanges an already authenticated LMS session for a
+// short-lived, one-use CBT assertion. LMS remains the identity authority; no
+// password or long-lived LMS access token is ever sent to the CBT browser.
+func (s *Server) issueCBTSSOTicket(c *fiber.Ctx) error {
+	secret := strings.TrimSpace(os.Getenv("CBT_SSO_HMAC_SECRET"))
+	if len(secret) < 32 {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "SSO CBT belum dikonfigurasi oleh Administrator")
+	}
+	var input struct {
+		State string `json:"state"`
+	}
+	if err := c.BodyParser(&input); err != nil || uuid.Validate(strings.TrimSpace(input.State)) != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Permintaan SSO CBT tidak valid")
+	}
+	userID, ok := c.Locals("userID").(string)
+	if !ok || strings.TrimSpace(userID) == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "Sesi LMS diperlukan")
+	}
+	var user User
+	if err := s.db.First(&user, "id = ?", userID).Error; err != nil || !user.IsActive {
+		return fiber.NewError(fiber.StatusForbidden, "Akun LMS tidak aktif")
+	}
+	switch user.Role {
+	case "admin", "guru", "kepala_sekolah":
+	case "siswa":
+		if user.PesertaDidikID == nil || strings.TrimSpace(*user.PesertaDidikID) == "" {
+			return fiber.NewError(fiber.StatusForbidden, "Akun siswa belum terhubung ke data peserta didik")
+		}
+	default:
+		return fiber.NewError(fiber.StatusForbidden, "Peran akun ini tidak memiliki akses ke CBT")
+	}
+	if user.Role == "siswa" {
+		var student PesertaDidik
+		if err := s.db.Select("id, status").First(&student, "id = ?", *user.PesertaDidikID).Error; err != nil || !strings.EqualFold(strings.TrimSpace(student.Status), "aktif") {
+			return fiber.NewError(fiber.StatusForbidden, "Data peserta didik tidak aktif")
+		}
+	}
+	if err := s.fillUserNames(&user); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "Identitas akun LMS belum dapat dibaca")
+	}
+	tutorID, studentID := "", ""
+	if user.TutorID != nil {
+		tutorID = *user.TutorID
+	}
+	if user.PesertaDidikID != nil {
+		studentID = *user.PesertaDidikID
+	}
+	now := time.Now().UTC()
+	claims := cbtSSOClaims{
+		Username: user.Username, Nama: strings.TrimSpace(user.Nama), Role: user.Role,
+		TutorID: tutorID, PesertaDidikID: studentID, State: strings.TrimSpace(input.State),
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: cbtSSOIssuer, Subject: user.ID, Audience: jwt.ClaimStrings{cbtSSOAudience},
+			IssuedAt: jwt.NewNumericDate(now), NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(2 * time.Minute)), ID: uuid.NewString(),
+		},
+	}
+	ticket, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "Tiket SSO CBT tidak dapat dibuat")
+	}
+	s.audit(&user.ID, "sso_launch", "cbt", user.Role)
+	return c.JSON(fiber.Map{"ticket": ticket, "expiresAt": claims.ExpiresAt.Time})
+}
 
 // CBTIntegrationNonce and CBTIntegrationEvent protect the server-to-server
 // bridge. They are deliberately separate from browser authentication: a CBT

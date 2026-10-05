@@ -1430,6 +1430,7 @@ func main() {
 		},
 	})
 	api.Post("/auth/login", loginIPLimiter, loginAccountLimiter, s.login)
+	api.Post("/auth/cbt-sso/ticket", s.auth, s.issueCBTSSOTicket)
 	refreshIPLimiter := limiter.New(limiter.Config{
 		Max: 1200, Expiration: time.Minute,
 		KeyGenerator: func(c *fiber.Ctx) string { return "refresh-ip:" + c.IP() },

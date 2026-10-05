@@ -73,6 +73,7 @@ export const PAGE_IDS = [
   'nilai-kompetensi',
   'rapor',
   'bank-soal',
+  'cbt',
   'bank-soal-ujian',
   'ujian',
   'ujian-online',

@@ -108,15 +108,23 @@ repository `https://github.com/miqbalputra/lms-pkbmti-ujian.git`. Jangan
 menggunakan database, volume unggahan, atau credential database LMS pada
 stack CBT.
 
-1. Deploy repo CBT terlebih dahulu dengan domain `cbt.pkbmtunasilmu.web.id`,
+1. Deploy repo CBT terlebih dahulu dengan domain `ujian.pkbmtunasilmu.sch.id`,
    PostgreSQL sendiri, volume unggahan, dan backup harian.
 2. Buat satu secret HMAC acak minimal 32 karakter. Isi nilai dan key ID yang
    sama di LMS (`CBT_INTEGRATION_*`) dan CBT (`LMS_INTEGRATION_*`).
-3. Jalankan sinkronisasi master serta import salin-data dari panel CBT. Cocokkan
+3. Buat secret acak minimal 32 karakter lain khusus SSO—jangan gunakan ulang
+   secret integrasi. Isi `CBT_SSO_HMAC_SECRET` di LMS dan nilai identik sebagai
+   `LMS_SSO_HMAC_SECRET` di CBT. Pada CBT, set `LMS_PUBLIC_URL` ke
+   `https://edu.pkbmtunasilmu.sch.id`. Kredensial ini hanya berada di server.
+4. Jalankan sinkronisasi master serta import salin-data dari panel CBT. Cocokkan
    jumlah data, snapshot, nilai, relasi siswa-kelas, dan berkas. Sumber LMS
    tidak dihapus atau ditulis ulang oleh proses ini.
-4. Setelah backup kedua database dan verifikasi selesai, isi
-   `CBT_PUBLIC_URL=https://cbt.pkbmtunasilmu.web.id` pada LMS lalu redeploy.
+5. Setelah backup kedua database dan verifikasi selesai, isi
+   `CBT_PUBLIC_URL=https://ujian.pkbmtunasilmu.sch.id` pada LMS lalu redeploy
+   kedua aplikasi. Tutor membuka menu **CBT & Asesmen** di LMS; dari halaman CBT,
+   pilih **Masuk melalui akun LMS**. Siswa dengan akun LMS juga dapat memakai
+   tombol tersebut. Identitas dan peran selalu diperiksa LMS,
+   sementara password LMS tidak pernah disalin ke CBT.
    Sebelum variabel itu diisi, seluruh rute asesmen LMS tetap bekerja seperti
    semula; sesudahnya `/ujian`, `/simulasi`, `/bank-soal`, `/ujian-online`, dan
    `/ujian-monitor` mengarahkan pengguna ke CBT.
