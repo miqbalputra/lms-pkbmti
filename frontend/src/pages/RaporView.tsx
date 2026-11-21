@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import type { User } from '../App'
 import { request } from '../lib/api'
 import { formatWibDate } from '../lib/wib'
+import { RaporSumatifView } from './RaporSumatifView'
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -31,6 +32,13 @@ function fmtDate(v: unknown): string {
 }
 
 export function RaporView({
+  token, user, readOnly,
+}: { token: string; user: User; readOnly: boolean }) {
+  const [legacy, setLegacy] = useState(false)
+  return <div className="space-y-4"><Button variant="outline" onClick={() => setLegacy(!legacy)}>{legacy ? 'Kembali ke rapor sumatif' : 'Buka arsip rapor alur lama'}</Button>{legacy ? <LegacyRaporView token={token} user={user} readOnly /> : <RaporSumatifView token={token} readOnly={readOnly} />}</div>
+}
+
+function LegacyRaporView({
   token,
   user,
   readOnly,

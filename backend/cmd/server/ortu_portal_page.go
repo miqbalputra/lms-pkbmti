@@ -200,6 +200,7 @@ function applyA11y(){
 }
 applyA11y();
 const TABS=[
+  {id:'rapor',label:'Rapor',icon:'📑'},
   {id:'identitas',label:'Identitas',icon:'👤'},
   {id:'simulasi',label:'Simulasi',icon:'🎯'},
   {id:'surat',label:'Surat',icon:'📄'},
@@ -238,6 +239,7 @@ document.addEventListener('click',e=>{
     case 'download-surat':void downloadSurat(el.dataset.id||'');break;
     case 'download-portofolio':void downloadPortofolio(el.dataset.id||'');break;
     case 'download-identitas':void downloadIdentitas();break;
+    case 'download-rapor':void downloadRapor(el.dataset.id||'');break;
     case 'send-chat':void sendChat();break;
   }
 });
@@ -296,6 +298,7 @@ function showTab(tab,el){
   const c=document.getElementById('tabContent');
   c.innerHTML='<div class="empty-state">Memuat...</div>';
   const m={
+    rapor:loadRaporTerbit,
     identitas:loadIdentitas,simulasi:loadSimulasi,surat:loadSurat,performa:loadPerforma,perilaku:loadPerilaku,ujian:loadUjian,tugas:loadTugas,
     materi:loadMateri,belajar:loadBelajar,kalender:loadKalender,notif:loadNotif,chat:loadChat,buku:loadBuku
   };
@@ -311,6 +314,19 @@ async function loadSurat(c){
       d.map(s=>'<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)"><div style="min-width:0"><div style="font-size:13px;font-weight:600;word-break:break-word">'+esc(s.judul)+'</div><div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">'+String(s.createdAt||'').slice(0,10)+'</div></div><button class="btn btn-primary btn-sm" data-action="download-surat" data-id="'+esc(s.id)+'">Unduh PDF</button></div>').join('')+
       '</div></div>';
   }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
+}
+
+async function loadRaporTerbit(c){
+  const child=state.anakId;
+  try{
+    const r=await fetch(API+'/orang-tua/anak/'+encodeURIComponent(child)+'/rapor-terbit',{headers:hdr()});
+    const rows=await r.json();if(!r.ok)throw new Error(rows.error||'Gagal memuat rapor');
+    if(child!==state.anakId)return;
+    c.innerHTML='<div class="card"><div class="card-header"><h1>Rapor semester</h1><p class="desc">Rapor yang telah diterbitkan oleh sekolah.</p></div><div class="card-content">'+(!rows.length?'<div class="empty-state">Belum ada rapor yang diterbitkan.</div>':rows.map(row=>{const d=row.document;return'<div style="padding:14px 0;border-bottom:1px solid var(--border)"><strong>'+esc(d.class.tahunAjaran.namaTahunAjaran)+' · '+esc(d.scope.semester)+'</strong><p>Kelas '+esc(d.class.jenjang)+' · Versi '+esc(row.version)+'</p>'+d.subjects.map(m=>'<p>'+esc(m.name)+': <strong>'+esc(m.score??'-')+'</strong></p>').join('')+'<button class="btn btn-primary btn-sm" data-action="download-rapor" data-id="'+esc(row.id)+'">Unduh rapor PDF</button></div>'}).join(''))+'</div></div>';
+  }catch(e){c.innerHTML='<div class="error-box show">'+esc(e.message)+'</div>'}
+}
+async function downloadRapor(id){
+  try{const r=await fetch(API+'/orang-tua/anak/'+encodeURIComponent(state.anakId)+'/rapor-terbit/'+encodeURIComponent(id)+'/print',{headers:hdr()});if(!r.ok)throw new Error('Rapor tidak tersedia');const url=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=url;a.download='rapor.pdf';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}catch(e){alert(e.message)}
 }
 
 async function downloadSurat(suratId){
@@ -396,8 +412,8 @@ async function loadPerforma(c){
     html+='<div class="card"><div class="card-header"><h1 style="font-size:15px">Grafik Presensi</h1></div><div class="card-content"><div class="chart-box"><canvas id="chartPresensi"></canvas></div></div></div>';
     html+='<div class="card"><div class="card-header"><h1 style="font-size:15px">Rekap Nilai</h1></div><div class="card-content">';
     if(Array.isArray(rNilai)&&rNilai.length){
-      html+='<div class="table-wrap"><table class="table"><thead><tr><th>Mapel</th><th>NP</th><th>NK</th><th>Predikat</th></tr></thead><tbody>';
-      html+=rNilai.map(r=>'<tr><td>'+esc(r.mapel?.namaMapel||'-')+'</td><td>'+(r.npAkhir!=null?Number(r.npAkhir).toFixed(1):'-')+'</td><td>'+(r.nkAkhir!=null?Number(r.nkAkhir).toFixed(1):'-')+'</td><td>'+(r.predikatNP||'-')+'</td></tr>').join('');
+      html+='<div class="table-wrap"><table class="table"><thead><tr><th>Mapel</th><th>Nilai rapor</th><th>NP</th><th>NK</th><th>Predikat</th></tr></thead><tbody>';
+      html+=rNilai.map(r=>'<tr><td>'+esc(r.mapel?.namaMapel||'-')+'</td><td>'+(r.naAkhir!=null?Number(r.naAkhir).toFixed(0):'-')+'</td><td>'+(r.npAkhir!=null?Number(r.npAkhir).toFixed(1):'-')+'</td><td>'+(r.nkAkhir!=null?Number(r.nkAkhir).toFixed(1):'-')+'</td><td>'+(r.predikatNP||'-')+'</td></tr>').join('');
       html+='</tbody></table></div>';
     }else html+='<div class="empty-state">Belum ada data nilai</div>';
     html+='</div></div>';
@@ -406,6 +422,7 @@ async function loadPerforma(c){
     if(Array.isArray(rNilai)&&rNilai.length){
       const labels=rNilai.map(r=>r.mapel?.namaMapel||'?');
       new Chart(document.getElementById('chartNilai'),{type:'bar',data:{labels,datasets:[
+        {label:'Nilai rapor',data:rNilai.map(r=>r.naAkhir),backgroundColor:'#8b5cf6'},
         {label:'NP',data:rNilai.map(r=>r.npAkhir),backgroundColor:'#3b82f6'},
         {label:'NK',data:rNilai.map(r=>r.nkAkhir),backgroundColor:'#22c55e'}
       ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}},scales:{y:{beginAtZero:true,max:100,ticks:{font:{size:10}}},x:{ticks:{font:{size:10}}}}}});

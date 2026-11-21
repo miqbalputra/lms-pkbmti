@@ -37,6 +37,7 @@ import (
 )
 
 func (s *Server) routes(api fiber.Router) {
+	s.reportRoutes(api)
 	// IMPORTANT: Fiber v2.52's api.Group("", middleware) applies the middleware to
 	// ALL routes registered AFTER it on the same router (empty-prefix group quirk).
 	// To keep guru-accessible endpoints reachable, every bare-api route (auth only,
@@ -2624,6 +2625,7 @@ func (s *Server) deleteKelas(c *fiber.Ctx) error {
 		label string
 	}
 	refs := []ref{
+		{&ReportPeriod{}, "rapor sumatif"},
 		{&PesertaDidik{}, "peserta didik"},
 		{&Presensi{}, "presensi"},
 		{&RekapNilaiAkhir{}, "rekap nilai akhir"},
@@ -3616,6 +3618,9 @@ func (s *Server) deleteSiswa(c *fiber.Ctx) error {
 	},
 		deleteReference{&PresensiDetail{}, "peserta_didik_id", "detail presensi"},
 		deleteReference{&NilaiCP{}, "peserta_didik_id", "nilai capaian pembelajaran"},
+		deleteReference{&ReportScore{}, "student_id", "nilai sumatif"},
+		deleteReference{&ReportRecord{}, "student_id", "rapor sumatif"},
+		deleteReference{&ReportNarrative{}, "student_id", "deskripsi rapor sumatif"},
 		deleteReference{&NilaiUM{}, "peserta_didik_id", "nilai ujian mandiri"},
 		deleteReference{&RekapNilaiAkhir{}, "peserta_didik_id", "rekap nilai"},
 		deleteReference{&PengumpulanTugas{}, "peserta_didik_id", "pengumpulan tugas"},

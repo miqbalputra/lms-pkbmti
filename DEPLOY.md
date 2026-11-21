@@ -161,3 +161,18 @@ The app uses GORM AutoMigrate on startup - no manual migration needed.
 ### App starts but no data
 - First run auto-seeds default admin
 - Check logs for migration errors
+
+## Konfigurasi bantuan AI rapor
+
+Tambahkan `GEMINI_API_KEY` dan/atau `OPENAI_API_KEY` ke environment server.
+`docker-compose.yml` meneruskan kedua variabel ke backend. Jangan memasukkan
+API key ke variabel `VITE_*`, kode frontend, atau repository. Setelah restart,
+admin memilih penyedia dan ID model melalui **Rapor → Pengaturan → Bantuan AI**.
+Gunakan model yang mendukung keluaran JSON terstruktur. Tanpa kredensial,
+seluruh pengisian nilai, deskripsi manual, finalisasi, dan cetak tetap tersedia.
+
+Migrasi menambah tabel `report_*` dan tidak mengonversi atau menimpa nilai tema
+lama. Lakukan backup penuh sebelum rilis sesuai prosedur di dokumen ini. Font,
+logo, dan layout cetak dibundel dalam binary; server tidak memerlukan Microsoft
+Excel untuk membuat PDF. Workbook sumber hanya diperlukan untuk regenerasi aset
+oleh `backend/tools/rapor-template`, bukan saat aplikasi berjalan.

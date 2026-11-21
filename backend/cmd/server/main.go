@@ -1575,7 +1575,7 @@ func productionContentSecurityPolicyWithFrameAncestors(cspNonce, frameAncestors 
 	if strings.TrimSpace(frameAncestors) == "" {
 		frameAncestors = "'none'"
 	}
-	return "default-src 'self'; base-uri 'self'; frame-ancestors " + frameAncestors + "; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-" + cspNonce + "' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-" + cspNonce + "' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com"
+	return "default-src 'self'; base-uri 'self'; frame-ancestors " + frameAncestors + "; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-" + cspNonce + "' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-" + cspNonce + "' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' blob: https://challenges.cloudflare.com"
 }
 
 func validateConfig(cfg Config) error {
@@ -1847,6 +1847,9 @@ func (s *Server) migrateSchema() error {
 		return e
 	}
 	if e := s.ensureTemporaryNISNIndex(); e != nil {
+		return e
+	}
+	if e := s.db.AutoMigrate(reportModels()...); e != nil {
 		return e
 	}
 	if e := s.ensureOptionalUserEmailIndex(); e != nil {

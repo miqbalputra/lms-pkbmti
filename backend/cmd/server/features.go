@@ -3301,6 +3301,10 @@ func (s *Server) getNilaiAnak(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(500, "gagal memuat mata pelajaran nilai anak")
 	}
+	result, err = reportParentGrades(s.db, anakID, result)
+	if err != nil {
+		return fiber.NewError(500, "gagal memuat nilai rapor terbit")
+	}
 	return c.JSON(result)
 }
 
@@ -3375,6 +3379,10 @@ func (s *Server) getRaporAnak(c *fiber.Ctx) error {
 	grades, err := loadParentGradeItems(s.db, rekap)
 	if err != nil {
 		return fiber.NewError(500, "gagal memuat mata pelajaran rapor anak")
+	}
+	grades, err = reportParentGrades(s.db, anakID, grades)
+	if err != nil {
+		return fiber.NewError(500, "gagal memuat rapor terbit")
 	}
 	var catatan CatatanRapor
 	var note *parentReportNote
