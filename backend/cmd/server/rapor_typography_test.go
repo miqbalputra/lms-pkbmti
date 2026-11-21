@@ -14,6 +14,9 @@ func TestReportTypographyAndContinuation(t *testing.T) {
 	styled := reportStyledTemplate(base)
 	found := false
 	for _, cell := range styled.Cells {
+		if cell.Address == "N17" && (len(cell.Style.Fill.Color) == 0 || cell.Style.Fill.Color[0] != "F1F3F5") {
+			t.Fatal("table header should be light gray")
+		}
 		if cell.Address == "N19" {
 			found = true
 			if cell.Style.Font.Family != "Arial" || cell.Style.Font.Size != 11 || cell.Style.Alignment.Horizontal != "justify" || reportCellPadding(cell) != 2 {

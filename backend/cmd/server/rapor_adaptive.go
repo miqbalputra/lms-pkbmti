@@ -60,6 +60,7 @@ func reportPageFragment(t reportTemplate, rows []int, values map[string]string, 
 		indices[row] = i + 1
 		f.Rows = append(f.Rows, heights[row-1])
 	}
+	f.signatureRow = indices[t.signatureRow]
 	for _, cell := range t.Cells {
 		col, row, _ := excelize.CellNameToCoordinates(cell.Address)
 		if target, ok := indices[row]; ok {
@@ -100,12 +101,13 @@ func reportRenderAdaptive(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 	t = reportStyledTemplate(t)
 	values := reportValues(d, t.Name)
 	if from == 36 {
+		t = reportSignatureTemplate(p, t, d)
 		t = reportExtraTemplate(p, t, d, values)
 	}
 	grown := reportGrowDescriptions(p, t, values)
 	changed := false
 	if from == 36 {
-		changed = len(t.extraRows) > 0 || !reportExtrasEnabled(d.Config)
+		changed = true // summary includes the semester-specific signature block
 	}
 	for row := from; row <= to; row++ {
 		changed = changed || grown.Rows[row-1] > t.Rows[row-1]+.001
@@ -123,6 +125,10 @@ func reportRenderAdaptive(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 	}
 	blocks := []reportRowBlock{}
 	for row := headerEnd + 1; row <= to; {
+		if from == 36 && row == 51 && d.Scope.Semester != "Genap" {
+			row = 56
+			continue
+		}
 		if from == 36 && row == 43 {
 			if !reportExtrasEnabled(d.Config) {
 				row = 46
@@ -148,9 +154,9 @@ func reportRenderAdaptive(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 			case 46:
 				end = 49
 			case 51:
-				end = 54
+				end = 70
 			case 56:
-				end = 59
+				end = 70
 			case 61:
 				end = 70
 			}
@@ -233,7 +239,7 @@ func reportRenderAdaptive(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 		nextHeader = 0
 		if block.rows[0] <= 41 {
 			nextHeader = 25
-		} else if block.rows[0] == 43 || block.rows[0] > 79 {
+		} else if block.rows[0] > 79 {
 			nextHeader = 43
 		}
 		bt := reportGrowDescriptions(p, t, block.values)

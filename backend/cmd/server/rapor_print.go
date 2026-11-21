@@ -55,6 +55,7 @@ type reportTemplate struct {
 	continuation bool
 	extraRows    []int
 	styled       bool
+	signatureRow int
 }
 
 func reportPDF() *gofpdf.Fpdf {
@@ -310,8 +311,8 @@ func reportRenderTemplate(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 			p.SetFillColor(r, g, b)
 			p.Rect(x, y, w, h, "F")
 		}
-		p.SetDrawColor(0, 0, 0)
-		p.SetLineWidth(.18)
+		p.SetDrawColor(105, 105, 105)
+		p.SetLineWidth(.13)
 		for _, border := range style.Border {
 			if border.Style == 0 {
 				continue
@@ -504,12 +505,8 @@ func reportRenderTemplate(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 		p.MultiCell(687295.0/36000, 5, "Pas Foto\n\n3 x 4", "", "C", false)
 	}
 	if t.Name == "CETAK RAPOR" {
-		if from == 71 && d.Config.PrincipalSignature != "" {
-			if data, ok := signatureImage(d.Config.PrincipalSignature); ok {
-				key := "principal-" + d.Student.ID + "-" + d.Scope.TahunAjaranID + "-" + d.Scope.Semester
-				p.RegisterImageOptionsReader(key, gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(data))
-				p.ImageOptions(key, 91, 27, 25, 22, false, gofpdf.ImageOptions{ImageType: "PNG"}, 0, "")
-			}
+		if t.signatureRow >= from && t.signatureRow <= to {
+			reportDrawSignatures(p, d, ys[t.signatureRow-from], xs[0], xs[len(xs)-1])
 		}
 		semester := "Satu"
 		if d.Scope.Semester == "Genap" {
@@ -568,7 +565,6 @@ func reportSendPDF(c *fiber.Ctx, docs []ReportDocument, kind string) error {
 				}
 			}
 			page += reportRenderAdaptive(p, templates[0], d, 36, 70, page)
-			reportRenderTemplate(p, templates[0], d, 71, 79, page)
 		}
 	}
 	if p.Error() != nil {

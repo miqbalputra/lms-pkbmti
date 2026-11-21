@@ -214,7 +214,8 @@ func TestReportLifecycle(t *testing.T) {
 	}
 	state.Config.Date = "2026-06-01"
 	state.Config.Teacher = "Tutor Rapor"
-	state.Config.Principal = "Kepala PKBM"
+	// Semester one is signed only by the parent and homeroom tutor.
+	state.Config.Principal = ""
 	json.Unmarshal(call("PUT", "/api/rapor-sumatif/config"+qs, fiber.Map{"revision": p.Revision, "config": state.Config}, 200), &p)
 	// A valid manual description may exceed the original print box and must
 	// remain eligible for review, finalisation and publication.
@@ -486,8 +487,8 @@ func TestReportPDFLayout(t *testing.T) {
 		}
 	}
 	pages := regexp.MustCompile(`/Type /Page\b`)
-	if got := len(pages.FindAll(data, -1)); got != 7 {
-		t.Fatalf("padded bundle has %d pages, want 7", got)
+	if got := len(pages.FindAll(data, -1)); got != 6 {
+		t.Fatalf("bundle with combined signatures has %d pages, want 6", got)
 	}
 	for _, name := range []string{"Ilmu Pengetahuan Alam", "Ilmu Pengetahuan Sosial", "Bahasa Inggris", "Proyek Pemberdayaan"} {
 		value := 86.0
@@ -506,8 +507,8 @@ func TestReportPDFLayout(t *testing.T) {
 	}
 	defer res.Body.Close()
 	upper, _ := io.ReadAll(res.Body)
-	if got := len(pages.FindAll(upper, -1)); got != 9 {
-		t.Fatalf("upper class bundle has %d pages, want 9", got)
+	if got := len(pages.FindAll(upper, -1)); got != 8 {
+		t.Fatalf("upper class bundle has %d pages, want 8", got)
 	}
 	if directory := os.Getenv("RAPOR_QA_OUTPUT"); directory != "" {
 		if err = os.WriteFile(filepath.Join(directory, "rapor-upper.pdf"), upper, 0644); err != nil {

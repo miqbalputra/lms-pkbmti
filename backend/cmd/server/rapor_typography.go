@@ -20,6 +20,14 @@ func reportStyledTemplate(t reportTemplate) reportTemplate {
 	t.Cells = append([]reportTemplateCell(nil), t.Cells...)
 	for i := range t.Cells {
 		cell := &t.Cells[i]
+		if cell.Style != nil && cell.Style.Fill.Pattern == 1 && len(cell.Style.Fill.Color) > 0 {
+			r, g, b := reportRGB(cell.Style.Fill.Color[0])
+			if max(r, g, b)-min(r, g, b) <= 12 && min(r, g, b) < 245 {
+				style := *cell.Style
+				style.Fill.Color = []string{"F1F3F5"}
+				cell.Style = &style
+			}
+		}
 		col, row, _ := excelize.CellNameToCoordinates(cell.Address)
 		if cell.role == "" {
 			body := row >= 19 && row <= 24 || row >= 26 && row <= 35 || row >= 38 && row <= 41 || row == 44
@@ -54,6 +62,8 @@ func reportStyledTemplate(t reportTemplate) reportTemplate {
 		if cell.role == "description" {
 			alignment.Vertical = "top"
 			alignment.Horizontal = "justify"
+		} else {
+			alignment.Vertical = "center"
 		}
 		style.Font = &font
 		style.Alignment = &alignment

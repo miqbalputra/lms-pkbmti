@@ -855,7 +855,7 @@ func (s *Server) buildReport(db *gorm.DB, k Kelas, p ReportPeriod, studentID str
 	if len(d.Attendance.Conflicts) > 0 {
 		d.Issues = append(d.Issues, "Konflik presensi pada tanggal yang sama")
 	}
-	if d.Config.Date == "" || d.Config.Teacher == "" || d.Config.Principal == "" {
+	if d.Config.Date == "" || d.Config.Teacher == "" || p.Semester == "Genap" && d.Config.Principal == "" {
 		d.Issues = append(d.Issues, "Lengkapi tanggal dan nama penandatangan")
 	}
 	if p.Semester == "Genap" && (d.Details.Promotion == "" || d.Details.Promotion == "naik" && d.Details.NextClass == "") {

@@ -61,8 +61,16 @@ dikosongkan. Cetak memakai satu baris per kegiatan yang membesar sesuai isi.
 Saat dinonaktifkan, tabel tidak dicetak dan isian lama tetap tersimpan. Data
 semester lama tanpa pengaturan ini tetap dapat dibaca seperti sebelumnya.
 
-Gambar tanda tangan kepala PKBM bersifat opsional dan diunggah pada Pengaturan;
-tanda tangan dari workbook lama tidak digunakan otomatis.
+Semester Ganjil berisi tanda tangan orang tua/wali dan wali kelas berdampingan.
+Semester Genap menambahkan tanda tangan Kepala PKBM sebagai blok tersendiri
+di paling akhir tengah, di bawah keduanya, mengikuti susunan template. Nama Kepala PKBM wajib
+untuk finalisasi semester Genap. Gambar tanda tangannya bersifat opsional,
+diunggah pada Pengaturan, dan hanya dicetak pada lembar rapor semester Genap.
+Tanda tangan dari workbook lama tidak digunakan otomatis. Blok tanda tangan
+dipindahkan bersama bagian penutup bila tidak muat. Format footer tetap sama.
+Nama mapel dan nilai berada di tengah secara vertikal; deskripsi tetap di atas.
+Garis tabel dicetak tipis dengan kepala tabel abu-abu muda. Judul tabel diulang
+di halaman lanjutan dan judul bagian tetap bersama isinya.
 
 Tab **Impor workbook** khusus admin menerima `.xlsm`/`.xlsx` berstruktur referensi.
 Pilih periode tujuan, unggah, cocokkan NIS/NISN dan mapel, lalu konfirmasi.
