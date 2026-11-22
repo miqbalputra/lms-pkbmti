@@ -76,7 +76,7 @@ export function LoginView({ onLogin, requestFn }: LoginProps) {
   }
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-gray-50 p-3 sm:p-4 md:p-8 dark:bg-gray-900">
+    <div data-login-screen className="flex min-h-[100dvh] items-center justify-center bg-gray-50 p-3 sm:p-4 md:p-8 dark:bg-gray-900">
       {/* TailAdmin Centered Auth Split Card */}
       <Card className="grid w-full max-w-5xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-theme-lg sm:rounded-2xl lg:grid-cols-2 dark:border-gray-800 dark:bg-gray-900">
         {/* Left Side: TailAdmin Hero Branding Panel */}
@@ -168,7 +168,7 @@ export function LoginView({ onLogin, requestFn }: LoginProps) {
                 Nama Pengguna / Email
               </label>
               <div className="relative">
-                <Input
+                <Input aria-label={"Nama Pengguna / Email"}
                   type="text"
                   placeholder="Masukkan username atau email"
                   className="w-full h-12 pl-11"

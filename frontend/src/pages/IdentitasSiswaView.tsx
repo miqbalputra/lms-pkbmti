@@ -150,13 +150,13 @@ export function IdentitasSiswaView({ token }: { token: string }) {
         <CardContent className="space-y-4">
           <div className="grid gap-2 md:max-w-xl">
             <Label>Kelas / Rombel</Label>
-            <Select value={kelasId} onChange={(event) => { setKelasId(event.target.value); setResult(null) }} disabled={loading || busy}>
+            <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(event) => { setKelasId(event.target.value); setResult(null) }} disabled={loading || busy}>
               <option value="">Pilih kelas</option>
               {classes.map((row) => <option key={row.id} value={row.id}>{classLabel(row)}</option>)}
             </Select>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <Input id="identitas-siswa-zip" type="file" accept=".zip,application/zip" disabled={busy} onChange={(event) => setFile(event.currentTarget.files?.[0] || null)} className="sm:max-w-md" />
+            <Input aria-label="Berkas ZIP identitas siswa" id="identitas-siswa-zip" type="file" accept=".zip,application/zip" disabled={busy} onChange={(event) => setFile(event.currentTarget.files?.[0] || null)} className="sm:max-w-md" />
             <Button onClick={() => void upload()} disabled={busy || loading}>{busy ? 'Memvalidasi dan menyimpan...' : 'Upload ZIP'}</Button>
           </div>
           <Alert>

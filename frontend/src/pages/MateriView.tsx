@@ -294,19 +294,19 @@ export function MateriView({
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Judul</Label>
-              <Input value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required />
+              <Input aria-label={"Judul"} value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required />
             </div>
             <div className="grid gap-2">
               <Label>Nomor Urut</Label>
-              <Input type="number" min={0} value={form.urutan} onChange={(e) => setForm({ ...form, urutan: e.target.value })} placeholder="0" />
+              <Input aria-label={"Nomor Urut"} type="number" min={0} value={form.urutan} onChange={(e) => setForm({ ...form, urutan: e.target.value })} placeholder="0" />
             </div>
             <div className="grid gap-2">
               <Label>Tanggal</Label>
-              <Input type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} />
+              <Input aria-label={"Tanggal"} type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} />
             </div>
             <div className="grid gap-2">
               <Label>Mata Pelajaran</Label>
-              <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })}>
+              <Select aria-label={"Mata Pelajaran"} value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })}>
                 <option value="">Pilih mapel</option>
                 {mapel.map((m) => (
                   <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>
@@ -315,7 +315,7 @@ export function MateriView({
             </div>
             <div className="grid gap-2">
               <Label>Kelas / Rombel</Label>
-              <Select value={form.kelasId} onChange={(e) => setForm({ ...form, kelasId: e.target.value })} required>
+              <Select aria-label={"Kelas / Rombel"} value={form.kelasId} onChange={(e) => setForm({ ...form, kelasId: e.target.value })} required>
                 <option value="">Pilih kelas</option>
                 {kelasOptions.map((k) => (
                   <option key={k.id} value={k.id}>{kelasLabel(k)}</option>
@@ -324,7 +324,7 @@ export function MateriView({
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Modul Pembelajaran (opsional)</Label>
-              <Select value={form.modulId} onChange={(e) => setForm({ ...form, modulId: e.target.value })}>
+              <Select aria-label={"Modul Pembelajaran (opsional)"} value={form.modulId} onChange={(e) => setForm({ ...form, modulId: e.target.value })}>
                 <option value="">— Tanpa modul —</option>
                 {modul
                   .filter((m) => !form.mapelId || String(m.mapelId || '') === form.mapelId)
@@ -335,7 +335,7 @@ export function MateriView({
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Deskripsi (opsional)</Label>
-              <textarea
+              <textarea aria-label={"Deskripsi (opsional)"}
                 className="flex min-h-[80px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={form.deskripsi}
                 onChange={(e) => setForm({ ...form, deskripsi: e.target.value })}
@@ -343,7 +343,7 @@ export function MateriView({
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Link URL (opsional)</Label>
-              <Input type="url" value={form.linkUrl} onChange={(e) => setForm({ ...form, linkUrl: e.target.value })} placeholder="https://... (Google Drive, YouTube, dll)" />
+              <Input aria-label={"Link URL (opsional)"} type="url" value={form.linkUrl} onChange={(e) => setForm({ ...form, linkUrl: e.target.value })} placeholder="https://... (Google Drive, YouTube, dll)" />
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>File {editing ? '(kosongkan untuk pakai file lama)' : ''}</Label>

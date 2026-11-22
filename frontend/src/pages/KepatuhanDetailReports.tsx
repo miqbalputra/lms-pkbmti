@@ -466,11 +466,11 @@ export function KepatuhanDetailReports({
           <div className="flex flex-wrap items-end justify-end gap-2 sm:max-w-[470px]">
             <div className="grid min-w-[140px] flex-1 gap-1">
               <label className="text-xs font-medium text-muted-foreground">Dari tanggal</label>
-              <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+              <Input aria-label={"Dari tanggal"} type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
             </div>
             <div className="grid min-w-[140px] flex-1 gap-1">
               <label className="text-xs font-medium text-muted-foreground">Sampai tanggal</label>
-              <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+              <Input aria-label={"Sampai tanggal"} type="date" value={to} onChange={(event) => setTo(event.target.value)} />
             </div>
             {kind === 'presensi' && (
               <div className="flex w-full flex-wrap gap-2 sm:justify-end">

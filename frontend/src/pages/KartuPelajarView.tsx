@@ -121,7 +121,7 @@ export function KartuPelajarView({
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs">
         <div className="grid gap-2 sm:max-w-sm">
           <Label>Kelas / Rombel</Label>
-          <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
+          <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
             <option value="">Pilih kelas...</option>
             {kelasOptions.map((k) => (
               <option key={k.id} value={k.id}>{kelasLabel(k)}</option>

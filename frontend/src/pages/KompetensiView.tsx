@@ -21,6 +21,7 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
   const [mapel, setMapel] = useState<Row[]>([])
   const [kelas, setKelas] = useState<Row[]>([])
   const [rows, setRows] = useState<Row[]>([])
+  const [loadError, setLoadError] = useState('')
   const [mapelId, setMapelId] = useState('')
   const [adding, setAdding] = useState(false)
   const [form, setForm] = useState({ ...emptyForm })
@@ -38,8 +39,9 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
   const kelasOptions = kelas
 
   function load() {
+    setLoadError('')
     const q = mapelId ? '?mapelId=' + mapelId : ''
-    void request('/kompetensi' + q, token).then((r: Row[]) => setRows(r || [])).catch(() => setRows([]))
+    void request('/kompetensi' + q, token).then((r: Row[]) => setRows(r || [])).catch(() => { setRows([]); setLoadError('Daftar kompetensi belum dapat dimuat. Periksa koneksi, lalu coba lagi.') })
   }
 
   useEffect(() => {
@@ -164,6 +166,7 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
 
   return (
     <div className="space-y-4">
+      {loadError && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"><p>{loadError}</p><Button variant="outline" onClick={load}>Coba lagi</Button></div>}
       <PageToolbar
         title="Kompetensi & Penugasan Rombel"
         description="Master kompetensi per mapel beserta capaian, dan penugasan kompetensi ke kelas/rombel (untuk input nilai kompetensi)."
@@ -181,7 +184,7 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveKompetensi}>
             <div className="grid gap-2">
               <Label>Mata Pelajaran</Label>
-              <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>
+              <Select aria-label={"Mata Pelajaran"} value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>
                 <option value="">Pilih mapel...</option>
                 {mapel.map((m) => (
                   <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>
@@ -190,7 +193,7 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
             </div>
             <div className="grid gap-2">
               <Label>Nama Kompetensi</Label>
-              <Input value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required />
+              <Input aria-label={"Nama Kompetensi"} value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required />
             </div>
             <div className="flex gap-2 sm:col-span-2">
               <Button type="submit">{editId ? 'Simpan perubahan' : 'Simpan kompetensi'}</Button>
@@ -203,7 +206,7 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs space-y-3">
         <div className="grid gap-2 sm:max-w-sm">
           <Label>Filter Mapel</Label>
-          <Select value={mapelId} onChange={(e) => setMapelId(e.target.value)}>
+          <Select aria-label={"Filter Mapel"} value={mapelId} onChange={(e) => setMapelId(e.target.value)}>
             <option value="">Semua mapel</option>
             {mapel.map((m) => (
               <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>
@@ -212,7 +215,7 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
         </div>
         <div className="grid gap-2 sm:max-w-sm">
           <Label>Filter / Penugasan Kelas</Label>
-          <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
+          <Select aria-label={"Filter / Penugasan Kelas"} value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
             <option value="">— Tanpa filter kelas —</option>
             {kelasOptions.map((k) => (
               <option key={k.id} value={k.id}>Kelas {String(k.jenjang ?? '')}{String(k.namaRombel ?? '')}</option>
@@ -324,11 +327,11 @@ export function KompetensiView({ token, user, readOnly }: { token: string; user:
                             <div className="grid gap-2 sm:grid-cols-[120px_1fr_auto] items-end">
                               <div className="grid gap-1">
                                 <Label className="text-xs">Kode</Label>
-                                <Input value={f.kode} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), kode: e.target.value } }))} />
+                                <Input aria-label={"Kode"} value={f.kode} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), kode: e.target.value } }))} />
                               </div>
                               <div className="grid gap-1">
                                 <Label className="text-xs">Deskripsi</Label>
-                                <Input value={f.deskripsi} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), deskripsi: e.target.value } }))} />
+                                <Input aria-label={"Deskripsi"} value={f.deskripsi} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), deskripsi: e.target.value } }))} />
                               </div>
                               <div className="flex gap-1">
                                 <Button size="sm" onClick={() => saveOutcome(r.id)}>{ocEdit[r.id] ? 'Simpan' : '+ Capaian'}</Button>

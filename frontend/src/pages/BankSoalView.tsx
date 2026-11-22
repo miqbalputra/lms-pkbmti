@@ -299,7 +299,7 @@ export function BankSoalView({
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
             <div className="grid gap-2">
               <Label>Mata Pelajaran</Label>
-              <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })}>
+              <Select aria-label={"Mata Pelajaran"} value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })}>
                 <option value="">Pilih mapel</option>
                 {mapel.map((m) => (
                   <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>
@@ -342,7 +342,7 @@ export function BankSoalView({
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Pertanyaan</Label>
-              <textarea
+              <textarea aria-label={"Pertanyaan"}
                 className="flex min-h-[80px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={form.pertanyaan}
                 onChange={(e) => setForm({ ...form, pertanyaan: e.target.value })}
@@ -382,7 +382,7 @@ export function BankSoalView({
             ) : null}
             {!visualMode && ['pg', 'dropdown', 'true_false'].includes(form.tipe) ? <div className="grid gap-2">
               <Label>Jawaban benar</Label>
-                <Select value={String(Math.min(Number(form.kunci), Math.max(0, form.opsi.length - 1)))} onChange={(e) => setForm({ ...form, kunci: e.target.value })}>
+                <Select aria-label={"Jawaban benar"} value={String(Math.min(Number(form.kunci), Math.max(0, form.opsi.length - 1)))} onChange={(e) => setForm({ ...form, kunci: e.target.value })}>
                   {(form.tipe === 'true_false' ? ['Benar', 'Salah'] : form.opsi).map((option, i) => (
                     <option key={i} value={i}>{String.fromCharCode(65 + i)} · {option || `Opsi ${i + 1}`}</option>
                   ))}
@@ -394,7 +394,7 @@ export function BankSoalView({
             </div> : null}
             {!visualMode && (form.tipe === 'short_answer' || form.tipe === 'essay') ? <div className="grid gap-2 sm:col-span-2">
               <Label>{form.tipe === 'short_answer' ? 'Jawaban yang diterima (satu per baris)' : 'Rubrik / panduan penilaian untuk guru'}</Label>
-              <textarea className="flex min-h-[96px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={form.kunci} onChange={(e) => setForm({ ...form, kunci: e.target.value })} placeholder={form.tipe === 'short_answer' ? 'contoh: 2,5\n2.5' : 'Tuliskan aspek jawaban yang perlu diperhatikan saat menilai'} />
+              <textarea aria-label={form.tipe === 'short_answer' ? 'Jawaban yang diterima (satu per baris)' : 'Rubrik / panduan penilaian untuk guru'} className="flex min-h-[96px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={form.kunci} onChange={(e) => setForm({ ...form, kunci: e.target.value })} placeholder={form.tipe === 'short_answer' ? 'contoh: 2,5\n2.5' : 'Tuliskan aspek jawaban yang perlu diperhatikan saat menilai'} />
               <p className="text-xs text-muted-foreground">{form.tipe === 'short_answer' ? 'Jawaban dinilai otomatis setelah dinormalisasi.' : 'Jawaban uraian akan masuk antrean penilaian guru.'}</p>
             </div> : null}
             {visualMode && <div className="grid gap-4 sm:col-span-2 lg:grid-cols-2">
@@ -412,7 +412,7 @@ export function BankSoalView({
             <div className="sm:col-span-2"><BankStimulusEditor items={form.stimulus} onChange={(stimulus) => setForm((current) => ({ ...current, stimulus }))} /></div>
             <div className="grid gap-2">
               <Label>Poin</Label>
-              <Input type="number" min="0" step="0.25" value={form.poin} onChange={(e) => setForm({ ...form, poin: e.target.value })} />
+              <Input aria-label={"Poin"} type="number" min="0" step="0.25" value={form.poin} onChange={(e) => setForm({ ...form, poin: e.target.value })} />
             </div>
             <div className="flex gap-2 sm:col-span-2">
               <Button type="submit" disabled={submitting}>{submitting ? 'Menyimpan...' : editing ? 'Simpan perubahan' : 'Simpan soal'}</Button>

@@ -105,7 +105,7 @@ export function PengaturanNilai({ token }: { token: string }) {
         <CardContent className="space-y-5">
           <div className="grid gap-2">
             <Label className="text-xs font-bold">Mata Pelajaran</Label>
-            <Select value={mapelId} onChange={(e) => setMapelId(e.target.value)}>
+            <Select aria-label={"Mata Pelajaran"} value={mapelId} onChange={(e) => setMapelId(e.target.value)}>
               <option value="">Pilih mata pelajaran</option>
               {mapels.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -120,7 +120,7 @@ export function PengaturanNilai({ token }: { token: string }) {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>Bobot Keterampilan (%)</Label>
-                  <Input
+                  <Input aria-label={"Bobot Keterampilan (%)"}
                     type="number"
                     min={0}
                     max={100}
@@ -132,7 +132,7 @@ export function PengaturanNilai({ token }: { token: string }) {
                 </div>
                 <div className="grid gap-2">
                   <Label>Bobot Pengetahuan (%)</Label>
-                  <Input
+                  <Input aria-label={"Bobot Pengetahuan (%)"}
                     type="number"
                     min={0}
                     max={100}

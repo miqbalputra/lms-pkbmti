@@ -244,7 +244,7 @@ export function RppView({
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1">
           <Label className="text-xs">Jenjang</Label>
-          <Select value={filter.jenjang} onChange={(e) => setFilter({ ...filter, jenjang: e.target.value })} className="w-40">
+          <Select aria-label={"Jenjang"} value={filter.jenjang} onChange={(e) => setFilter({ ...filter, jenjang: e.target.value })} className="w-40">
             <option value="">Semua jenjang</option>
             {options.jenjang.map((n) => (
               <option key={n} value={String(n)}>Kelas {n}</option>
@@ -253,7 +253,7 @@ export function RppView({
         </div>
         <div className="grid gap-1">
           <Label className="text-xs">Mapel</Label>
-          <Select value={filter.mapelId} onChange={(e) => setFilter({ ...filter, mapelId: e.target.value })} className="w-48">
+          <Select aria-label={"Mapel"} value={filter.mapelId} onChange={(e) => setFilter({ ...filter, mapelId: e.target.value })} className="w-48">
             <option value="">Semua mapel</option>
             {options.mapel.map((m) => (
               <option key={m.id} value={m.id}>{m.nama || '-'}</option>
@@ -262,7 +262,7 @@ export function RppView({
         </div>
         <div className="grid gap-1">
           <Label className="text-xs">Tahun Ajaran</Label>
-          <Select value={filter.tahunAjaranId} onChange={(e) => setFilter({ ...filter, tahunAjaranId: e.target.value })} className="w-44">
+          <Select aria-label={"Tahun Ajaran"} value={filter.tahunAjaranId} onChange={(e) => setFilter({ ...filter, tahunAjaranId: e.target.value })} className="w-44">
             <option value="">Semua TA</option>
             {options.tahunAjaran.map((t) => (
               <option key={t.id} value={t.id}>{t.nama || '-'}</option>
@@ -280,7 +280,7 @@ export function RppView({
             {user.role === 'admin' && (
               <div className="grid gap-2 sm:col-span-2">
                 <Label>Tutor penyusun RPP</Label>
-                <Select
+                <Select aria-label={"Tutor penyusun RPP"}
                   value={form.tutorId}
                   onChange={(e) => setForm({ ...form, tutorId: e.target.value })}
                   required={!editing}
@@ -294,11 +294,11 @@ export function RppView({
             )}
             <div className="grid gap-2 sm:col-span-2">
               <Label>Judul / Topik RPP *</Label>
-              <Input value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required placeholder="Mis. RPP Tema 1 — Diriku" />
+              <Input aria-label={"Judul / Topik RPP *"} value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required placeholder="Mis. RPP Tema 1 — Diriku" />
             </div>
             <div className="grid gap-2">
               <Label>Mata Pelajaran *</Label>
-              <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>
+              <Select aria-label={"Mata Pelajaran *"} value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>
                 <option value="">Pilih mapel</option>
                 {options.mapel.map((m) => (
                   <option key={m.id} value={m.id}>{m.nama || '-'}</option>
@@ -307,7 +307,7 @@ export function RppView({
             </div>
             <div className="grid gap-2">
               <Label>Jenjang / Tingkat *</Label>
-              <Select value={form.jenjang} onChange={(e) => setForm({ ...form, jenjang: e.target.value })} required>
+              <Select aria-label={"Jenjang / Tingkat *"} value={form.jenjang} onChange={(e) => setForm({ ...form, jenjang: e.target.value })} required>
                 <option value="">Pilih jenjang</option>
                 {options.jenjang.map((n) => (
                   <option key={n} value={String(n)}>Kelas {n} (semua rombel)</option>
@@ -316,7 +316,7 @@ export function RppView({
             </div>
             <div className="grid gap-2">
               <Label>Tahun Ajaran *</Label>
-              <Select value={form.tahunAjaranId} onChange={(e) => setForm({ ...form, tahunAjaranId: e.target.value })} required>
+              <Select aria-label={"Tahun Ajaran *"} value={form.tahunAjaranId} onChange={(e) => setForm({ ...form, tahunAjaranId: e.target.value })} required>
                 <option value="">Pilih tahun ajaran</option>
                 {options.tahunAjaran.map((t) => (
                   <option key={t.id} value={t.id}>{t.nama || '-'}</option>
@@ -325,7 +325,7 @@ export function RppView({
             </div>
             <div className="grid gap-2">
               <Label>Fase (opsional)</Label>
-              <Select value={form.faseId} onChange={(e) => setForm({ ...form, faseId: e.target.value })}>
+              <Select aria-label={"Fase (opsional)"} value={form.faseId} onChange={(e) => setForm({ ...form, faseId: e.target.value })}>
                 <option value="">— Tanpa fase —</option>
                 {options.fase.map((f) => (
                   <option key={f.id} value={f.id}>{f.kode || ''} — {f.nama || '-'}</option>
@@ -334,19 +334,19 @@ export function RppView({
             </div>
             <div className="grid gap-2">
               <Label>Pertemuan ke- (opsional)</Label>
-              <Input type="number" min={1} value={form.pertemuanKe} onChange={(e) => setForm({ ...form, pertemuanKe: e.target.value })} placeholder="1" />
+              <Input aria-label={"Pertemuan ke- (opsional)"} type="number" min={1} value={form.pertemuanKe} onChange={(e) => setForm({ ...form, pertemuanKe: e.target.value })} placeholder="1" />
             </div>
             <div className="grid gap-2">
               <Label>Tanggal (opsional)</Label>
-              <Input type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} />
+              <Input aria-label={"Tanggal (opsional)"} type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} />
             </div>
             <div className="grid gap-2">
               <Label>Alokasi Waktu (opsional)</Label>
-              <Input value={form.alokasiWaktu} onChange={(e) => setForm({ ...form, alokasiWaktu: e.target.value })} placeholder="2 x 35 menit" />
+              <Input aria-label={"Alokasi Waktu (opsional)"} value={form.alokasiWaktu} onChange={(e) => setForm({ ...form, alokasiWaktu: e.target.value })} placeholder="2 x 35 menit" />
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Deskripsi / Catatan (opsional)</Label>
-              <textarea
+              <textarea aria-label={"Deskripsi / Catatan (opsional)"}
                 className="flex min-h-[80px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={form.deskripsi}
                 onChange={(e) => setForm({ ...form, deskripsi: e.target.value })}

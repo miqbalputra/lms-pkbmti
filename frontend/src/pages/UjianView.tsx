@@ -230,11 +230,11 @@ export function UjianView({
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Judul</Label>
-              <Input value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required />
+              <Input aria-label={"Judul"} value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required />
             </div>
             <div className="grid gap-2">
               <Label>Mata Pelajaran</Label>
-              <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })}>
+              <Select aria-label={"Mata Pelajaran"} value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })}>
                 <option value="">Pilih mapel</option>
                 {mapel.map((m) => (
                   <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>
@@ -243,7 +243,7 @@ export function UjianView({
             </div>
             <div className="grid gap-2">
               <Label>Kelas / Rombel</Label>
-              <Select value={form.kelasId} onChange={(e) => setForm({ ...form, kelasId: e.target.value })} required>
+              <Select aria-label={"Kelas / Rombel"} value={form.kelasId} onChange={(e) => setForm({ ...form, kelasId: e.target.value })} required>
                 <option value="">Pilih kelas</option>
                 {kelasOptions.map((k) => (
                   <option key={k.id} value={k.id}>{kelasLabel(k)}</option>
@@ -252,24 +252,24 @@ export function UjianView({
             </div>
             <div className="grid gap-2">
               <Label>Waktu Mulai</Label>
-              <Input type="datetime-local" value={form.waktuMulai} onChange={(e) => setForm({ ...form, waktuMulai: e.target.value })} />
+              <Input aria-label={"Waktu Mulai"} type="datetime-local" value={form.waktuMulai} onChange={(e) => setForm({ ...form, waktuMulai: e.target.value })} />
             </div>
             <div className="grid gap-2">
               <Label>Waktu Selesai</Label>
-              <Input type="datetime-local" value={form.waktuSelesai} onChange={(e) => setForm({ ...form, waktuSelesai: e.target.value })} />
+              <Input aria-label={"Waktu Selesai"} type="datetime-local" value={form.waktuSelesai} onChange={(e) => setForm({ ...form, waktuSelesai: e.target.value })} />
             </div>
             <div className="grid gap-2">
               <Label>Durasi (menit)</Label>
-              <Input type="number" value={form.durasiMenit} onChange={(e) => setForm({ ...form, durasiMenit: e.target.value })} />
+              <Input aria-label={"Durasi (menit)"} type="number" value={form.durasiMenit} onChange={(e) => setForm({ ...form, durasiMenit: e.target.value })} />
             </div>
             <div className="grid gap-2">
               <Label>Grace Period (menit)</Label>
-              <Input type="number" min="0" value={form.gracePeriodMenit} onChange={(e) => setForm({ ...form, gracePeriodMenit: e.target.value })} />
+              <Input aria-label={"Grace Period (menit)"} type="number" min="0" value={form.gracePeriodMenit} onChange={(e) => setForm({ ...form, gracePeriodMenit: e.target.value })} />
               <p className="text-xs text-muted-foreground">Toleransi setelah durasi habis. Siswa masih bisa mengerjakan & mengirim jawaban selama grace period (default 5 mnt).</p>
             </div>
             <div className="grid gap-2">
               <Label>Batas Tab Switch (0 = tanpa batas)</Label>
-              <Input type="number" min="0" value={form.batasTabSwitch} onChange={(e) => setForm({ ...form, batasTabSwitch: e.target.value })} />
+              <Input aria-label={"Batas Tab Switch (0 = tanpa batas)"} type="number" min="0" value={form.batasTabSwitch} onChange={(e) => setForm({ ...form, batasTabSwitch: e.target.value })} />
               <p className="text-xs text-muted-foreground">Jika terlampaui, ujian otomatis dikunci & dinilai.</p>
             </div>
             <div className="flex items-center gap-2">
@@ -286,7 +286,7 @@ export function UjianView({
             <div className="grid gap-2">
               <Label>Kode Akses Ujian Online (opsional)</Label>
               <div className="flex gap-2">
-                <Input
+                <Input aria-label={"Kode Akses Ujian Online (opsional)"}
                   value={form.aksesKode}
                   onChange={(e) => setForm({ ...form, aksesKode: e.target.value.toUpperCase() })}
                   placeholder="6 digit huruf kapital & angka"

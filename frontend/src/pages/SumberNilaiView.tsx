@@ -136,11 +136,11 @@ export function SumberNilaiView({ token, readOnly }: { token: string; readOnly: 
           <form className="grid gap-4 sm:grid-cols-3" onSubmit={saveSumber}>
             <div className="grid gap-2">
               <Label>Kode</Label>
-              <Input value={form.kode} onChange={(e) => setForm({ ...form, kode: e.target.value })} disabled={!!editId} required />
+              <Input aria-label={"Kode"} value={form.kode} onChange={(e) => setForm({ ...form, kode: e.target.value })} disabled={!!editId} required />
             </div>
             <div className="grid gap-2">
               <Label>Nama</Label>
-              <Input value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required />
+              <Input aria-label={"Nama"} value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} required />
             </div>
             <div className="flex items-end gap-2 pb-1">
               <input
@@ -207,7 +207,7 @@ export function SumberNilaiView({ token, readOnly }: { token: string; readOnly: 
       <Card className="rounded-2xl border border-border bg-card p-5 shadow-2xs space-y-4">
         <div className="grid gap-2 sm:max-w-sm">
           <Label>Bobot per Mapel</Label>
-          <Select value={mapelId} onChange={(e) => { setMapelId(e.target.value); setDraft({}) }}>
+          <Select aria-label={"Bobot per Mapel"} value={mapelId} onChange={(e) => { setMapelId(e.target.value); setDraft({}) }}>
             <option value="">Pilih mapel untuk atur bobot...</option>
             {mapel.map((m) => (
               <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>

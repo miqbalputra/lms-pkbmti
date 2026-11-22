@@ -138,15 +138,15 @@ export function KalenderView({
       {showForm && (
         <FormCard title="Tambah Event Kalender" description="Isi detail event akademik.">
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleCreate}>
-            <div><Label>Judul</Label><Input value={form.judul} onChange={e => setForm({ ...form, judul: e.target.value })} required /></div>
+            <div><Label>Judul</Label><Input aria-label={"Judul"} value={form.judul} onChange={e => setForm({ ...form, judul: e.target.value })} required /></div>
             <div><Label>Tipe</Label>
-              <Select value={form.tipe} onChange={e => setForm({ ...form, tipe: e.target.value, warna: tipeWarna[e.target.value] || '#16a34a' })}>
+              <Select aria-label={"Tipe"} value={form.tipe} onChange={e => setForm({ ...form, tipe: e.target.value, warna: tipeWarna[e.target.value] || '#16a34a' })}>
                 {tipeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </Select>
             </div>
-            <div><Label>Tanggal Mulai</Label><Input type="date" value={form.tanggalMulai} onChange={e => setForm({ ...form, tanggalMulai: e.target.value })} required /></div>
-            <div><Label>Tanggal Selesai (opsional)</Label><Input type="date" value={form.tanggalSelesai} onChange={e => setForm({ ...form, tanggalSelesai: e.target.value })} /></div>
-            <div className="sm:col-span-2"><Label>Deskripsi</Label><Input value={form.deskripsi} onChange={e => setForm({ ...form, deskripsi: e.target.value })} /></div>
+            <div><Label>Tanggal Mulai</Label><Input aria-label={"Tanggal Mulai"} type="date" value={form.tanggalMulai} onChange={e => setForm({ ...form, tanggalMulai: e.target.value })} required /></div>
+            <div><Label>Tanggal Selesai (opsional)</Label><Input aria-label={"Tanggal Selesai (opsional)"} type="date" value={form.tanggalSelesai} onChange={e => setForm({ ...form, tanggalSelesai: e.target.value })} /></div>
+            <div className="sm:col-span-2"><Label>Deskripsi</Label><Input aria-label={"Deskripsi"} value={form.deskripsi} onChange={e => setForm({ ...form, deskripsi: e.target.value })} /></div>
             <div className="flex gap-2 sm:col-span-2">
               <Button type="submit">Simpan</Button>
               <Button variant="outline" type="button" onClick={() => setShowForm(false)}>Batal</Button>
@@ -157,9 +157,9 @@ export function KalenderView({
 
       <Card className="rounded-2xl border border-border bg-card p-6 shadow-2xs">
         <div className="flex items-center justify-between mb-4">
-          <Button variant="outline" size="sm" onClick={prevMonth}><ChevronLeft className="h-4 w-4" /></Button>
+          <Button aria-label="Bulan sebelumnya" variant="outline" size="sm" onClick={prevMonth}><ChevronLeft aria-hidden="true" className="h-4 w-4" /></Button>
           <h2 className="text-lg font-bold text-foreground">{monthName}</h2>
-          <Button variant="outline" size="sm" onClick={nextMonth}><ChevronRight className="h-4 w-4" /></Button>
+          <Button aria-label="Bulan berikutnya" variant="outline" size="sm" onClick={nextMonth}><ChevronRight aria-hidden="true" className="h-4 w-4" /></Button>
         </div>
 
         <div className="grid grid-cols-7 gap-1 mb-1">

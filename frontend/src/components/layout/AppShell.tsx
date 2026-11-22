@@ -4,6 +4,7 @@ import { AppSidebar } from './AppSidebar'
 import { Backdrop } from './Backdrop'
 import { SidebarProvider } from '../../context/SidebarContext'
 import { useSidebar } from '../../context/useSidebar'
+import { PageContext } from './PageContext'
 
 interface User {
   id: string
@@ -47,6 +48,7 @@ function ShellContent({
           onOpenTutorAccount={onOpenTutorAccount}
         />
         <main id="main-content" className="w-full min-w-0 p-3 mx-auto max-w-(--breakpoint-2xl) sm:p-4 md:p-6" tabIndex={-1}>
+          <PageContext role={user.role} />
           {children}
         </main>
       </div>

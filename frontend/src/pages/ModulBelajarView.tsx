@@ -136,7 +136,7 @@ export function ModulBelajarView({ token, readOnly }: { token: string; readOnly:
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs">
         <div className="grid gap-2 sm:max-w-sm">
           <Label>Filter Mapel</Label>
-          <Select value={mapelId} onChange={(e) => setMapelId(e.target.value)}>
+          <Select aria-label={"Filter Mapel"} value={mapelId} onChange={(e) => setMapelId(e.target.value)}>
             <option value="">Semua mapel</option>
             {mapel.map((m) => (
               <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>
@@ -150,7 +150,7 @@ export function ModulBelajarView({ token, readOnly }: { token: string; readOnly:
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveModul}>
             <div className="grid gap-2">
               <Label>Mata Pelajaran</Label>
-              <Select value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>
+              <Select aria-label={"Mata Pelajaran"} value={form.mapelId} onChange={(e) => setForm({ ...form, mapelId: e.target.value })} required>
                 <option value="">Pilih mapel...</option>
                 {mapel.map((m) => (
                   <option key={m.id} value={m.id}>{String(m.namaMapel || '-')}</option>
@@ -159,15 +159,15 @@ export function ModulBelajarView({ token, readOnly }: { token: string; readOnly:
             </div>
             <div className="grid gap-2">
               <Label>Urutan</Label>
-              <Input type="number" min={0} value={form.urutan} onChange={(e) => setForm({ ...form, urutan: Number(e.target.value) })} />
+              <Input aria-label={"Urutan"} type="number" min={0} value={form.urutan} onChange={(e) => setForm({ ...form, urutan: Number(e.target.value) })} />
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Judul Modul</Label>
-              <Input value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required />
+              <Input aria-label={"Judul Modul"} value={form.judul} onChange={(e) => setForm({ ...form, judul: e.target.value })} required />
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Deskripsi</Label>
-              <textarea
+              <textarea aria-label={"Deskripsi"}
                 className="flex min-h-[70px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={form.deskripsi}
                 onChange={(e) => setForm({ ...form, deskripsi: e.target.value })}
@@ -270,11 +270,11 @@ export function ModulBelajarView({ token, readOnly }: { token: string; readOnly:
                             <div className="grid gap-2 sm:grid-cols-[120px_1fr_auto] items-end">
                               <div className="grid gap-1">
                                 <Label className="text-xs">Kode</Label>
-                                <Input value={f.kode} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), kode: e.target.value } }))} />
+                                <Input aria-label={"Kode"} value={f.kode} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), kode: e.target.value } }))} />
                               </div>
                               <div className="grid gap-1">
                                 <Label className="text-xs">Deskripsi</Label>
-                                <Input value={f.deskripsi} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), deskripsi: e.target.value } }))} />
+                                <Input aria-label={"Deskripsi"} value={f.deskripsi} onChange={(e) => setOcForm((o) => ({ ...o, [r.id]: { ...(o[r.id] || emptyOutcome), deskripsi: e.target.value } }))} />
                               </div>
                               <div className="flex gap-1">
                                 <Button size="sm" onClick={() => saveOutcome(r.id)}>{ocEdit[r.id] ? 'Simpan' : '+ Capaian'}</Button>

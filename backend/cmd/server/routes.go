@@ -9076,7 +9076,7 @@ func (s *Server) listKompetensi(c *fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
-		q = q.Where("mapel_id IN ?", s.db.Model(&PenugasanGuruMapel{}).Select("mapel_id").Where("tutor_id = ?", tutorID))
+		q = q.Where("mapel_id IN (?)", s.db.Model(&PenugasanGuruMapel{}).Select("mapel_id").Where("tutor_id = ?", tutorID))
 	}
 	if v := c.Query("mapelId"); v != "" {
 		q = q.Where("mapel_id = ?", v)
@@ -9280,7 +9280,7 @@ func (s *Server) listRombelKompetensi(c *fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
-		q = q.Where("kelas_id IN ?", s.db.Model(&PenugasanGuruMapel{}).Select("kelas_id").Where("tutor_id = ?", tutorID))
+		q = q.Where("kelas_id IN (?)", s.db.Model(&PenugasanGuruMapel{}).Select("kelas_id").Where("tutor_id = ?", tutorID))
 		if kelasID := c.Query("kelasId"); kelasID != "" && !s.tutorHasKompetensiKelas(tutorID, kelasID) {
 			return fiber.NewError(403, "kelas bukan bagian dari penugasan tutor")
 		}

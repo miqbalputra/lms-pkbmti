@@ -26,7 +26,7 @@ type Kind = {
   filters: Filter[]
 }
 
-export function LaporanView({ token }: { token: string }) {
+export function LaporanView({ token, role }: { token: string; role: string }) {
   const [kinds, setKinds] = useState<Kind[]>([])
   const [kelas, setKelas] = useState<Row[]>([])
   const [mapel, setMapel] = useState<Row[]>([])
@@ -39,11 +39,19 @@ export function LaporanView({ token }: { token: string }) {
 
   useEffect(() => {
     void request('/laporan/jenis', token).then((r: Kind[]) => setKinds(r || [])).catch(() => setKinds([]))
-    void request('/kelas', token).then((r: Row[]) => setKelas(r || [])).catch(() => setKelas([]))
+    void request('/kelas', token).then((r: Row[]) => {
+      setKelas(r || [])
+      if (role === 'guru') {
+        const years = (r || []).map(k => k.tahunAjaran as Row | undefined).filter((v): v is Row => !!v?.id)
+        setTahun([...new Map(years.map(v => [v.id, v])).values()])
+      }
+    }).catch(() => setKelas([]))
     void request('/mapel', token).then((r: Row[]) => setMapel(r || [])).catch(() => setMapel([]))
-    void request('/tahun-ajaran', token).then((r: Row[]) => setTahun(r || [])).catch(() => setTahun([]))
-    void request('/pokjar', token).then((r: Row[]) => setPokjar(r || [])).catch(() => setPokjar([]))
-  }, [token])
+    if (role !== 'guru') {
+      void request('/tahun-ajaran', token).then((r: Row[]) => setTahun(r || [])).catch(() => setTahun([]))
+      void request('/pokjar', token).then((r: Row[]) => setPokjar(r || [])).catch(() => setPokjar([]))
+    }
+  }, [token, role])
 
   const kind = kinds.find((k) => k.jenis === selectedJenis)
 
@@ -95,6 +103,7 @@ export function LaporanView({ token }: { token: string }) {
 
   function renderFilter(f: Filter) {
     const common = {
+      'aria-label': f.label,
       value: values[f.key] || '',
       onChange: (e: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>) =>
         setValues((v) => ({ ...v, [f.key]: e.target.value })),
@@ -158,11 +167,12 @@ export function LaporanView({ token }: { token: string }) {
         title="Pusat Laporan"
         description="Agregator ekspor laporan (nilai, presensi, peminjaman buku, peserta didik per pokjar). Pilih jenis → isi filter → unduh."
       />
+      {role === 'guru' && kelas.length === 0 && <p role="status" className="rounded-lg border border-border bg-card p-3 text-sm">Belum ada kelas wali untuk akun ini. Laporan per kelas tersedia setelah admin menetapkan Anda sebagai wali kelas.</p>}
 
       <Card className="rounded-2xl border border-border bg-card p-5 shadow-2xs space-y-4">
         <div className="grid gap-2 sm:max-w-md">
           <Label>Jenis Laporan</Label>
-          <Select value={selectedJenis} onChange={(e) => selectJenis(e.target.value)}>
+          <Select aria-label={"Jenis Laporan"} value={selectedJenis} onChange={(e) => selectJenis(e.target.value)}>
             <option value="">Pilih jenis laporan...</option>
             {kinds.map((k) => (
               <option key={k.jenis} value={k.jenis}>{k.nama}</option>

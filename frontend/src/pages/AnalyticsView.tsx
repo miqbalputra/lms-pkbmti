@@ -100,6 +100,7 @@ export function AnalyticsView({ token }: { token: string }) {
             <div className="flex items-center gap-2 bg-card border border-border rounded-xl px-3 py-2">
               <Filter className="h-4 w-4 text-muted-foreground" />
               <select
+                aria-label="Semester analitik"
                 value={semester}
                 onChange={(e) => setSemester(e.target.value)}
                 className="bg-transparent text-sm border-none outline-none text-foreground cursor-pointer"
@@ -109,6 +110,7 @@ export function AnalyticsView({ token }: { token: string }) {
                 ))}
               </select>
               <select
+                aria-label="Tahun analitik"
                 value={year}
                 onChange={(e) => setYear(Number(e.target.value))}
                 className="bg-transparent text-sm border-none outline-none text-foreground cursor-pointer"

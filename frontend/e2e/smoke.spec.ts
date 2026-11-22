@@ -18,7 +18,7 @@ async function login(page: Page, username: string, password: string) {
 
 test('admin dapat masuk dan membuka dashboard Backup R2', async ({ page }) => {
   await login(page, 'admin', process.env.E2E_ADMIN_PASSWORD || 'CiAdminPassword2026!')
-  await page.getByRole('button', { name: 'Backup & Restore', exact: true }).click()
+  await page.getByRole('link', { name: 'Backup & Restore', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Backup & Restore' })).toBeVisible()
   await expect(page.getByText('Backup Penuh Cloudflare R2', { exact: true })).toBeVisible()
 })

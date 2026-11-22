@@ -137,7 +137,7 @@ function LegacyNilai({ token, readOnly }: { token: string; readOnly: boolean }) 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="grid gap-2">
               <Label className="text-xs font-bold">Kelas / Rombel</Label>
-              <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
+              <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
                 <option value="">Pilih kelas</option>
                 {kelasOptions.map((k) => (
                   <option key={k.kelasId} value={k.kelasId}>{k.kelasLabel}</option>
@@ -146,7 +146,7 @@ function LegacyNilai({ token, readOnly }: { token: string; readOnly: boolean }) 
             </div>
             <div className="grid gap-2">
               <Label className="text-xs font-bold">Mata Pelajaran</Label>
-              <Select value={mapelId} disabled={!kelasId} onChange={(e) => setMapelId(e.target.value)}>
+              <Select aria-label={"Mata Pelajaran"} value={mapelId} disabled={!kelasId} onChange={(e) => setMapelId(e.target.value)}>
                 <option value="">Pilih mapel</option>
                 {mapelOptions.map((m) => (
                   <option key={m.mapelId} value={m.mapelId}>{m.mapelNama}</option>
@@ -155,7 +155,7 @@ function LegacyNilai({ token, readOnly }: { token: string; readOnly: boolean }) 
             </div>
             <div className="grid gap-2">
               <Label className="text-xs font-bold">Semester</Label>
-              <Select value={semester} onChange={(e) => setSemester(e.target.value)}>
+              <Select aria-label={"Semester"} value={semester} onChange={(e) => setSemester(e.target.value)}>
                 {SEMESTER.map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
@@ -163,7 +163,7 @@ function LegacyNilai({ token, readOnly }: { token: string; readOnly: boolean }) 
             </div>
             <div className="grid gap-2">
               <Label className="text-xs font-bold">Tahun Ajaran</Label>
-              <Input value={tahunNama} disabled placeholder="Tahun ajaran kelas" />
+              <Input aria-label={"Tahun Ajaran"} value={tahunNama} disabled placeholder="Tahun ajaran kelas" />
             </div>
           </div>
         </CardContent>
@@ -463,16 +463,16 @@ function TemaFormDialog({
         <form onSubmit={submit} className="space-y-4 mt-2">
           <div className="grid gap-2">
             <Label className="text-xs font-bold">Nama Tema</Label>
-            <Input value={namaTema} onChange={(e) => setNamaTema(e.target.value)} required placeholder="Contoh: Tema 1 - Lingkunganku" />
+            <Input aria-label={"Nama Tema"} value={namaTema} onChange={(e) => setNamaTema(e.target.value)} required placeholder="Contoh: Tema 1 - Lingkunganku" />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-2">
               <Label className="text-xs font-bold">Urutan</Label>
-              <Input type="number" min={1} value={urutan} onChange={(e) => setUrutan(Number(e.target.value))} required />
+              <Input aria-label={"Urutan"} type="number" min={1} value={urutan} onChange={(e) => setUrutan(Number(e.target.value))} required />
             </div>
             <div className="grid gap-2">
               <Label className="text-xs font-bold">Jumlah CP</Label>
-              <Input type="number" min={1} max={10} value={jumlahCp} onChange={(e) => setJumlahCp(Math.max(1, Number(e.target.value)))} required />
+              <Input aria-label={"Jumlah CP"} type="number" min={1} max={10} value={jumlahCp} onChange={(e) => setJumlahCp(Math.max(1, Number(e.target.value)))} required />
             </div>
           </div>
           <div className="space-y-2">
@@ -496,11 +496,11 @@ function TemaFormDialog({
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1">
                   <Label className="text-[11px]">Bobot Keterampilan (%)</Label>
-                  <Input type="number" min={0} max={100} value={bobotK} onChange={(e) => setBobotK(Number(e.target.value))} />
+                  <Input aria-label={"Bobot Keterampilan (%)"} type="number" min={0} max={100} value={bobotK} onChange={(e) => setBobotK(Number(e.target.value))} />
                 </div>
                 <div className="grid gap-1">
                   <Label className="text-[11px]">Bobot Pengetahuan (%)</Label>
-                  <Input type="number" min={0} max={100} value={bobotP} onChange={(e) => setBobotP(Number(e.target.value))} />
+                  <Input aria-label={"Bobot Pengetahuan (%)"} type="number" min={0} max={100} value={bobotP} onChange={(e) => setBobotP(Number(e.target.value))} />
                 </div>
                 {!bobotValid && <p className="col-span-2 text-xs text-destructive font-medium">Total bobot harus 100 (saat ini {bobotK + bobotP}).</p>}
               </div>

@@ -99,7 +99,7 @@ export function PerilakuView({
       <Card className="rounded-2xl border border-border bg-card p-4 shadow-2xs">
         <div className="grid gap-2 sm:max-w-sm">
           <Label>Kelas / Rombel</Label>
-          <Select value={kelasId} onChange={(e) => { setKelasId(e.target.value); setForm({ ...emptyForm, kelasId: e.target.value }) }}>
+          <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(e) => { setKelasId(e.target.value); setForm({ ...emptyForm, kelasId: e.target.value }) }}>
             <option value="">Pilih kelas...</option>
             {kelasOptions.map((k) => (
               <option key={k.id} value={k.id}>{kelasLabel(k)}</option>
@@ -116,7 +116,7 @@ export function PerilakuView({
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
             <div className="grid gap-2">
               <Label>Peserta Didik</Label>
-              <Select value={form.pesertaDidikId} onChange={(e) => setForm({ ...form, pesertaDidikId: e.target.value })} required>
+              <Select aria-label={"Peserta Didik"} value={form.pesertaDidikId} onChange={(e) => setForm({ ...form, pesertaDidikId: e.target.value })} required>
                 <option value="">Pilih peserta didik...</option>
                 {siswa.map((s) => (
                   <option key={s.id} value={s.id}>{String(s.nama || '')} — {String(s.nisn || '-')}</option>
@@ -125,18 +125,18 @@ export function PerilakuView({
             </div>
             <div className="grid gap-2">
               <Label>Tanggal</Label>
-              <Input type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} />
+              <Input aria-label={"Tanggal"} type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} />
             </div>
             <div className="grid gap-2">
               <Label>Kategori</Label>
-              <Select value={form.kategori} onChange={(e) => setForm({ ...form, kategori: e.target.value })}>
+              <Select aria-label={"Kategori"} value={form.kategori} onChange={(e) => setForm({ ...form, kategori: e.target.value })}>
                 <option value="positif">Positif</option>
                 <option value="negatif">Negatif</option>
               </Select>
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Deskripsi</Label>
-              <textarea
+              <textarea aria-label={"Deskripsi"}
                 className="flex min-h-[70px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={form.deskripsi}
                 onChange={(e) => setForm({ ...form, deskripsi: e.target.value })}

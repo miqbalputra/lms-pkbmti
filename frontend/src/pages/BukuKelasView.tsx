@@ -123,7 +123,7 @@ export function BukuKelasView({ token, readOnly }: { token: string; readOnly: bo
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
             <div className="grid gap-2">
               <Label>Kelas / Rombel</Label>
-              <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)} required>
+              <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(e) => setKelasId(e.target.value)} required>
                 <option value="">Pilih kelas</option>
                 {kelas.map((k) => (
                   <option key={k.id} value={k.id}>
@@ -134,7 +134,7 @@ export function BukuKelasView({ token, readOnly }: { token: string; readOnly: bo
             </div>
             <div className="grid gap-2">
               <Label>Buku</Label>
-              <Select value={bukuId} onChange={(e) => setBukuId(e.target.value)} required>
+              <Select aria-label={"Buku"} value={bukuId} onChange={(e) => setBukuId(e.target.value)} required>
                 <option value="">Pilih buku</option>
                 {buku.map((b) => (
                   <option key={b.id} value={b.id}>

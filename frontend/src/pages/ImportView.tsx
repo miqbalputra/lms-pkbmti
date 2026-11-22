@@ -38,7 +38,7 @@ const TIPES = [
 ]
 
 export function ImportView({ token, user }: { token: string; user: User }) {
-  const [tipe, setTipe] = useState('siswa')
+  const [tipe, setTipe] = useState(user.role === 'guru' ? 'nilai-kompetensi' : 'siswa')
   const [kelas, setKelas] = useState<Row[]>([])
   const [kelasId, setKelasId] = useState('')
   const [semester, setSemester] = useState('Ganjil')
@@ -56,6 +56,7 @@ export function ImportView({ token, user }: { token: string; user: User }) {
   const canUseTipe = activeTipe.adminOnly ? user.role === 'admin' : true
 
   function loadLogs() {
+    if (user.role !== 'admin') return
     void request('/import/log', token).then((r: ImportLogRow[]) => setLogs(r || [])).catch(() => setLogs([]))
   }
 
@@ -122,15 +123,16 @@ export function ImportView({ token, user }: { token: string; user: User }) {
     <div className="space-y-4">
       <PageToolbar
         title="Import Terpusat"
-        description="Unduh template Excel, isi, lalu unggah. Baris gagal dilewati & dicatat (partial success); riwayat import tersimpan."
+        description="Unduh template Excel, isi sesuai contoh, lalu unggah. Sistem menampilkan baris yang berhasil dan baris yang perlu diperbaiki."
       />
+      {isGuru && kelasOptions.length === 0 && <p role="status" className="rounded-lg border border-border bg-card p-3 text-sm">Belum ada kelas wali untuk akun ini. Minta admin memeriksa penetapan wali kelas sebelum mengimpor nilai kompetensi.</p>}
 
       <Card className="rounded-2xl border border-border bg-card p-5 shadow-2xs space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="grid gap-2">
             <Label>Tipe Import</Label>
-            <Select value={tipe} onChange={(e) => { setTipe(e.target.value); setResult(null); setFile(null) }}>
-              {TIPES.map((t) => {
+            <Select aria-label={"Tipe Import"} value={tipe} onChange={(e) => { setTipe(e.target.value); setResult(null); setFile(null) }}>
+              {TIPES.filter(t => !t.adminOnly || user.role === 'admin').map((t) => {
                 const disabled = t.adminOnly && user.role !== 'admin'
                 return (
                   <option key={t.tipe} value={t.tipe} disabled={disabled}>
@@ -152,7 +154,7 @@ export function ImportView({ token, user }: { token: string; user: User }) {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label>Kelas / Rombel</Label>
-              <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
+              <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
                 <option value="">Pilih kelas...</option>
                 {kelasOptions.map((k) => (
                   <option key={k.id} value={k.id}>Kelas {String(k.jenjang ?? '')}{String(k.namaRombel ?? '')}</option>
@@ -164,7 +166,7 @@ export function ImportView({ token, user }: { token: string; user: User }) {
             </div>
             <div className="grid gap-2">
               <Label>Semester</Label>
-              <Select value={semester} onChange={(e) => setSemester(e.target.value)}>
+              <Select aria-label={"Semester"} value={semester} onChange={(e) => setSemester(e.target.value)}>
                 <option value="Ganjil">Ganjil</option>
                 <option value="Genap">Genap</option>
               </Select>
@@ -174,7 +176,7 @@ export function ImportView({ token, user }: { token: string; user: User }) {
 
         <div className="grid gap-2">
           <Label>File Excel (.xlsx, maks 5 MB)</Label>
-          <Input type="file" accept=".xlsx" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <Input aria-label={"File Excel (.xlsx, maks 5 MB)"} type="file" accept=".xlsx" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           {tipe === 'siswa-lengkap' && <p className="text-xs text-muted-foreground">Kolom <code>kelas</code> memakai kode gabungan tingkat + rombel, misalnya <strong>1A</strong>, <strong>2B</strong>, atau <strong>6A</strong>. Format <strong>KELAS 1A</strong> juga diterima.</p>}
           {tipe === 'siswa' && <p className="text-xs text-muted-foreground">Template Basic memakai <code>kelas_id</code>, yaitu ID teknis rombel. Untuk input yang lebih mudah dibaca, gunakan template <strong>Peserta Didik Lengkap</strong> dengan kolom <code>kelas</code> seperti 1A atau 6A.</p>}
         </div>
@@ -218,7 +220,7 @@ export function ImportView({ token, user }: { token: string; user: User }) {
         </Card>
       )}
 
-      <Card className="rounded-2xl border border-border bg-card shadow-2xs overflow-hidden">
+      {user.role === 'admin' && <Card className="rounded-2xl border border-border bg-card shadow-2xs overflow-hidden">
         <div className="px-4 py-3 border-b border-border">
           <h3 className="text-base font-bold">Riwayat Import</h3>
         </div>
@@ -249,7 +251,7 @@ export function ImportView({ token, user }: { token: string; user: User }) {
             {!logs.length && <EmptyState colSpan={5} label="Belum ada riwayat import." />}
           </TableBody>
         </Table>
-      </Card>
+      </Card>}
     </div>
   )
 }

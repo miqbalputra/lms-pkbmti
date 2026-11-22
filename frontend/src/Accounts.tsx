@@ -5,7 +5,7 @@ import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
 import { Input } from './components/ui/input'
-import { Label } from './components/ui/label'
+import { FormField } from './components/ui/form-field'
 import { EmptyState, FormCard, PageToolbar } from './components/ui/page'
 import { Select } from './components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
@@ -218,13 +218,14 @@ export function Accounts({ token }: { token: string }) {
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <Button
+                          aria-label={`Ubah akun ${String(u.username)}`}
                           variant="ghost"
                           size="sm"
                           onClick={() => { setEditing(u); setFormRole(String(u.role || 'guru')); setShowForm(true) }}
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => toggle(u)}>
+                        <Button aria-label={`${u.isActive ? 'Nonaktifkan' : 'Aktifkan'} akun ${String(u.username)}`} variant="ghost" size="sm" onClick={() => toggle(u)}>
                           <Power className={`h-3.5 w-3.5 ${u.isActive ? 'text-destructive' : 'text-green-600'}`} />
                         </Button>
                       </div>
@@ -241,12 +242,7 @@ export function Accounts({ token }: { token: string }) {
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-2">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  )
+  return <FormField label={label}>{children}</FormField>
 }
 
 async function request(path: string, token: string, method = 'GET', body?: unknown) {

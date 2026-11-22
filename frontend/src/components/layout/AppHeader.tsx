@@ -32,6 +32,7 @@ import {
 } from '../ui/dropdown-menu'
 import { ThemeToggleButton } from '../common/ThemeToggleButton'
 import { NAV_ITEMS } from './nav'
+import { matchesMenu } from './menu-guide'
 import { useSidebar } from '../../context/useSidebar'
 import { toast } from 'sonner'
 import { apiBase, request } from '../../lib/api'
@@ -87,7 +88,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
   const [searchTerm, setSearchTerm] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const { toggleSidebar, toggleMobileSidebar, isExpanded } = useSidebar()
+  const { toggleSidebar, toggleMobileSidebar, setMobileOpen, isExpanded, isMobileOpen } = useSidebar()
   const { fontScale, highContrast, setFontScale, setHighContrast } = useAccessibility()
   const navigate = useNavigate()
 
@@ -179,23 +180,23 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault()
-        searchInputRef.current?.focus()
-        setIsSearchFocused(true)
+        if (window.innerWidth < 1024) setMobileOpen(true)
+        else { searchInputRef.current?.focus(); setIsSearchFocused(true) }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [setMobileOpen])
 
   const filteredNavItems = NAV_ITEMS.filter(
     (item) =>
       item.roles.includes(user.role) &&
-      (item.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.id.toLowerCase().includes(searchTerm.toLowerCase()))
+      matchesMenu(item, searchTerm)
   )
 
   const handleSelectSearchItem = (pageId: string, label: string) => {
-    go(pageId)
+    if (pageId === 'portal-ortu') window.open('/orangtua', '_blank', 'noopener,noreferrer')
+    else go(pageId)
     setSearchTerm('')
     setIsSearchFocused(false)
     toast.success(`Membuka halaman ${label}`)
@@ -217,7 +218,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
       case 'kepala_sekolah':
         return 'Kepala Sekolah'
       case 'guru':
-        return 'Tutor (Wali Kelas)'
+        return 'Guru / Tutor'
       default:
         return role.toUpperCase()
     }
@@ -240,8 +241,10 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
             {/* Hamburger (mobile = drawer, desktop = collapse) */}
             <button
               onClick={toggleMobileSidebar}
-              className="lg:hidden text-gray-700 dark:text-gray-300"
+              className="flex size-11 items-center justify-center rounded-lg text-gray-700 hover:bg-gray-100 lg:hidden dark:text-gray-300 dark:hover:bg-gray-800"
               aria-label="Buka menu navigasi"
+              aria-expanded={isMobileOpen}
+              aria-controls="primary-navigation"
               title="Buka menu navigasi"
             >
               <svg
@@ -264,6 +267,8 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
               onClick={toggleSidebar}
               className="hidden lg:block text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
               aria-label={isExpanded ? 'Ciutkan sidebar' : 'Lebarkan sidebar'}
+              aria-expanded={isExpanded}
+              aria-controls="primary-navigation"
               title={isExpanded ? 'Ciutkan sidebar' : 'Lebarkan sidebar'}
             >
               <svg
@@ -280,7 +285,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
             </button>
 
             {/* Search */}
-            <div className="relative hidden lg:block">
+            <div data-menu-search className="relative hidden lg:block" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsSearchFocused(false) }} onKeyDown={e => { if (e.key === 'Escape') setIsSearchFocused(false) }}>
               <div className="relative flex h-11 w-full items-center gap-2.5 rounded-lg border border-gray-200 bg-white px-4 shadow-theme-xs outline-none transition focus-within:border-brand-300 focus-within:ring-3 focus-within:ring-brand-500/10 dark:border-gray-800 dark:bg-gray-900 xl:w-[430px]">
                 <Search className="h-5 w-5 text-gray-400 dark:text-gray-500" />
                 <input
@@ -288,14 +293,14 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
                   type="text"
                   aria-label="Cari menu aplikasi"
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={(e) => { setSearchTerm(e.target.value); setIsSearchFocused(true) }}
                   onFocus={() => setIsSearchFocused(true)}
-                  onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
-                  placeholder="Cari menu atau ketik perintah..."
+                  placeholder="Cari menu, misalnya absen atau rapor..."
+                  onKeyDown={e => { if (e.key === 'Escape') setIsSearchFocused(false) }}
                   className="h-full w-full bg-transparent text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none dark:text-gray-300"
                 />
                 <kbd className="hidden xl:inline-flex h-5 items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1.5 font-mono text-[10px] font-medium text-gray-500 dark:border-gray-800 dark:bg-gray-800 dark:text-gray-400">
-                  ⌘K
+                  Ctrl+K
                 </kbd>
               </div>
 
@@ -318,7 +323,8 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
                           return (
                             <button
                               key={item.id}
-                              onMouseDown={() =>
+                              aria-label={item.label}
+                              onClick={() =>
                                 handleSelectSearchItem(item.id, item.label)
                               }
                               className="flex h-auto w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5"

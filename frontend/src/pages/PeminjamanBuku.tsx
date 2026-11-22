@@ -77,7 +77,7 @@ export function PeminjamanBuku({ token, readOnly, user }: { token: string; readO
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="grid gap-2">
               <Label>Kelas / Rombel</Label>
-              <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
+              <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
                 <option value="">Pilih kelas</option>
                 {kelasList.map((k) => (
                   <option key={k.id} value={k.id}>
@@ -213,7 +213,7 @@ function PinjamForm({
         <div className="grid gap-4 sm:grid-cols-3 border-b border-border/60 py-4">
           <div className="grid gap-2">
             <Label>Tanggal Pinjam</Label>
-            <Input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
+            <Input aria-label={"Tanggal Pinjam"} type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -413,7 +413,7 @@ function KembaliForm({
         <div className="grid gap-4 sm:grid-cols-3 border-b border-border/60 py-4">
           <div className="grid gap-2">
             <Label>Tanggal Kembali</Label>
-            <Input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
+            <Input aria-label={"Tanggal Kembali"} type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
           </div>
         </div>
         <div className="overflow-x-auto">

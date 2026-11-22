@@ -206,7 +206,7 @@ export function DashboardCharts({
             </div>
             <div>
               <CardTitle className="text-base font-bold">Tren Kehadiran & Partisipasi Siswa</CardTitle>
-              <CardDescription className="text-xs">Statistik garis partisipasi belajar mingguan (TailAdmin Line Chart)</CardDescription>
+              <CardDescription className="text-xs">Ringkasan kehadiran dan partisipasi belajar mingguan.</CardDescription>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2 text-xs font-semibold">
@@ -249,7 +249,7 @@ export function DashboardCharts({
               </div>
               <div>
                 <CardTitle className="text-base font-bold">Peserta Didik per Rombel</CardTitle>
-                <CardDescription className="text-xs">Jumlah siswa per rombongan belajar (TailAdmin Bar Chart)</CardDescription>
+                <CardDescription className="text-xs">Bandingkan jumlah siswa pada setiap rombongan belajar.</CardDescription>
               </div>
             </div>
           </CardHeader>

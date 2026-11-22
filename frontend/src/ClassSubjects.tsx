@@ -65,7 +65,7 @@ export function ClassSubjects({ token }: { token: string }) {
           <CardContent>
             <div className="grid gap-2">
               <Label>Rombel</Label>
-              <Select value={selected} onChange={(e) => choose(e.target.value)}>
+              <Select aria-label={"Rombel"} value={selected} onChange={(e) => choose(e.target.value)}>
                 <option value="">Pilih rombel</option>
                 {classes.map((c) => (
                   <option key={c.id} value={c.id}>

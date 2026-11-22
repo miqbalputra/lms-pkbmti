@@ -14,7 +14,7 @@ export function PageToolbar({
     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         {title && <h2 className="text-xl font-extrabold text-foreground tracking-tight sm:text-2xl">{title}</h2>}
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{description}</p>
       </div>
       {actions && <div className="flex w-full flex-wrap items-center gap-2.5 [&>button]:min-w-0 [&>button]:flex-1 sm:w-auto sm:[&>button]:flex-none">{actions}</div>}
     </div>

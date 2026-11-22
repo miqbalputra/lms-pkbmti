@@ -2,6 +2,7 @@ import { createContext } from 'react'
 
 export type SidebarContextType = {
   isExpanded: boolean
+  isMobile: boolean
   isMobileOpen: boolean
   isHovered: boolean
   toggleSidebar: () => void

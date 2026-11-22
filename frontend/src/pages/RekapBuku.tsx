@@ -113,7 +113,7 @@ export function RekapBuku({ token }: { token: string }) {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <div className="grid gap-2">
               <Label>Kelas</Label>
-              <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
+              <Select aria-label={"Kelas"} value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
                 <option value="">Semua kelas</option>
                 {kelas.map((k) => (
                   <option key={k.id} value={k.id}>
@@ -124,7 +124,7 @@ export function RekapBuku({ token }: { token: string }) {
             </div>
             <div className="grid gap-2">
               <Label>Semester</Label>
-              <Select value={semester} onChange={(e) => setSemester(e.target.value)}>
+              <Select aria-label={"Semester"} value={semester} onChange={(e) => setSemester(e.target.value)}>
                 <option value="">Semua semester</option>
                 <option>Ganjil</option>
                 <option>Genap</option>
@@ -132,7 +132,7 @@ export function RekapBuku({ token }: { token: string }) {
             </div>
             <div className="grid gap-2">
               <Label>Tahun Ajaran</Label>
-              <Select value={tahunAjaranId} onChange={(e) => setTahunAjaranId(e.target.value)}>
+              <Select aria-label={"Tahun Ajaran"} value={tahunAjaranId} onChange={(e) => setTahunAjaranId(e.target.value)}>
                 <option value="">Semua tahun ajaran</option>
                 {years.map((y) => (
                   <option key={y.id} value={y.id}>
@@ -143,7 +143,7 @@ export function RekapBuku({ token }: { token: string }) {
             </div>
             <div className="grid gap-2">
               <Label>Status</Label>
-              <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+              <Select aria-label={"Status"} value={status} onChange={(e) => setStatus(e.target.value)}>
                 <option value="">Semua status</option>
                 {STATUS.map((s) => (
                   <option key={s.value} value={s.value}>

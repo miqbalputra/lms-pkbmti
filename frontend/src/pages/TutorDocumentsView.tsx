@@ -170,6 +170,7 @@ export function TutorDocumentsView({ token, role }: { token: string; role: strin
             </CardHeader>
             <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <Input
+                aria-label="PDF SK penugasan bersama"
                 type="file"
                 accept="application/pdf,.pdf"
                 onChange={(event) => setSelectedFiles((previous) => ({ ...previous, shared: event.currentTarget.files?.[0] || null }))}
@@ -202,7 +203,7 @@ export function TutorDocumentsView({ token, role }: { token: string; role: strin
                       <div className="font-semibold text-foreground">{tutor.nama}</div>
                       <div className="text-xs text-muted-foreground">{tutor.skPengangkatanNama || 'Belum ada SK Pengangkatan'}</div>
                     </div>
-                    <Input type="file" accept="application/pdf,.pdf" onChange={(event) => setSelectedFiles((previous) => ({ ...previous, [key]: event.currentTarget.files?.[0] || null }))} className="lg:max-w-sm" />
+                    <Input aria-label={`PDF SK pengangkatan ${tutor.nama}`} type="file" accept="application/pdf,.pdf" onChange={(event) => setSelectedFiles((previous) => ({ ...previous, [key]: event.currentTarget.files?.[0] || null }))} className="lg:max-w-sm" />
                     <Button size="sm" onClick={() => void handleUpload(key, `/tutor/${encodeURIComponent(tutor.id)}/dokumen/sk-pengangkatan`)} disabled={busy === key}>
                       <FileUp className="h-4 w-4" /> {busy === key ? 'Mengunggah...' : 'Simpan'}
                     </Button>

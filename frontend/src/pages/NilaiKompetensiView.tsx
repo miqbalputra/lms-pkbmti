@@ -117,7 +117,7 @@ export function NilaiKompetensiView({ token, user, readOnly }: { token: string; 
         <div className="grid gap-3 sm:grid-cols-2 sm:max-w-xl">
           <div className="grid gap-2">
             <Label>Kelas / Rombel</Label>
-            <Select value={kelasId} onChange={(e) => { setKelasId(e.target.value); setDraft({}) }}>
+            <Select aria-label={"Kelas / Rombel"} value={kelasId} onChange={(e) => { setKelasId(e.target.value); setDraft({}) }}>
               <option value="">Pilih kelas...</option>
               {kelasOptions.map((k) => (
                 <option key={k.id} value={k.id}>{kelasLabel(k)}</option>
@@ -129,7 +129,7 @@ export function NilaiKompetensiView({ token, user, readOnly }: { token: string; 
           </div>
           <div className="grid gap-2">
             <Label>Semester</Label>
-            <Select value={semester} onChange={(e) => { setSemester(e.target.value); setDraft({}) }}>
+            <Select aria-label={"Semester"} value={semester} onChange={(e) => { setSemester(e.target.value); setDraft({}) }}>
               <option value="Ganjil">Ganjil</option>
               <option value="Genap">Genap</option>
             </Select>

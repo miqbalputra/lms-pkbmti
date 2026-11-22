@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -2956,46 +2957,41 @@ func (s *Server) streamNotifikasi(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderConnection, "keep-alive")
 	c.Set("X-Accel-Buffering", "no")
 
-	c.Context().SetBodyStream(nil, -1)
-	w := c.Response().BodyWriter()
-
-	flusher, ok := w.(interface{ Flush() })
-	if !ok {
-		return fiber.NewError(500, "streaming not supported")
-	}
-
-	// Send initial connection event
-	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
-	flusher.Flush()
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	var lastCheck time.Time = time.Now()
-
-	for {
-		select {
-		case <-c.Context().Done():
-			return nil
-		case <-ticker.C:
+	// Fiber contexts are pooled; the asynchronous writer must only retain
+	// independent values, never the request context or its buffers.
+	uid = strings.Clone(uid)
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		lastCheck := time.Now()
+		fmt.Fprint(w, "event: connected\ndata: ok\n\n")
+		if err := w.Flush(); err != nil {
+			return
+		}
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			checkedAt := time.Now()
 			var newNotifs []Notifikasi
-			queryErr := s.db.Where("user_id = ? AND created_at > ?", uid, lastCheck).
+			queryErr := s.db.Where("user_id = ? AND created_at > ? AND created_at <= ?", uid, lastCheck, checkedAt).
 				Order("created_at desc").Find(&newNotifs)
 			if queryErr.Error != nil {
 				operationLog("notification_stream_query_failed", map[string]any{})
 			} else if len(newNotifs) > 0 {
 				data, _ := json.Marshal(notificationItems(newNotifs))
 				fmt.Fprintf(w, "event: notifikasi\ndata: %s\n\n", string(data))
-				flusher.Flush()
 			}
 			// Also send unread count
 			var count int64
 			s.db.Model(&Notifikasi{}).Where("user_id = ? AND is_read = ?", uid, false).Count(&count)
 			fmt.Fprintf(w, "event: unread\ndata: %d\n\n", count)
-			flusher.Flush()
-			lastCheck = time.Now()
+			if err := w.Flush(); err != nil {
+				return
+			}
+			if queryErr.Error == nil {
+				lastCheck = checkedAt
+			}
 		}
-	}
+	})
+	return nil
 }
 
 // ============================================================================

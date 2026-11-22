@@ -31,6 +31,7 @@ export const SidebarProvider: React.FC<{ children: React.ReactNode }> = ({
     <SidebarContext.Provider
       value={{
         isExpanded: isMobile ? false : isExpanded,
+        isMobile,
         isMobileOpen,
         isHovered,
         toggleSidebar,

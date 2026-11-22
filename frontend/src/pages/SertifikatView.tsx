@@ -124,7 +124,7 @@ export function SertifikatView({
           <div className="grid gap-4">
             <div className="grid gap-2">
               <Label>Program (Paket)</Label>
-              <Select value={form.programId} onChange={(e) => setForm({ ...form, programId: e.target.value })}>
+              <Select aria-label={"Program (Paket)"} value={form.programId} onChange={(e) => setForm({ ...form, programId: e.target.value })}>
                 <option value="">Pilih program</option>
                 {program.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -135,7 +135,7 @@ export function SertifikatView({
             </div>
             <div className="grid gap-2">
               <Label>Cari Peserta Didik</Label>
-              <Input
+              <Input aria-label={"Cari Peserta Didik"}
                 value={filterNama}
                 onChange={(e) => setFilterNama(e.target.value)}
                 placeholder="Nama atau NISN..."
@@ -143,7 +143,7 @@ export function SertifikatView({
             </div>
             <div className="grid gap-2">
               <Label>Peserta Didik (Lulus)</Label>
-              <Select
+              <Select aria-label={"Peserta Didik (Lulus)"}
                 value={form.pesertaDidikId}
                 onChange={(e) => setForm({ ...form, pesertaDidikId: e.target.value })}
                 size={Math.min(8, Math.max(3, pilihanSiswa.length))}

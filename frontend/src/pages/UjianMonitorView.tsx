@@ -205,7 +205,7 @@ export function UjianMonitorView({
       <Card className="rounded-2xl border border-border bg-card p-6 shadow-2xs">
         <div className="mb-4">
           <label className="text-sm font-semibold text-foreground">Pilih Ujian</label>
-          <select
+          <select aria-label={"Pilih Ujian"}
             className="mt-1 block w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
             value={selected}
             onChange={(e) => loadMonitor(e.target.value)}

@@ -15,6 +15,8 @@ import { Card, CardContent } from './components/ui/card'
 import { Button } from './components/ui/button'
 import { Toaster } from './components/ui/sonner'
 import { AppShell } from './components/layout/AppShell'
+import { NAV_ITEMS } from './components/layout/nav'
+import { QuickActions } from './components/layout/PageContext'
 import { LoginView } from './pages/Login'
 import { InstallPrompt } from './components/InstallPrompt'
 import { TutorEmailPrompt } from './components/TutorEmailPrompt'
@@ -378,7 +380,9 @@ function Workspace({
   readOnly: boolean
   attendanceReadOnly: boolean
 }) {
-  if (page === 'dashboard') return <Dashboard token={token} />
+  const menuItem = NAV_ITEMS.find(item => item.id === page)
+  if (menuItem && !menuItem.roles.includes(user.role)) return <Restricted />
+  if (page === 'dashboard') return <Dashboard token={token} role={user.role} />
   if (page === 'arsip') return <ArchiveView token={token} />
   if (page === 'kenaikan-kelas') return readOnly ? <Restricted /> : <PromotionWizard token={token} />
   if (page === 'akun') return readOnly ? <Restricted /> : <Accounts token={token} />
@@ -416,7 +420,7 @@ function Workspace({
   if (page === 'modul-belajar') return <ModulBelajarView token={token} readOnly={user.role !== 'admin'} />
   if (page === 'kompetensi') return user.role === 'guru' ? <KompetensiView token={token} user={user} readOnly={false} /> : <Restricted />
   if (page === 'nilai-kompetensi') return <NilaiKompetensiView token={token} user={user} readOnly={user.role === 'kepala_sekolah'} />
-  if (page === 'laporan') return <LaporanView token={token} />
+  if (page === 'laporan') return <LaporanView token={token} role={user.role} />
   if (page === 'import') return user.role === 'admin' || user.role === 'guru' ? <ImportView token={token} user={user} /> : <Restricted />
   if (page === 'dokumen-tutor') return user.role === 'admin' || user.role === 'guru' ? <TutorDocumentsView token={token} role={user.role} /> : <Restricted />
   if (page === 'surat-siswa') return user.role === 'admin' ? <SuratSiswaView token={token} /> : <Restricted />
@@ -430,8 +434,7 @@ function Workspace({
   if (page === 'analytics') return <AnalyticsView token={token} />
   if (page === 'kepatuhan-pembelajaran') return user.role === 'admin' || user.role === 'kepala_sekolah' ? <KepatuhanPembelajaranView token={token} user={user} /> : <Restricted />
   if (page === 'portal-ortu') {
-    window.open('/orangtua', '_blank')
-    return <Navigate to={pathFor('dashboard')} replace />
+    return <Card className="space-y-3 p-5"><h1 className="text-xl font-bold">Portal Orang Tua</h1><p>Halaman masuk orang tua dibuka pada tab baru. Akun staf Anda tetap terbuka di sini.</p><a href="/orangtua" target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center rounded-lg bg-primary px-4 text-primary-foreground">Buka Portal Orang Tua</a></Card>
   }
   return <MasterData resource={page} token={token} readOnly={readOnly} />
 }
@@ -444,7 +447,7 @@ function Restricted() {
   )
 }
 
-function Dashboard({ token }: { token: string }) {
+function Dashboard({ token, role }: { token: string; role: string }) {
   const [data, setData] = useState<Record<string, unknown>>({})
   const [tutorsCount, setTutorsCount] = useState<number>(0)
   const [loading, setLoading] = useState<boolean>(true)
@@ -461,7 +464,7 @@ function Dashboard({ token }: { token: string }) {
         .catch(() => {
           setLoadError('Dashboard belum dapat dimuat. Periksa koneksi, lalu coba lagi.')
         }),
-      request('/tutor', token, 'GET', undefined, ctrl.signal)
+      (role === 'guru' ? Promise.resolve([]) : request('/tutor', token, 'GET', undefined, ctrl.signal))
         .then((res) => {
           if (Array.isArray(res)) setTutorsCount(res.length)
         })
@@ -469,7 +472,7 @@ function Dashboard({ token }: { token: string }) {
     ])
       .finally(() => setLoading(false))
     return () => ctrl.abort()
-  }, [token, reloadKey])
+  }, [token, role, reloadKey])
 
   const upcomingEvents = (data.upcomingEvents as { id: string; judul: string; jenis: string; tanggal_mulai: string; tanggal_selesai: string }[]) || []
   const unreadNotif = Number(data.unreadNotif) || 0
@@ -505,7 +508,7 @@ function Dashboard({ token }: { token: string }) {
       value: upcomingEvents.length,
       icon: CalendarClock,
     },
-  ]
+  ].filter(kpi => role !== 'guru' || kpi.label !== 'Tutor Terdaftar')
 
   const eventColors: Record<string, string> = {
     ujian: 'bg-orange-100 text-orange-700',
@@ -516,6 +519,7 @@ function Dashboard({ token }: { token: string }) {
 
   return (
     <div className="space-y-6">
+      <QuickActions role={role} />
       {loadError && (
         <Alert variant="destructive" className="flex items-center justify-between gap-3">
           <AlertDescription>{loadError}</AlertDescription>

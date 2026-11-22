@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './com
 import { Checkbox } from './components/ui/checkbox'
 import { Input } from './components/ui/input'
 import { Label } from './components/ui/label'
+import { FormField } from './components/ui/form-field'
 import { EmptyState, FormCard, PageToolbar } from './components/ui/page'
 import { Select } from './components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
@@ -465,7 +466,7 @@ function StudentRosterOrder({ token }: { token: string }) {
       <CardContent className="space-y-4 pt-6">
         <div className="grid gap-2 sm:max-w-sm">
           <Label>Rombel wali</Label>
-          <Select value={classID} onChange={(event) => changeClass(event.target.value)} disabled={!classes.length || loading}>
+          <Select aria-label={"Rombel wali"} value={classID} onChange={(event) => changeClass(event.target.value)} disabled={!classes.length || loading}>
             <option value="">Pilih rombel</option>
             {classes.map((row) => (
               <option key={row.id} value={row.id}>
@@ -934,12 +935,7 @@ function Picker({
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-2">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  )
+  return <FormField label={label}>{children}</FormField>
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) {

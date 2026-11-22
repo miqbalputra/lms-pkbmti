@@ -47,7 +47,7 @@ test('kontrol editor soal tutor memiliki nama yang terbaca teknologi bantu', asy
   test.skip(!teacher || !teacherPassword, 'Set E2E_ACCESSIBILITY_TEACHER dan password untuk menjalankan audit aksesibilitas staf.')
   await page.setViewportSize({ width: 1440, height: 900 })
   await login(page, teacher!, teacherPassword!)
-  const workspace = page.getByRole('navigation', { name: 'Menu aplikasi' }).getByRole('button', { name: 'Simulasi & Bank Soal', exact: true })
+  const workspace = page.getByRole('navigation', { name: 'Menu aplikasi' }).getByRole('link', { name: 'Simulasi & Bank Soal', exact: true })
   await expect(workspace).toBeVisible()
   await workspace.click()
   await page.getByRole('tab', { name: 'Soal' }).click()

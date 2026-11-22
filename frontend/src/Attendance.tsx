@@ -21,6 +21,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './com
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from './components/ui/dialog'
 import { Input } from './components/ui/input'
 import { Label } from './components/ui/label'
+import { FormField } from './components/ui/form-field'
 import { Select } from './components/ui/select'
 import { Signature } from './components/ui/Signature'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
@@ -530,9 +531,9 @@ export function AttendanceWorkspace({
             <div className="grid gap-1">
               <Label className="text-xs">Rentang tanggal (opsional)</Label>
               <div className="flex items-center gap-1">
-                <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-auto" />
+                <Input aria-label={"Dari tanggal rekap"} type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-auto" />
                 <span className="text-xs text-muted-foreground">s/d</span>
-                <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-auto" />
+                <Input aria-label={"Sampai tanggal rekap"} type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-auto" />
               </div>
             </div>
             <Button
@@ -850,10 +851,5 @@ export function AttendanceWorkspace({
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-2">
-      <Label className="font-bold text-xs text-foreground">{label}</Label>
-      {children}
-    </div>
-  )
+  return <FormField label={label} labelClassName="font-bold text-xs text-foreground">{children}</FormField>
 }

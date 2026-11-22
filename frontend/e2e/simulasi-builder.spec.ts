@@ -4,7 +4,7 @@ const username = process.env.E2E_SIMULASI_TEACHER
 const password = process.env.E2E_SIMULASI_TEACHER_PASSWORD
 
 async function openSimulasiWorkspace(page: import('@playwright/test').Page) {
-  const workspace = page.getByRole('button', { name: /Simulasi & Bank Soal/i })
+  const workspace = page.getByRole('link', { name: /Simulasi & Bank Soal/i })
   if (await page.evaluate(() => window.innerWidth < 1024)) {
     await page.locator('header button[aria-label="Buka menu navigasi"]').click()
   } else if (!await workspace.isVisible()) {

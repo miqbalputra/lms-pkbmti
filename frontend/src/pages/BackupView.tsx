@@ -81,12 +81,14 @@ export function BackupView({ token }: { token: string }) {
     setLoading(true)
     try {
       const archiveQuery = appendR2 && r2NextPageToken ? `?pageSize=50&pageToken=${encodeURIComponent(r2NextPageToken)}` : '?pageSize=50'
-      const [r, status, archives, jobs] = await Promise.all([
+      const [r, status, jobs] = await Promise.all([
         request('/backup', token) as Promise<{ dir: string; backups: Backup[]; dialect: string }>,
         request('/backup/r2/status', token).catch(() => null) as Promise<R2Status | null>,
-        request('/backup/r2/archives' + archiveQuery, token).catch(() => ({ archives: [], nextPageToken: '' })) as Promise<{ archives: R2Archive[]; nextPageToken?: string }>,
         request('/backup/r2/jobs', token).catch(() => ({ jobs: [] })) as Promise<{ jobs: R2Job[] }>,
       ])
+      const archives: { archives: R2Archive[]; nextPageToken?: string } = status?.enabled && status.configured !== false
+        ? await request('/backup/r2/archives' + archiveQuery, token).catch(() => ({ archives: [], nextPageToken: '' }))
+        : { archives: [], nextPageToken: '' }
       setDir(r.dir || 'backups')
       setBackups(r.backups || [])
       setDialect(r.dialect || 'sqlite')
@@ -399,7 +401,7 @@ export function BackupView({ token }: { token: string }) {
         <form className="flex flex-wrap items-end gap-3" onSubmit={uploadRestore}>
           <div className="grid gap-1.5 flex-1 min-w-[240px]">
             <Label className="text-xs">File backup {isPG ? '(.tar.gz.enc / .sql / .sql.enc)' : '(.tar.gz.enc / .db / .sql / .enc)'}</Label>
-            <input ref={fileRef} type="file" accept={isPG ? '.tar.gz.enc,.sql,.sql.enc' : '.tar.gz.enc,.db,.sql,.db.enc,.sql.enc'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
+            <input aria-label="Berkas cadangan untuk pemulihan" ref={fileRef} type="file" accept={isPG ? '.tar.gz.enc,.sql,.sql.enc' : '.tar.gz.enc,.db,.sql,.db.enc,.sql.enc'} className="text-sm file:mr-3 file:rounded-lg file:border file:border-border file:bg-secondary file:px-3 file:py-1.5 file:text-sm" />
           </div>
           <Button type="submit" disabled={busy === 'restore'}>
             <FileUp className="h-4 w-4" /> {busy === 'restore' ? 'Memproses...' : 'Restore Sekarang'}

@@ -182,7 +182,7 @@ export function PengumumanView({
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Judul</Label>
-              <Input
+              <Input aria-label={"Judul"}
                 value={form.judul}
                 onChange={(e) => setForm({ ...form, judul: e.target.value })}
                 placeholder="Judul pengumuman"
@@ -191,7 +191,7 @@ export function PengumumanView({
             </div>
             <div className="grid gap-2 sm:col-span-2">
               <Label>Isi</Label>
-              <textarea
+              <textarea aria-label={"Isi"}
                 className="flex min-h-[120px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={form.isi}
                 onChange={(e) => setForm({ ...form, isi: e.target.value })}
@@ -200,7 +200,7 @@ export function PengumumanView({
             </div>
             <div className="grid gap-2">
               <Label>Target</Label>
-              <Select
+              <Select aria-label={"Target"}
                 value={form.target}
                 onChange={(e) => setForm({ ...form, target: e.target.value, kelasId: '' })}
                 disabled={isGuru}
@@ -214,7 +214,7 @@ export function PengumumanView({
             </div>
             <div className="grid gap-2">
               <Label>Kelas Target</Label>
-              <Select
+              <Select aria-label={"Kelas Target"}
                 value={form.kelasId}
                 onChange={(e) => setForm({ ...form, kelasId: e.target.value })}
                 disabled={form.target !== 'kelas'}
@@ -230,7 +230,7 @@ export function PengumumanView({
             </div>
             <div className="grid gap-2">
               <Label>Tanggal Mulai (opsional)</Label>
-              <Input
+              <Input aria-label={"Tanggal Mulai (opsional)"}
                 type="date"
                 value={form.tanggalMulai}
                 onChange={(e) => setForm({ ...form, tanggalMulai: e.target.value })}
@@ -238,7 +238,7 @@ export function PengumumanView({
             </div>
             <div className="grid gap-2">
               <Label>Tanggal Selesai (opsional)</Label>
-              <Input
+              <Input aria-label={"Tanggal Selesai (opsional)"}
                 type="date"
                 value={form.tanggalSelesai}
                 onChange={(e) => setForm({ ...form, tanggalSelesai: e.target.value })}

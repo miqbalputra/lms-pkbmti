@@ -73,7 +73,7 @@ export function InstallPrompt() {
     }
 
     const syncSuppression = () => {
-      const shouldSuppress = Boolean(document.querySelector('[data-assessment-workspace]'))
+      const shouldSuppress = Boolean(document.querySelector('[data-assessment-workspace], [data-login-screen]'))
       if (shouldSuppress === suppressedRef.current) return
       suppressedRef.current = shouldSuppress
       if (shouldSuppress) {
@@ -105,7 +105,7 @@ export function InstallPrompt() {
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
     window.addEventListener('appinstalled', handleAppInstalled)
     const workspaceObserver = new MutationObserver(syncSuppression)
-    workspaceObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-assessment-workspace'] })
+    workspaceObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-assessment-workspace', 'data-login-screen'] })
     syncSuppression()
     schedulePopup()
 

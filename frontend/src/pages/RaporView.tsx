@@ -167,7 +167,7 @@ function LegacyRaporView({
         <div className="grid gap-3 sm:grid-cols-4">
           <div className="grid gap-2">
             <Label>Kelas</Label>
-            <Select value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
+            <Select aria-label={"Kelas"} value={kelasId} onChange={(e) => setKelasId(e.target.value)}>
               <option value="">Pilih kelas...</option>
               {kelasOptions.map((k) => (
                 <option key={k.id} value={k.id}>{kelasLabel(k)}</option>
@@ -176,7 +176,7 @@ function LegacyRaporView({
           </div>
           <div className="grid gap-2">
             <Label>Peserta Didik</Label>
-            <Select value={siswaId} onChange={(e) => setSiswaId(e.target.value)} disabled={!kelasId}>
+            <Select aria-label={"Peserta Didik"} value={siswaId} onChange={(e) => setSiswaId(e.target.value)} disabled={!kelasId}>
               <option value="">Pilih peserta didik...</option>
               {siswa.map((s) => (
                 <option key={s.id} value={s.id}>{String(s.nama || '')}</option>
@@ -185,7 +185,7 @@ function LegacyRaporView({
           </div>
           <div className="grid gap-2">
             <Label>Tahun Ajaran</Label>
-            <Select value={tahunId} onChange={(e) => setTahunId(e.target.value)}>
+            <Select aria-label={"Tahun Ajaran"} value={tahunId} onChange={(e) => setTahunId(e.target.value)}>
               <option value="">Aktif</option>
               {tahun.map((t) => (
                 <option key={t.id} value={t.id}>{String(t.namaTahunAjaran || '')}</option>
@@ -194,7 +194,7 @@ function LegacyRaporView({
           </div>
           <div className="grid gap-2">
             <Label>Semester</Label>
-            <Select value={semester} onChange={(e) => setSemester(e.target.value)}>
+            <Select aria-label={"Semester"} value={semester} onChange={(e) => setSemester(e.target.value)}>
               <option value="Ganjil">Ganjil</option>
               <option value="Genap">Genap</option>
             </Select>
@@ -273,7 +273,7 @@ function LegacyRaporView({
             <h3 className="text-base font-bold">Catatan Wali & Kenaikan</h3>
             <div className="grid gap-2">
               <Label>Catatan Wali Kelas</Label>
-              <textarea
+              <textarea aria-label={"Catatan Wali Kelas"}
                 className="flex min-h-[80px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
                 value={catatan}
                 disabled={!canEditCatatan}
@@ -283,7 +283,7 @@ function LegacyRaporView({
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label>Kenaikan Kelas</Label>
-                <Select
+                <Select aria-label={"Kenaikan Kelas"}
                   value={naikKelas === null ? '' : naikKelas ? 'naik' : 'tinggal'}
                   disabled={!canEditCatatan}
                   onChange={(e) => {
@@ -298,7 +298,7 @@ function LegacyRaporView({
               </div>
               <div className="grid gap-2">
                 <Label>Kenaikan Ke (opsional)</Label>
-                <Input
+                <Input aria-label={"Kenaikan Ke (opsional)"}
                   value={kenaikanKe}
                   disabled={!canEditCatatan || naikKelas !== true}
                   onChange={(e) => setKenaikanKe(e.target.value)}

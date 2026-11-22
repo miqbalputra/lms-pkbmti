@@ -45,6 +45,16 @@ func TestKompetensiTutorOptionsAndScope(t *testing.T) {
 		c.Locals("userID", user.ID)
 		return s.kompetensiOptions(c)
 	})
+	app.Get("/kompetensi", func(c *fiber.Ctx) error {
+		c.Locals("role", "guru")
+		c.Locals("userID", user.ID)
+		return s.listKompetensi(c)
+	})
+	app.Get("/rombel-kompetensi", func(c *fiber.Ctx) error {
+		c.Locals("role", "guru")
+		c.Locals("userID", user.ID)
+		return s.listRombelKompetensi(c)
+	})
 	app.Post("/kompetensi", func(c *fiber.Ctx) error {
 		c.Locals("role", "guru")
 		c.Locals("userID", user.ID)
@@ -91,6 +101,43 @@ func TestKompetensiTutorOptionsAndScope(t *testing.T) {
 		t.Fatalf("assigned tutor mapel create returned %d", response.StatusCode)
 	}
 	response.Body.Close()
+
+	var own Kompetensi
+	if err = db.Where("mapel_id = ?", matematika.ID).First(&own).Error; err != nil {
+		t.Fatal(err)
+	}
+	foreign := Kompetensi{MapelID: bahasa.ID, Nama: "Tidak boleh tampil"}
+	if err = db.Create(&foreign).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Create(&RombelKompetensi{KelasID: kelas.ID, KompetensiID: own.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Create(&RombelKompetensi{KelasID: "kelas-lain", KompetensiID: foreign.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{"/kompetensi", "/rombel-kompetensi"} {
+		res, e := app.Test(httptest.NewRequest("GET", route, nil))
+		if e != nil {
+			t.Fatal(e)
+		}
+		var rows []map[string]interface{}
+		if res.StatusCode != 200 {
+			res.Body.Close()
+			t.Fatalf("%s: %d", route, res.StatusCode)
+		}
+		e = json.NewDecoder(res.Body).Decode(&rows)
+		res.Body.Close()
+		if e != nil || len(rows) != 1 {
+			t.Fatalf("%s did not return only assigned data: %v %v", route, rows, e)
+		}
+		if route == "/kompetensi" && rows[0]["id"] != own.ID {
+			t.Fatal("unassigned subject exposed")
+		}
+		if route == "/rombel-kompetensi" && rows[0]["kelasId"] != kelas.ID {
+			t.Fatal("unassigned class exposed")
+		}
+	}
 
 	response, err = app.Test(createRequest(bahasa.ID))
 	if err != nil {
