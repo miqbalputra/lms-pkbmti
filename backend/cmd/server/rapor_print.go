@@ -296,8 +296,8 @@ func reportRenderTemplate(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 		p.SetLineWidth(.25)
 		p.Line(xs[0], y+1.2, xs[len(xs)-1], y+1.2)
 	}
-	// Borders and fills belong to individual cells, including the perimeter of
-	// merged cells. Render them before the merged text layer.
+	// Paint every background before any border. A white spacer cell next to
+	// the attendance box otherwise paints over the preceding cell's edge.
 	for _, cell := range t.Cells {
 		col, row, e := excelize.CellNameToCoordinates(cell.Address)
 		if e != nil || row < from || row > to || col > len(t.Columns) || cell.Style == nil {
@@ -311,6 +311,16 @@ func reportRenderTemplate(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 			p.SetFillColor(r, g, b)
 			p.Rect(x, y, w, h, "F")
 		}
+	}
+	// Borders belong to individual cells, including the merged perimeter.
+	for _, cell := range t.Cells {
+		col, row, e := excelize.CellNameToCoordinates(cell.Address)
+		if e != nil || row < from || row > to || col > len(t.Columns) || cell.Style == nil {
+			continue
+		}
+		x, y := xs[col-1], ys[row-from]
+		w, h := xs[col]-x, ys[row-from+1]-y
+		style := cell.Style
 		p.SetDrawColor(105, 105, 105)
 		p.SetLineWidth(.13)
 		for _, border := range style.Border {
