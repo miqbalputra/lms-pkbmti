@@ -92,6 +92,7 @@ type ReportConfig struct {
 	PrincipalSignature string                `json:"principalSignature,omitempty"`
 	ExtrasEnabled      *bool                 `json:"extrasEnabled,omitempty"`
 	ExtraActivities    []string              `json:"extraActivities,omitempty"`
+	AttendanceMode     string                `json:"attendanceMode,omitempty"`
 }
 type ReportExtra struct {
 	Name        string `json:"name"`
@@ -107,12 +108,13 @@ type ReportAttendance struct {
 	Conflicts []string `json:"conflicts"`
 }
 type ReportDetails struct {
-	Note                 string            `json:"note"`
-	Promotion            string            `json:"promotion"`
-	NextClass            string            `json:"nextClass"`
-	Extras               []ReportExtra     `json:"extras"`
-	HistoricalAttendance *ReportAttendance `json:"historicalAttendance,omitempty"`
-	Identity             map[string]string `json:"identity,omitempty"`
+	Note                 string                  `json:"note"`
+	Promotion            string                  `json:"promotion"`
+	NextClass            string                  `json:"nextClass"`
+	Extras               []ReportExtra           `json:"extras"`
+	HistoricalAttendance *ReportAttendance       `json:"historicalAttendance,omitempty"`
+	ManualAttendance     *ReportAttendanceCounts `json:"manualAttendance,omitempty"`
+	Identity             map[string]string       `json:"identity,omitempty"`
 }
 type ReportSubject struct {
 	ReportSubjectConfig
@@ -124,14 +126,15 @@ type ReportSubject struct {
 	Number   int      `json:"number"`
 }
 type ReportDocument struct {
-	Student    PesertaDidik     `json:"student"`
-	Class      Kelas            `json:"class"`
-	Config     ReportConfig     `json:"config"`
-	Scope      ReportScope      `json:"scope"`
-	Subjects   []ReportSubject  `json:"subjects"`
-	Details    ReportDetails    `json:"details"`
-	Attendance ReportAttendance `json:"attendance"`
-	Issues     []string         `json:"issues"`
+	Student          PesertaDidik     `json:"student"`
+	Class            Kelas            `json:"class"`
+	Config           ReportConfig     `json:"config"`
+	Scope            ReportScope      `json:"scope"`
+	Subjects         []ReportSubject  `json:"subjects"`
+	Details          ReportDetails    `json:"details"`
+	Attendance       ReportAttendance `json:"attendance"`
+	AttendanceSource string           `json:"attendanceSource,omitempty"`
+	Issues           []string         `json:"issues"`
 }
 
 func reportModels() []interface{} {
@@ -141,6 +144,9 @@ func (s *Server) reportRoutes(api fiber.Router) {
 	api.Get("/rapor-sumatif/classes", s.reportClasses)
 	api.Get("/rapor-sumatif/period", s.reportPeriod)
 	api.Put("/rapor-sumatif/config", s.reportSaveConfig)
+	api.Get("/rapor-sumatif/attendance", s.reportAttendanceGrid)
+	api.Put("/rapor-sumatif/attendance", s.reportSaveAttendance)
+	api.Put("/rapor-sumatif/attendance-mode", s.reportSaveAttendanceMode)
 	api.Get("/rapor-sumatif/grid", s.reportGrid)
 	api.Put("/rapor-sumatif/grid", s.reportSaveGrid)
 	api.Get("/rapor-sumatif/document/:studentId", s.reportDocumentHandler)
@@ -440,6 +446,10 @@ func (s *Server) reportSaveConfig(c *fiber.Ctx) error {
 		if e := reportUnlocked(tx, p.ID, ""); e != nil {
 			return e
 		}
+		// Only the dedicated admin endpoint can change the attendance source.
+		var previous ReportConfig
+		reportDecode(p.Config, &previous)
+		in.Config.AttendanceMode = previous.AttendanceMode
 		return tx.Model(&p).Update("config", reportJSON(in.Config)).Error
 	})
 	if err != nil {
@@ -842,12 +852,12 @@ func (s *Server) buildReport(db *gorm.DB, k Kelas, p ReportPeriod, studentID str
 			d.Issues = append(d.Issues, mp.Name+": deskripsi capaian kosong")
 		}
 	}
-	d.Attendance, err = s.reportAttendance(db, k, p, studentID)
+	d.Attendance, d.AttendanceSource, err = s.reportResolveAttendance(db, k, p, studentID, d.Config, d.Details)
 	if err != nil {
 		return d, rec, err
 	}
-	if d.Details.HistoricalAttendance != nil {
-		d.Attendance = *d.Details.HistoricalAttendance
+	if d.AttendanceSource == "manual" && d.Details.ManualAttendance == nil {
+		d.Issues = append(d.Issues, "Lengkapi rekap presensi manual: Sakit, Izin, dan Alpa (isi 0 jika nihil)")
 	}
 	if len(d.Attendance.Conflicts) > 0 {
 		d.Issues = append(d.Issues, "Konflik presensi pada tanggal yang sama")
@@ -937,6 +947,8 @@ func (s *Server) reportSaveDetails(c *fiber.Ctx) error {
 			return fiber.NewError(400, "Aktifkan ekstrakurikuler pada pengaturan kelas sebelum mengubah kegiatannya")
 		}
 		in.Details.HistoricalAttendance = prev.HistoricalAttendance
+		// A note/identity save, including from older clients, must not erase the recap.
+		in.Details.ManualAttendance = prev.ManualAttendance
 		rec.Details = reportJSON(in.Details)
 		rec.Status = "draft"
 		return tx.Save(&rec).Error

@@ -66,6 +66,8 @@ func TestReportBrowserServer(t *testing.T) {
 	user := User{Username: "guru-rapor", Email: "guru.rapor.fixture@gmail.com", PasswordHash: hash, Role: "guru", TutorID: &tutor.ID, IsActive: true}
 	s.db.Create(&user)
 	s.db.Create(&PenugasanGuruMapel{TutorID: tutor.ID, KelasID: k.ID, MapelID: mp.ID})
+	wali := User{Username: "wali-rapor", Email: "wali.rapor.fixture@gmail.com", PasswordHash: hash, Role: "guru", TutorID: k.WaliKelasID, IsActive: true}
+	s.db.Create(&wali)
 	app.Static("/", "../../../frontend/dist")
 	app.Get("/*", func(c *fiber.Ctx) error { return c.SendFile("../../../frontend/dist/index.html") })
 	if err := app.Listen("127.0.0.1:19089"); err != nil {
