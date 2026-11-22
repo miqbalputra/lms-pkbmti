@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pkbmti-lms-v5';
+const CACHE_NAME = 'pkbmti-lms-v6';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -28,6 +28,8 @@ self.addEventListener('fetch', (e) => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
+  // Do not retain mutable third-party scripts or old external font responses.
+  if (url.origin !== self.location.origin) return;
 
   if (url.pathname.startsWith('/api/')) {
     e.respondWith(fetch(request));
