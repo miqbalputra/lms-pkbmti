@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test'
 
+test.beforeEach(async ({ request, context }) => {
+  test.skip(process.env.E2E_RAPOR_ISOLATED !== '1', 'Requires the in-memory report browser harness.')
+  expect(await (await request.get('/__report-audit')).json()).toMatchObject({ isolated: true, storage: 'memory' })
+  await context.addInitScript(() => localStorage.setItem('pkbmti-lms-install-prompt:last-dismissed-at', String(Date.now())))
+})
+
 test('alur sumatif CP sampai rapor terbit dan PDF kelas', async ({ page }) => {
   test.skip(process.env.E2E_RAPOR_ISOLATED !== '1', 'Jalankan dengan harness TestReportBrowserServer yang memakai database terisolasi.')
   await page.goto('/')

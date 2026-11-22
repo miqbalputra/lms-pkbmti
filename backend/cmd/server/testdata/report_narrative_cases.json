@@ -1,0 +1,67 @@
+[
+  {
+    "name": "no scores",
+    "labels": ["Membaca", "Menulis"], "values": [null, null],
+    "strength": "", "growth": ""
+  },
+  {
+    "name": "single CP with internal list",
+    "labels": ["Memahami huruf, suku kata, dan kata."], "values": [80],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal memahami huruf, suku kata, dan kata.",
+    "growth": ""
+  },
+  {
+    "name": "two CP",
+    "labels": ["Membaca teks, kalimat, dan cerita", "Menulis kalimat tentang Indonesia"], "values": [92, 63],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal membaca teks, kalimat, dan cerita.",
+    "growth": "Perlu peningkatan dalam hal menulis kalimat tentang Indonesia."
+  },
+  {
+    "name": "three CP",
+    "labels": ["Mengenal bilangan", "Membaca puisi", "Menulis kata"], "values": [80, 60, 95],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal menulis kata.",
+    "growth": "Perlu peningkatan dalam hal membaca puisi."
+  },
+  {
+    "name": "four CP with many internal commas still selects one each",
+    "labels": ["Mengenal huruf, suku kata, dan kata", "Membaca teks, kalimat, dan cerita", "Menulis huruf, kata, dan kalimat", "Mengenal angka, bilangan, dan penjumlahan"], "values": [90, 80, 70, 60],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal mengenal huruf, suku kata, dan kata.",
+    "growth": "Perlu peningkatan dalam hal mengenal angka, bilangan, dan penjumlahan."
+  },
+  {
+    "name": "five CP selects two each",
+    "labels": ["Membaca huruf, suku kata, dan kata", "Menulis kalimat", "Mengenal bilangan", "Menceritakan pengalaman di Indonesia", "Menggambar benda"], "values": [100, 70, 90, 60, 80],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal membaca huruf, suku kata, dan kata serta mengenal bilangan.",
+    "growth": "Perlu peningkatan dalam hal menceritakan pengalaman di Indonesia serta menulis kalimat."
+  },
+  {
+    "name": "six CP zero is a filled score",
+    "labels": ["Mengenal bilangan", "Membaca teks", "Menulis kalimat", "Menceritakan pengalaman", "Mengukur panjang", "Menggambar benda"], "values": [70, 100, 0, 90, 60, 80],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal membaca teks serta menceritakan pengalaman.",
+    "growth": "Perlu peningkatan dalam hal menulis kalimat serta mengukur panjang."
+  },
+  {
+    "name": "ties use CP order without selecting the same entry twice",
+    "labels": ["Membaca teks", "Menulis kalimat", "Mengenal bilangan", "Menceritakan pengalaman", "Menggambar benda"], "values": [90, 90, 90, 90, 90],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal membaca teks serta menulis kalimat.",
+    "growth": "Perlu peningkatan dalam hal mengenal bilangan serta menceritakan pengalaman."
+  },
+  {
+    "name": "only scored CP affect the threshold",
+    "labels": ["Membaca teks", "Menulis kalimat", "Mengenal bilangan", "Menceritakan pengalaman", "Menggambar benda", "Mengukur panjang"], "values": [90, null, null, 70, null, null],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal membaca teks.",
+    "growth": "Perlu peningkatan dalam hal menceritakan pengalaman."
+  },
+  {
+    "name": "blank CP is not a filled description",
+    "labels": ["   ", "Membaca teks", "Menulis kalimat", "Mengenal bilangan", "Menggambar benda"], "values": [100, 90, 80, 70, 60],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal membaca teks.",
+    "growth": "Perlu peningkatan dalam hal menggambar benda."
+  },
+  {
+    "name": "proper names punctuation and Unicode retained",
+    "labels": ["  Évaluasi bacaan tentang Indonesia.  ", "Memahami Q.S. Al-Fatihah."], "values": [95, 60],
+    "strength": "Ananda menunjukkan penguasaan yang baik dalam hal évaluasi bacaan tentang Indonesia.",
+    "growth": "Perlu peningkatan dalam hal memahami Q.S. Al-Fatihah."
+  }
+]

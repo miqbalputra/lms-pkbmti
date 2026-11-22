@@ -31,7 +31,7 @@ func TestReportCalculation(t *testing.T) {
 	if value == nil || *value != 71 || !complete {
 		t.Fatalf("calculation: %v complete %v", value, complete)
 	}
-	if !strings.Contains(a, "CP4, CP2 dan CP3") || !strings.Contains(b, "CP0, CP1 dan CP5") {
+	if a != reportStrengthOpening+"cP4 serta cP2." || b != reportGrowthOpening+"cP0 serta cP1." {
 		t.Fatalf("ranking: %q / %q", a, b)
 	}
 	_, _, b, complete = reportCalculate(cps[:2], scores[:1])
@@ -57,6 +57,9 @@ func TestReportBrowserServer(t *testing.T) {
 		t.Skip("browser harness is opt-in")
 	}
 	s, app, _, k, _, mp := reportFixture(t)
+	app.Get("/__report-audit", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"isolated": true, "storage": "memory"})
+	})
 	tutor := Tutor{Nama: "Tutor Mapel Rapor"}
 	s.db.Create(&tutor)
 	hash, _ := bcryptHash("Guru12345")

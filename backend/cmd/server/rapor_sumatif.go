@@ -345,65 +345,20 @@ func reportCalculate(cps []ReportCP, scores []ReportScore) (*float64, string, st
 	for _, v := range scores {
 		values[v.CPID] = v.Value
 	}
-	type item struct {
-		label string
-		value float64
-		order int
-	}
-	ranked := []item{}
+	count := 0
 	sum := 0.0
-	for i, cp := range cps {
+	for _, cp := range cps {
 		if v := values[cp.ID]; v != nil {
-			ranked = append(ranked, item{cp.Label, *v, i})
+			count++
 			sum += *v
 		}
 	}
-	if len(ranked) == 0 {
+	if count == 0 {
 		return nil, "", "", false
 	}
-	avg := math.Round(sum / float64(len(ranked)))
-	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].value > ranked[j].value })
-	strong := []string{}
-	selected := map[string]bool{}
-	for _, v := range ranked {
-		key := strings.ToLower(strings.TrimSpace(v.label))
-		if len(strong) < 3 && !selected[key] {
-			strong = append(strong, v.label)
-			selected[key] = true
-		}
-	}
-	rest := []item{}
-	for _, v := range ranked {
-		if !selected[strings.ToLower(strings.TrimSpace(v.label))] {
-			rest = append(rest, v)
-		}
-	}
-	sort.SliceStable(rest, func(i, j int) bool {
-		if rest[i].value == rest[j].value {
-			return rest[i].order < rest[j].order
-		}
-		return rest[i].value < rest[j].value
-	})
-	growth := []string{}
-	for _, v := range rest {
-		key := strings.ToLower(strings.TrimSpace(v.label))
-		if len(growth) < 3 && !selected[key] {
-			growth = append(growth, v.label)
-			selected[key] = true
-		}
-	}
-	join := func(v []string) string {
-		if len(v) < 2 {
-			return strings.Join(v, "")
-		}
-		return strings.Join(v[:len(v)-1], ", ") + " dan " + v[len(v)-1]
-	}
-	a := "Ananda menunjukkan penguasaan yang sangat baik dalam hal " + join(strong) + "."
-	b := ""
-	if len(growth) > 0 {
-		b = "Perlu bimbingan dan pendampingan lebih lanjut dalam hal " + join(growth) + "."
-	}
-	return &avg, a, b, len(ranked) == len(cps)
+	avg := math.Round(sum / float64(count))
+	a, b := reportAutomaticNarrative(cps, scores)
+	return &avg, a, b, count == len(cps)
 }
 func (s *Server) reportPeriod(c *fiber.Ctx) error {
 	k, p, err := s.reportScope(c, false)
@@ -526,6 +481,40 @@ func (s *Server) reportGrid(c *fiber.Ctx) error {
 		if err = s.db.Where("period_id = ? AND mapel_id = ?", p.ID, mp).Find(&narratives).Error; err != nil {
 			return err
 		}
+		// Final reports may have used an automatic description without a saved
+		// ReportNarrative. Display their frozen text, never regenerate it using
+		// today's rules. This modifies only the response, not stored data.
+		frozen := []ReportRecord{}
+		if err = s.db.Where("period_id = ? AND status IN ? AND snapshot <> ?", p.ID, []string{"final", "published"}, "").Find(&frozen).Error; err != nil {
+			return err
+		}
+		for _, record := range frozen {
+			var document ReportDocument
+			if err = json.Unmarshal([]byte(record.Snapshot), &document); err != nil {
+				return err
+			}
+			narrative := ReportNarrative{PeriodID: p.ID, StudentID: record.StudentID, MapelID: mp, ReviewedRevision: p.Revision}
+			for _, subject := range document.Subjects {
+				if subject.MapelID == mp {
+					narrative.Strength, narrative.Growth = subject.Strength, subject.Growth
+					break
+				}
+			}
+			index := len(narratives)
+			for i, saved := range narratives {
+				if saved.StudentID == record.StudentID {
+					index = i
+					break
+				}
+			}
+			if index == len(narratives) {
+				narratives = append(narratives, narrative)
+			} else {
+				narratives[index].Strength = narrative.Strength
+				narratives[index].Growth = narrative.Growth
+				narratives[index].ReviewedRevision = narrative.ReviewedRevision
+			}
+		}
 	}
 	roster, err := s.reportRoster(s.db, k)
 	if err != nil {
@@ -602,6 +591,7 @@ func (s *Server) reportSaveGrid(c *fiber.Ctx) error {
 		seen := map[string]bool{}
 		for i := range in.CPs {
 			cp := &in.CPs[i]
+			originalLabel := cp.Label
 			cp.Label = strings.TrimSpace(cp.Label)
 			if cp.Label == "" || len([]rune(cp.Label)) > 500 {
 				return fiber.NewError(400, "Label CP wajib diisi (maksimal 500 karakter)")
@@ -611,11 +601,18 @@ func (s *Server) reportSaveGrid(c *fiber.Ctx) error {
 				if !ok || seen[cp.ID] {
 					return fiber.NewError(400, "ID CP tidak valid")
 				}
+				// An unchanged historical label must survive a score-only save.
+				if prev.Label == originalLabel {
+					cp.Label = prev.Label
+				} else {
+					cp.Label = reportLowercaseCPStart(cp.Label)
+				}
 				if prev.Label != cp.Label || prev.Urutan != i+1 {
 					changed = true
 				}
 			}
 			if cp.ID == "" {
+				cp.Label = reportLowercaseCPStart(cp.Label)
 				changed = true
 			}
 			seen[cp.ID] = true
