@@ -1360,7 +1360,7 @@ func main() {
 			}
 			c.Set("Content-Security-Policy", productionContentSecurityPolicyWithFrameAncestors(cspNonce, frameAncestors))
 		}
-		if strings.HasPrefix(c.Path(), "/api") || c.Path() == "/health" {
+		if strings.HasPrefix(c.Path(), "/api") || c.Path() == "/health" || c.Path() == "/sw.js" {
 			c.Set("Cache-Control", "no-store")
 		}
 		if cfg.Env == "production" {
