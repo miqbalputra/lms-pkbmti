@@ -5,6 +5,8 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend ./
+# Validate public-page asset references against the files bundled below.
+COPY backend/cmd/server/main.go backend/cmd/server/ortu_portal_page.go backend/cmd/server/ujian_online_page.go /app/backend/cmd/server/
 RUN npm run build
 
 FROM golang:1.25-alpine AS backend-build

@@ -1,0 +1,2 @@
+# Vendor checksums and browser integrity require byte-identical distributions.
+frontend/public/vendor/** -text

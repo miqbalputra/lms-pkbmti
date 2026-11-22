@@ -101,6 +101,32 @@ Panduan lengkap konfigurasi, endpoint, pengujian, dan restore tersedia di [BACKU
 2. Add your domain (e.g., `lms.example.com`)
 3. Enable SSL (Let's Encrypt or your own certificate)
 
+### HTTPS, TLS, dan aset lokal
+
+Untuk domain yang diproksi Cloudflare, pengaturan TLS publik ada di Cloudflare,
+bukan di container Go. Pada **SSL/TLS → Edge Certificates**, aktifkan
+**Always Use HTTPS**, pilih **Minimum TLS Version: TLS 1.2**, dan pertahankan
+**TLS 1.3** aktif. Pengaturan ini berlaku pada seluruh zona domain, termasuk
+subdomain. HTTP harus mengembalikan `301` dengan tujuan HTTPS; TLS 1.0 dan 1.1
+harus ditolak pada handshake, sementara TLS 1.2 dan 1.3 tetap berhasil.
+
+Pastikan HTTPS tidak mengalami redirect loop. Jangan menambahkan redirect di
+aplikasi hanya berdasarkan koneksi internal HTTP antara proxy dan container.
+Untuk pemasangan Nginx langsung, `deploy/nginx.conf` menyertakan redirect dan
+`ssl_protocols TLSv1.2 TLSv1.3` pada konteks `http`; sesuaikan sertifikat/domain
+dan jalankan `nginx -t` sebelum reload. Pengaturan Nginx origin tidak menggantikan
+pengaturan TLS di Cloudflare.
+
+Outfit, Inter, dan Chart.js disertakan di `frontend/public/vendor`, lengkap dengan
+versi, lisensi, dan checksum. Build menolak aset yang berubah tanpa pembaruan
+manifest serta referensi Google Fonts/CDN yang diperkenalkan kembali. Docker
+menyalin aset ke `/app/public`; jangan menghapus folder `vendor` atau `fonts.css`
+dari hasil build. CSP hanya mengizinkan font lokal. Turnstile tetap menggunakan
+endpoint resmi Cloudflare yang dinamis.
+
+Perubahan HTTPS/TLS dan aset ini tidak memerlukan migrasi database, impor,
+penggantian volume, pemulihan backup, atau perubahan kredensial pengguna.
+
 ## CBT mandiri dan cutover asesmen
 
 CBT dipasang sebagai aplikasi dan PostgreSQL **terpisah** dari LMS, dari

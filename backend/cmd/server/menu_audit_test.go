@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 // An opt-in browser harness: no connection to the application's data database,
@@ -66,12 +67,22 @@ func TestMenuAuditServer(t *testing.T) {
 	inner.Static("/", staticDir)
 	inner.Get("/*", func(c *fiber.Ctx) error { return c.SendFile(filepath.Join(staticDir, "index.html")) })
 	app := fiber.New(fiber.Config{ErrorHandler: apiError})
+	productionCSP := os.Getenv("MENU_AUDIT_PRODUCTION_CSP") == "1"
+	if productionCSP {
+		app.Use(func(c *fiber.Ctx) error {
+			nonce := uuid.NewString()
+			c.Locals("cspNonce", nonce)
+			c.Set("Content-Security-Policy", productionContentSecurityPolicy(nonce))
+			return c.Next()
+		})
+	}
 	app.Get("/orangtua", s.serveOrangTuaPortalPage)
+	app.Get("/__menu-audit/exam", s.serveUjianOnlinePage)
 	app.Get("/api/backup", s.backupReadAuth, s.listBackupsHandler)
 	app.Get("/api/notifikasi/stream-ticket", s.auth, s.issueNotificationStreamTicket)
 	app.Get("/api/notifikasi/stream", s.streamNotifikasi)
 	app.Get("/__menu-audit", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"isolated": true, "storage": "temporary", "writes": "blocked", "classId": k.ID})
+		return c.JSON(fiber.Map{"isolated": true, "storage": "temporary", "writes": "blocked", "classId": k.ID, "productionCSP": productionCSP})
 	})
 	app.Use(func(c *fiber.Ctx) error {
 		if c.Method() != fiber.MethodGet && c.Method() != fiber.MethodHead && c.Method() != fiber.MethodOptions && c.Path() != "/api/auth/login" && c.Path() != "/api/auth/refresh" && c.Path() != "/api/auth/logout" {

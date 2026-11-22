@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "generate:pwa-icons": "node scripts/generate-pwa-icons.mjs",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/check-local-assets.mjs && tsc -b && vite build",
     "lint": "oxlint",
     "test:e2e": "playwright test",
     "preview": "vite preview"

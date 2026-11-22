@@ -12,21 +12,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="PKBMTI LMS" />
     <link rel="apple-touch-icon" href="/pkbmti-lms-book-192.png" />
-    <!-- TailAdmin font: Outfit -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap" rel="stylesheet">
+    <!-- Fonts are bundled locally; no third-party stylesheet is executed. -->
+    <link href="/fonts.css?v=1" rel="stylesheet">
     <!-- Anti-FOUC: apply persisted theme before paint so no light flash on dark reload -->
-    <script>
-      (function () {
-        try {
-          var t = localStorage.getItem('theme');
-          if (t === 'dark') {
-            document.documentElement.classList.add('dark');
-          }
-        } catch (e) {}
-      })();
-    </script>
+    <script src="/theme-init.js"></script>
   </head>
   <body class="bg-gray-50 text-gray-900 antialiased">
     <div id="root"></div>

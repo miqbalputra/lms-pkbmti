@@ -35,9 +35,9 @@ var ortuPortalHTML = `<!DOCTYPE html>
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#ffffff">
 <title>Portal Orang Tua — PKBM Tunas Ilmu</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="/fonts.css?v=1" rel="stylesheet">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="/vendor/chart.js-4.5.1/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
 <style nonce="{{CSP_NONCE}}">
 :root{
   --background:#ffffff;--foreground:#0a0a0a;

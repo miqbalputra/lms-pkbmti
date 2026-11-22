@@ -1,0 +1,16 @@
+/* Variable fonts, bundled under the SIL Open Font License (see vendor/). */
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/outfit-5.3.0/outfit-latin-wght-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/inter-5.3.0/inter-latin-wght-normal.woff2') format('woff2');
+}

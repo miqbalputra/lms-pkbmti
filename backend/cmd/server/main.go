@@ -1575,7 +1575,11 @@ func productionContentSecurityPolicyWithFrameAncestors(cspNonce, frameAncestors 
 	if strings.TrimSpace(frameAncestors) == "" {
 		frameAncestors = "'none'"
 	}
-	return "default-src 'self'; base-uri 'self'; frame-ancestors " + frameAncestors + "; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-" + cspNonce + "' https://challenges.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-" + cspNonce + "' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' blob: https://challenges.cloudflare.com"
+	// Sonner inserts an empty style element, then its fixed bundled stylesheet.
+	// Authorize those exact contents instead of enabling arbitrary inline CSS.
+	// The frontend build checks the stylesheet hash against the installed package.
+	const notificationStyles = " 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=' 'sha256-CIxDM5jnsGiKqXs2v7NKCY5MzdR9gu6TtiMJrDw29AY='"
+	return "default-src 'self'; base-uri 'self'; frame-ancestors " + frameAncestors + "; form-action 'self'; object-src 'none'; script-src 'self' 'nonce-" + cspNonce + "' https://challenges.cloudflare.com; style-src 'self' 'nonce-" + cspNonce + "'" + notificationStyles + "; style-src-attr 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com; frame-src 'self' blob: https://challenges.cloudflare.com"
 }
 
 func validateConfig(cfg Config) error {

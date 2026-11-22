@@ -35,7 +35,7 @@ var ujianOnlineHTML = `<!DOCTYPE html>
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#1c5d94">
 <title>Ujian Online — PKBM Tunas Ilmu</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="/fonts.css?v=1" rel="stylesheet">
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <style nonce="{{CSP_NONCE}}">
 :root{
