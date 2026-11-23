@@ -132,8 +132,16 @@ func reportValues(d ReportDocument, name string) map[string]string {
 			if d.Details.Promotion == "naik" {
 				decision = "NAIK KELAS ke " + d.Details.NextClass
 			}
+			if d.Details.Promotion == "lulus" {
+				decision = "LULUS"
+			} else if d.Details.Promotion == "belum_lulus" {
+				decision = "BELUM LULUS"
+			}
 			if d.Details.Promotion != "" {
 				v["A52"] = "Berdasarkan Laporan Hasil Belajar (Rapor) Kelas " + reportClassName(d.Class.Jenjang) + " Fase " + d.Config.Phase + " Semester 1 (Satu) dan Semester 2 (Dua) Kurikulum Merdeka, maka peserta didik " + d.Student.Nama + " dinyatakan " + decision + "."
+				if d.Class.Jenjang == 6 && (d.Details.Promotion == "lulus" || d.Details.Promotion == "belum_lulus") {
+					v["A52"] = "Berdasarkan pertimbangan kelulusan peserta didik dan Laporan Hasil belajar (Rapor) Fase A, B, C, serta hasil Ujian Pendidikan Kesetaraan (UPK) PKBM Tunas Ilmu, maka peserta didik " + d.Student.Nama + " dinyatakan " + decision + " dari Program Kesetaraan Paket A PKBM Tunas Ilmu."
+				}
 			}
 		}
 		if len(d.Details.Extras) > 0 {

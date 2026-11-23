@@ -14,6 +14,7 @@ type ClassRow = { id: string; jenjang: number; namaRombel: string; tahunAjaranId
 type Subject = { mapelId: string; name: string; group: string }
 type Config = { subjects: Subject[]; program: string; phase: string; city: string; date: string; teacher: string; teacherNip: string; principal: string; principalNip: string; principalSignature?: string; extrasEnabled?: boolean; extraActivities?: string[]; attendanceMode?: string }
 type Period = { id: string; revision: number }
+type PromotionRules = { completion: boolean; nextClass: string; validGrade: boolean }
 type CP = { id: string; label: string; urutan: number }
 type Score = { cpId: string; studentId: string; value: number | null }
 type Narrative = { studentId: string; strength: string; growth: string; reviewedRevision?: number }
@@ -47,6 +48,8 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   const [doc, setDoc] = useState<ReportDocument | null>(null)
   const [record, setRecord] = useState<RecordRow | null>(null)
   const [details, setDetails] = useState<Details>(emptyDetails)
+  const [promotionRules, setPromotionRules] = useState<PromotionRules | null>(null)
+  const [promotionEdited, setPromotionEdited] = useState(false)
   const [tab, setTab] = useState(nilaiOnly ? 'nilai' : 'rapor')
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -85,16 +88,19 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   async function refreshPeriod() {
     const data = await request('/rapor-sumatif/period?' + qs, token)
     setPeriod(data.period); setConfig(data.config); setStudents(data.students); setRecords(data.records)
+    setPromotionRules(data.promotionRules)
     setCanManage(data.canManage); setCanInput(data.canInput); setIsAdmin(data.isAdmin)
     return data
   }
   useEffect(() => {
     const current = ++generation.current
     setConfig(null); setDoc(null); setCPs([]); setScores([]); setNarratives([]); setMapelId(''); setStudentId(''); setDirty(false); setImportData(null); setLedger([])
+    setPromotionRules(null); setPromotionEdited(false)
     if (!kelasId) return
     void request('/rapor-sumatif/period?' + qs, token).then(data => {
       if (current !== generation.current) return
       setPeriod(data.period); setConfig(data.config); setStudents(data.students); setRecords(data.records)
+      setPromotionRules(data.promotionRules)
       setCanManage(data.canManage); setCanInput(data.canInput); setIsAdmin(data.isAdmin)
     }).catch(e => { if (current === generation.current) toast.error(e.message) })
   }, [kelasId, semester, year, token]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -119,6 +125,7 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     if (!studentId) return
     const data = await request('/rapor-sumatif/document/' + studentId + '?' + qs, token)
     setDoc(data.document); setRecord(data.record); setPeriod(data.period); setDetails({ ...emptyDetails, ...data.document.details, extras: data.document.details.extras || [] })
+    setPromotionEdited(false)
   }
   useEffect(() => {
     let cancelled = false
@@ -127,6 +134,7 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     void request('/rapor-sumatif/document/' + studentId + '?' + qs, token).then(data => {
       if (cancelled) return
       setDoc(data.document); setRecord(data.record); setPeriod(data.period); setDetails({ ...emptyDetails, ...data.document.details, extras: data.document.details.extras || [] })
+      setPromotionEdited(false)
     }).catch(e => { if (!cancelled) toast.error(e.message) })
     return () => { cancelled = true }
   }, [studentId, qs, token, canManage, readOnly])
@@ -242,7 +250,17 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
             <p className="text-xs text-muted-foreground">Sumber presensi: {['final', 'published'].includes(record?.status || '') ? 'versi rapor yang sudah dibekukan' : doc.attendanceSource === 'manual' ? 'rekap manual dari catatan kertas' : doc.attendanceSource === 'historical' ? 'rekap historis hasil impor Excel' : 'otomatis dari presensi aplikasi'}. {doc.attendanceSource === 'manual' && canManage && !locked(studentId) && <Button size="sm" variant="outline" disabled={busy || dirty} onClick={() => setTab('presensi')}>Isi / periksa rekap presensi</Button>}</p>
             <fieldset disabled={!canManage || busy || isArchived || locked(studentId)} className="space-y-3"><Label>Catatan wali kelas</Label><textarea aria-label="Catatan wali kelas" className={textClass} value={details.note} onChange={e => { setDetails({ ...details, note: e.target.value }); setDirty(true) }} />
               <details className="rounded-lg border p-3"><summary className="cursor-pointer font-medium">Identitas untuk lembar cetak</summary><p className="my-2 text-xs text-muted-foreground">Nama, NIS, dan NISN mengikuti master peserta didik. Data pelengkap disimpan pada rapor semester ini.</p><div className="grid gap-3 sm:grid-cols-2">{[['birthPlace', 'Tempat lahir'], ['birthDate', 'Tanggal lahir'], ['religion', 'Agama'], ['phone', 'Telepon'], ['address', 'Alamat'], ['father', 'Nama ayah'], ['mother', 'Nama ibu'], ['fatherJob', 'Pekerjaan ayah'], ['motherJob', 'Pekerjaan ibu'], ['guardian', 'Nama wali'], ['guardianJob', 'Pekerjaan wali'], ['admissionClass', 'Kelas saat diterima'], ['admissionYear', 'Tahun masuk'], ['admissionStatus', 'Status saat diterima']].map(([key, label]) => <div key={key}><Label>{label}</Label><Input aria-label={label} type={key === 'birthDate' ? 'date' : 'text'} value={details.identity?.[key] || ''} onChange={e => { setDetails({ ...details, identity: { ...details.identity, [key]: e.target.value } }); setDirty(true) }} /></div>)}</div></details>
-              {semester === 'Genap' && <div className="grid gap-3 sm:grid-cols-2"><div><Label>Keputusan kenaikan</Label><Select aria-label={"Keputusan kenaikan"} value={details.promotion} onChange={e => { setDetails({ ...details, promotion: e.target.value }); setDirty(true) }}><option value="">Belum ditentukan</option><option value="naik">Naik kelas</option><option value="tinggal">Tinggal kelas</option></Select></div><div><Label>Naik ke kelas</Label><Input aria-label={"Naik ke kelas"} value={details.nextClass} placeholder="II (Dua)" onChange={e => { setDetails({ ...details, nextClass: e.target.value }); setDirty(true) }} /></div></div>}
+              {semester === 'Genap' && promotionRules && <div className="space-y-3 rounded-lg border p-4">
+                <div><Label>{promotionRules.completion ? 'Keputusan kelulusan' : 'Keputusan kenaikan'}</Label><Select aria-label={promotionRules.completion ? 'Keputusan kelulusan' : 'Keputusan kenaikan'} value={details.promotion} disabled={!promotionRules.validGrade} onChange={e => { setDetails({ ...details, promotion: e.target.value, nextClass: e.target.value === 'naik' ? promotionRules.nextClass : '' }); setPromotionEdited(true); setDirty(true) }}>
+                  <option value="">Belum ditentukan</option>
+                  {promotionRules.completion ? <><option value="lulus">Lulus</option><option value="belum_lulus">Belum lulus</option>{['naik', 'tinggal'].includes(details.promotion) && <option value={details.promotion} disabled>{details.promotion === 'naik' ? 'Naik kelas' : 'Tinggal kelas'} (keputusan lama)</option>}</> : <><option value="naik">Naik kelas</option><option value="tinggal">Tinggal kelas</option>{['lulus', 'belum_lulus'].includes(details.promotion) && <option value={details.promotion} disabled>{details.promotion === 'lulus' ? 'Lulus' : 'Belum lulus'} (keputusan lama)</option>}</>}
+                </Select></div>
+                {!promotionRules.validGrade ? <p className="text-sm text-amber-700">Jenjang kelas belum valid. Hubungi admin untuk memeriksa data kelas.</p> : promotionRules.completion ? <p className="text-sm text-muted-foreground">Kelas 6, 9, dan 12 merupakan kelas akhir program. Pilih keputusan kelulusan sesuai hasil penetapan; tidak ada kelas tujuan kenaikan otomatis.</p> : <p className="text-sm text-muted-foreground">Cukup pilih keputusan. Jika naik kelas, kelas tujuan terisi otomatis berdasarkan kelas pada rapor ini.</p>}
+                {details.promotion === 'naik' && <div className="rounded-lg bg-muted/50 p-3 text-sm"><span>{promotionRules.completion ? 'Kelas tujuan pada isian lama' : 'Naik ke kelas'}: </span><output aria-label="Kelas tujuan kenaikan" className="font-semibold">{details.nextClass || promotionRules.nextClass || '—'}</output>
+                  {!promotionRules.completion && details.nextClass && details.nextClass !== promotionRules.nextClass && !locked(studentId) && <div className="mt-2 space-y-2"><p className="text-muted-foreground">Tujuan lama tetap tersimpan. Kelas tujuan otomatis untuk rapor ini adalah {promotionRules.nextClass}.</p><Button size="sm" variant="outline" onClick={() => { setDetails({ ...details, nextClass: promotionRules.nextClass }); setPromotionEdited(true); setDirty(true) }}>Gunakan kelas tujuan otomatis</Button></div>}
+                </div>}
+                {promotionRules.completion && ['naik', 'tinggal'].includes(details.promotion) && !locked(studentId) && <p className="text-sm text-amber-700">Keputusan lama tetap tersimpan. Sebelum finalisasi, pilih Lulus atau Belum lulus untuk kelas akhir program.</p>}
+              </div>}
               <section className="space-y-3 rounded-xl border p-4" aria-label="Ekstrakurikuler siswa">
                 <h4 className="font-semibold">Ekstrakurikuler</h4>
                 {config.extrasEnabled === false ? <p className="text-sm text-muted-foreground">Ekstrakurikuler tidak diaktifkan untuk kelas dan semester ini. Pengaturannya ada pada tab Pengaturan. Isian lama tetap tersimpan.</p> : <>
@@ -256,7 +274,7 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
                   <Button variant="outline" disabled={details.extras.length >= 10} onClick={() => { setDetails({ ...details, extras: [...details.extras, { name: '', description: '' }] }); setDirty(true) }}>Tambah ekstrakurikuler</Button>
                 </>}
               </section>
-              <Button disabled={!dirty} onClick={() => void run(async () => { await request('/rapor-sumatif/document/' + studentId + '?' + qs, token, 'PUT', { revision: period.revision, details: { note: details.note, promotion: details.promotion, nextClass: details.nextClass, extras: details.extras, identity: details.identity } }); await refreshPeriod(); await loadDocument(); setDirty(false); toast.success('Catatan tersimpan') })}>Simpan catatan</Button>
+              <Button disabled={!dirty} onClick={() => void run(async () => { await request('/rapor-sumatif/document/' + studentId + '?' + qs, token, 'PUT', { revision: period.revision, updatePromotion: promotionEdited, details: { note: details.note, promotion: details.promotion, nextClass: details.nextClass, extras: details.extras, identity: details.identity } }); await refreshPeriod(); await loadDocument(); setDirty(false); toast.success('Catatan tersimpan') })}>Simpan catatan</Button>
             </fieldset>
             {!!doc.issues.length && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-950"><strong>Perlu dilengkapi sebelum final:</strong><ul className="list-disc pl-5">{doc.issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul></div>}
             {canManage && !isArchived && <div className="flex flex-wrap gap-2">{[['ready', 'Siap diperiksa'], ['final', 'Finalkan rapor'], ['published', 'Terbitkan untuk orang tua'], ['draft', 'Buka / revisi draf']].map(([status, label]) => <Button key={status} variant="outline" disabled={busy || dirty || status === 'final' && (record?.status !== 'ready' || doc.issues.length > 0) || status === 'published' && record?.status !== 'final' || status === 'ready' && locked(studentId)} onClick={() => void run(async () => { let reason = ''; if (status === 'draft' && locked(studentId)) { const answer = window.prompt('Alasan pembukaan revisi rapor:'); if (!answer?.trim()) return; reason = answer } await request('/rapor-sumatif/document/' + studentId + '/status?' + qs, token, 'POST', { revision: period.revision, status, reason }); await refreshPeriod(); await loadDocument(); toast.success('Status rapor diperbarui') })}>{label}</Button>)}</div>}

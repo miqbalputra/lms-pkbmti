@@ -392,7 +392,7 @@ func (s *Server) reportPeriod(c *fiber.Ctx) error {
 			canInput = append(canInput, m.MapelID)
 		}
 	}
-	return c.JSON(fiber.Map{"period": p, "config": cfg, "students": roster, "records": records, "class": k, "canManage": canManage, "canInput": canInput, "isAdmin": c.Locals("role") == "admin"})
+	return c.JSON(fiber.Map{"period": p, "config": cfg, "students": roster, "records": records, "class": k, "canManage": canManage, "canInput": canInput, "isAdmin": c.Locals("role") == "admin", "promotionRules": reportPromotionRules(k.Jenjang)})
 }
 func (s *Server) reportSaveConfig(c *fiber.Ctx) error {
 	k, p, err := s.reportScope(c, true)
@@ -865,8 +865,17 @@ func (s *Server) buildReport(db *gorm.DB, k Kelas, p ReportPeriod, studentID str
 	if d.Config.Date == "" || d.Config.Teacher == "" || p.Semester == "Genap" && d.Config.Principal == "" {
 		d.Issues = append(d.Issues, "Lengkapi tanggal dan nama penandatangan")
 	}
-	if p.Semester == "Genap" && (d.Details.Promotion == "" || d.Details.Promotion == "naik" && d.Details.NextClass == "") {
-		d.Issues = append(d.Issues, "Lengkapi keputusan kenaikan kelas")
+	if p.Semester == "Genap" {
+		if !reportPromotionAllowed(k.Jenjang, d.Details.Promotion) {
+			issue := "Lengkapi keputusan kenaikan kelas"
+			if reportPromotionRules(k.Jenjang).Completion {
+				issue = "Lengkapi keputusan kelulusan: Lulus atau Belum lulus"
+			}
+			d.Issues = append(d.Issues, issue)
+		} else if d.Details.Promotion == "naik" && d.Details.NextClass == "" {
+			// Response/snapshot projection only; the historical record stays intact.
+			d.Details.NextClass = reportPromotionRules(k.Jenjang).NextClass
+		}
 	}
 	if len([]rune(d.Details.Note)) > 450 {
 		d.Issues = append(d.Issues, "Catatan wali terlalu panjang (maksimal 450 karakter)")
@@ -907,13 +916,14 @@ func (s *Server) reportSaveDetails(c *fiber.Ctx) error {
 		return err
 	}
 	var in struct {
-		Revision int           `json:"revision"`
-		Details  ReportDetails `json:"details"`
+		Revision        int           `json:"revision"`
+		Details         ReportDetails `json:"details"`
+		UpdatePromotion bool          `json:"updatePromotion"`
 	}
 	if c.BodyParser(&in) != nil {
 		return fiber.ErrBadRequest
 	}
-	if in.Details.Promotion != "" && in.Details.Promotion != "naik" && in.Details.Promotion != "tinggal" {
+	if in.Details.Promotion != "" && in.Details.Promotion != "naik" && in.Details.Promotion != "tinggal" && in.Details.Promotion != "lulus" && in.Details.Promotion != "belum_lulus" {
 		return fiber.ErrBadRequest
 	}
 	if in.Details.HistoricalAttendance != nil {
@@ -943,6 +953,9 @@ func (s *Server) reportSaveDetails(c *fiber.Ctx) error {
 		}
 		var prev ReportDetails
 		reportDecode(rec.Details, &prev)
+		if e = reportPreparePromotion(k.Jenjang, p.Semester, prev, &in.Details, in.UpdatePromotion); e != nil {
+			return e
+		}
 		if !reportExtrasEnabled(document.Config) && !reportExtrasEqual(prev.Extras, in.Details.Extras) {
 			return fiber.NewError(400, "Aktifkan ekstrakurikuler pada pengaturan kelas sebelum mengubah kegiatannya")
 		}
