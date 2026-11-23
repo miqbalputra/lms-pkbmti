@@ -386,13 +386,22 @@ func (s *Server) reportPeriod(c *fiber.Ctx) error {
 		}
 	}
 	canManage := s.canManageKelas(c, k.ID) == nil
+	var semester Semester
+	err = s.db.Where("tahun_ajaran_id = ? AND nama_semester = ?", k.TahunAjaranID, p.Semester).First(&semester).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	configLocked := false
+	for _, record := range records {
+		configLocked = configLocked || record.Status == "final" || record.Status == "published"
+	}
 	canInput := []string{}
 	for _, m := range cfg.Subjects {
 		if s.canManageKelasMapel(c, k.ID, m.MapelID) == nil {
 			canInput = append(canInput, m.MapelID)
 		}
 	}
-	return c.JSON(fiber.Map{"period": p, "config": cfg, "students": roster, "records": records, "class": k, "canManage": canManage, "canInput": canInput, "isAdmin": c.Locals("role") == "admin", "promotionRules": reportPromotionRules(k.Jenjang)})
+	return c.JSON(fiber.Map{"period": p, "config": cfg, "students": roster, "records": records, "class": k, "canManage": canManage, "canInput": canInput, "isAdmin": c.Locals("role") == "admin", "promotionRules": reportPromotionRules(k.Jenjang), "semesterArchived": semester.IsArchived, "configLocked": configLocked})
 }
 func (s *Server) reportSaveConfig(c *fiber.Ctx) error {
 	k, p, err := s.reportScope(c, true)

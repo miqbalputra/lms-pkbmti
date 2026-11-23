@@ -9,7 +9,9 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { SessionRouter } from './components/SessionRouter'
+import { UnsavedChangesProvider } from './context/UnsavedChanges'
 import { Alert, AlertDescription } from './components/ui/alert'
 import { Card, CardContent } from './components/ui/card'
 import { Button } from './components/ui/button'
@@ -249,7 +251,7 @@ export default function App() {
           </Suspense>
         </>
       ) : (
-        <BrowserRouter>
+        <SessionRouter><UnsavedChangesProvider>
           <Toaster position="top-right" />
           <AuthenticatedApp
             user={user}
@@ -269,7 +271,7 @@ export default function App() {
               setTutorAccountOpen(false)
             }}
           />
-        </BrowserRouter>
+        </UnsavedChangesProvider></SessionRouter>
       )}
     </>
   )

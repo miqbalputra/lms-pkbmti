@@ -38,6 +38,7 @@ import { toast } from 'sonner'
 import { apiBase, request } from '../../lib/api'
 import { formatWibDate } from '../../lib/wib'
 import { useNavigate } from 'react-router-dom'
+import { useGuardedNavigation } from '../../context/useUnsavedChanges'
 import { pathFor } from '../../lib/router'
 import { useAccessibility, type FontScale } from '../../context/AccessibilityContext'
 
@@ -84,6 +85,7 @@ const tipeIcon: Record<string, string> = {
 }
 
 export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHeaderProps) {
+  const leave = useGuardedNavigation()
   const [logoutModalOpen, setLogoutModalOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
@@ -226,8 +228,7 @@ export function AppHeader({ token, user, onLogout, onOpenTutorAccount }: AppHead
 
   const handleConfirmLogout = () => {
     setLogoutModalOpen(false)
-    toast.success('Sesi berhasil diakhiri.')
-    onLogout()
+    leave(() => { toast.success('Sesi berhasil diakhiri.'); onLogout() })
   }
 
   const displayName = String(user.nama || user.username).trim() || user.username

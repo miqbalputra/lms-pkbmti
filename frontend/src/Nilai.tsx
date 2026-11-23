@@ -28,6 +28,7 @@ import { Select } from './components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs'
 import { RaporSumatifView } from './pages/RaporSumatifView'
+import { useGuardedNavigation } from './context/useUnsavedChanges'
 
 type ScopeItem = {
   kelasId: string
@@ -82,7 +83,8 @@ const SEMESTER = ['Ganjil', 'Genap']
 
 export function Nilai({ token, readOnly }: { token: string; readOnly: boolean }) {
  const [legacy, setLegacy] = useState(false)
- return <div className="space-y-4"><Button variant="outline" onClick={() => setLegacy(!legacy)}>{legacy ? 'Kembali ke nilai sumatif CP' : 'Buka nilai tema / arsip alur lama'}</Button>{legacy ? <LegacyNilai token={token} readOnly /> : <RaporSumatifView token={token} readOnly={readOnly} nilaiOnly />}</div>
+ const leave = useGuardedNavigation()
+ return <div className="space-y-4"><Button variant="outline" onClick={() => leave(() => setLegacy(!legacy))}>{legacy ? 'Kembali ke nilai sumatif CP' : 'Buka nilai tema / arsip alur lama'}</Button>{legacy ? <LegacyNilai token={token} readOnly /> : <RaporSumatifView token={token} readOnly={readOnly} nilaiOnly />}</div>
 }
 
 function LegacyNilai({ token, readOnly }: { token: string; readOnly: boolean }) {
