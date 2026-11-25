@@ -1,0 +1,9 @@
+[mcp_servers.peserta_didik_lms]
+command = "go"
+args = ["-C", "backend/cmd/peserta-didik-mcp", "run", "."]
+env_vars = ["STUDENT_MCP_API_KEY"]
+startup_timeout_sec = 60
+default_tools_approval_mode = "writes"
+
+[mcp_servers.peserta_didik_lms.env]
+LMS_STUDENT_MCP_URL = "https://edu.pkbmtunasilmu.sch.id"

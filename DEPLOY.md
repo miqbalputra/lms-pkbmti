@@ -68,6 +68,8 @@ Add these environment variables in your application:
 | `BACKUP_MAX_ARCHIVE_MB` | Batas total data hasil ekstraksi arsip R2 | `4096` |
 | `BACKUP_API_KEY` | Key untuk download backup via n8n | Optional |
 | `N8N_PRESENSI_API_KEY` | API key khusus workflow pengingat presensi tutor | Wajib jika workflow n8n presensi digunakan |
+| `STUDENT_MCP_API_KEY` | Kunci khusus MCP peserta didik, 32 byte acak dalam base64url tanpa padding | Kosong menonaktifkan integrasi |
+| `STUDENT_MCP_ALLOW_WRITE` | Izinkan penerapan batch yang sudah ditinjau | `false` secara bawaan |
 | `BACKUP_OFFSITE_URL` | Endpoint S3 presigned/n8n untuk arsip terenkripsi | Optional |
 | `BACKUP_OFFSITE_METHOD` | Metode upload offsite | `PUT` |
 | `BACKUP_OFFSITE_TOKEN` | Token gateway offsite | Optional |
@@ -86,6 +88,18 @@ Add these environment variables in your application:
 5. Pilih credential GOWA pada node **Kirim WhatsApp via GOWA**, jalankan manual sekali, lalu aktifkan workflow.
 
 Workflow memakai header `X-Automation-Key`; jangan memakai akun/password admin karena login production membutuhkan Turnstile. Endpoint hanya mengirim ringkasan kelengkapan per tutor dan tidak mengirim foto Base64, tanda tangan, atau identitas peserta didik.
+
+### MCP Peserta Didik
+
+1. Sebelum rilis, buat backup baru dan periksa ukurannya. Pertahankan database serta volume yang sama. Ikuti [Runbook Keamanan Data](DATA_SAFETY_RUNBOOK.md).
+2. Buat kunci khusus dari 32 byte acak dengan format base64url tanpa padding. Simpan `STUDENT_MCP_API_KEY` sebagai secret runtime pada LMS dan berikan nilai yang sama ke proses Codex setempat melalui penyimpanan secret operator. Kunci dikirim hanya dalam header `Authorization` lewat HTTPS. Jaga port Go agar hanya dapat dijangkau proxy yang menetapkan `X-Forwarded-Proto` dari koneksi HTTPS masuk.
+3. Buka Codex dari akar proyek tepercaya dengan Go 1.25 atau lebih baru. Konfigurasi proyek mendaftarkan `peserta_didik_lms` dan meneruskan nama variabel secret dari lingkungan proses. Atur `LMS_STUDENT_MCP_URL` di konfigurasi proyek bila targetnya staging. Percobaan lewat HTTP dibatasi ke alamat loopback pada klien.
+4. Dengan `STUDENT_MCP_ALLOW_WRITE=false`, gunakan `peserta_didik_kelas_aktif`, `peserta_didik_cari`, dan `peserta_didik_preview` untuk memeriksa alur terhadap target. Simpan secret di luar Git, URL, dan chat.
+5. Untuk mengizinkan impor, isi `STUDENT_MCP_ALLOW_WRITE=true` dan deploy ulang. Tinjau pratinjau beserta konflik. Kirim ulang batch yang identik dengan token pratinjau dalam 15 menit memakai `peserta_didik_apply`. Konfigurasi Codex proyek meminta persetujuan untuk tool tulis. ID batch dan jumlah perubahan dicatat pada Audit Log dengan aksi `mcp_apply`.
+
+Pencarian dan perubahan menerima hingga 100 baris per permintaan. Untuk peserta lama, gunakan ID internal hasil pencarian, nama dan kelas yang sudah dicocokkan, serta NIK dari sumber bila ada nama yang sama dalam kelas. Pertahankan NIS/NISN sebagai teks agar nol di depan tetap utuh. Pembaruan hanya menulis NIS dan NISN pada ID yang sama. Peserta baru harus masuk ke kelas aktif dan mendapatkan ID serta riwayat kelas baru. Kelompok belajar diturunkan dari kelas. Nomor NISN sementara dipakai bila peserta baru belum memiliki NISN resmi. NISN baru dipakai saat login Portal Orang Tua berikutnya.
+
+API memakai transaksi untuk seluruh batch dan memeriksa ulang data sebelum menyimpan. Konflik identitas, perubahan sejak pratinjau, atau kegagalan pencatatan audit membatalkan batch. Untuk mencabut kemampuan tulis, set `STUDENT_MCP_ALLOW_WRITE=false` dan deploy ulang. Kosongkan atau ganti `STUDENT_MCP_API_KEY` bila akses perlu dicabut atau kunci perlu dirotasi.
 
 ### Backup Offsite dan Restore Drill
 

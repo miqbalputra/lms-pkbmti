@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"pkbm-lms/backend/internal/studentmcp"
 	_ "time/tzdata"
 
 	"github.com/glebarez/sqlite"
@@ -1213,6 +1215,9 @@ const normalRequestBodyLimit int64 = 16 * 1024 * 1024
 // explicitly allowlisted. Content-Length is rejected before Fiber parses the
 // body, which prevents large accidental uploads from consuming parser memory.
 func requestBodyLimitForPath(path string) int64 {
+	if strings.HasPrefix(path, studentmcp.APIPath+"/") {
+		return studentmcp.MaxBodyBytes
+	}
 	switch path {
 	case "/api/backup/restore":
 		return int64(backupUploadLimit()) + 4*1024*1024
@@ -1402,6 +1407,7 @@ func main() {
 	}
 	app.Get("/orangtua", s.serveOrangTuaPortalPage)
 	api := app.Group("/api")
+	s.registerStudentMCP(api)
 	// Private server-to-server bridge for the standalone CBT deployment. This is
 	// registered before browser-auth routes and authenticates every request with
 	// an HMAC timestamp + one-time nonce; it never accepts LMS user JWTs.
