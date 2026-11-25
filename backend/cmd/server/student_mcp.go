@@ -282,12 +282,13 @@ func (b *studentMCPAPI) plan(db *gorm.DB, input studentmcp.Batch, applying bool)
 
 func studentMCPPlanUpdate(db *gorm.DB, targets studentMCPTargets, row studentmcp.Update) (before, after studentmcp.Student, revision time.Time, issue string, err error) {
 	row.ExpectedName = strings.TrimSpace(row.ExpectedName)
+	row.Nama = strings.TrimSpace(row.Nama)
 	if !studentMCPRowID.MatchString(row.StudentID) || !studentMCPRowID.MatchString(row.ExpectedClassID) || !studentMCPValidName(row.ExpectedName) ||
-		(row.ExpectedNIK != "" && !studentMCPValidNIK(row.ExpectedNIK)) {
+		(row.ExpectedNIK != "" && !studentMCPValidNIK(row.ExpectedNIK)) || (row.Nama != "" && !studentMCPValidName(row.Nama)) {
 		return before, after, revision, "ID internal, nama, kelas, atau NIK verifikasi tidak valid.", nil
 	}
-	if (row.NIS == "" && row.NISN == "") || (row.NIS != "" && !studentMCPNIS.MatchString(row.NIS)) || (row.NISN != "" && !studentMCPValidNISN(row.NISN)) {
-		return before, after, revision, "Isi NIS yang valid dan/atau NISN resmi 10 digit.", nil
+	if (row.Nama == "" && row.NIS == "" && row.NISN == "") || (row.NIS != "" && !studentMCPNIS.MatchString(row.NIS)) || (row.NISN != "" && !studentMCPValidNISN(row.NISN)) {
+		return before, after, revision, "Isi nama, NIS, dan/atau NISN resmi 10 digit yang valid.", nil
 	}
 	if targets.ids[row.StudentID] {
 		return before, after, revision, "ID peserta didik muncul lebih dari sekali di batch.", nil
@@ -312,10 +313,27 @@ func studentMCPPlanUpdate(db *gorm.DB, targets studentMCPTargets, row studentmcp
 	if sameName > 0 && row.ExpectedNIK == "" {
 		return before, after, revision, "Ada nama yang sama dalam kelas. Cocokkan NIK dari sumber resmi.", nil
 	}
+	if row.Nama != "" && !strings.EqualFold(strings.TrimSpace(current.Nama), row.Nama) {
+		nameKey := strings.ToLower(row.Nama)
+		if targets.names[nameKey] {
+			return before, after, revision, "Nama baru muncul lebih dari sekali di batch.", nil
+		}
+		var duplicateName int64
+		if err := db.Model(&PesertaDidik{}).Where("LOWER(TRIM(nama)) = LOWER(?) AND id <> ?", row.Nama, current.ID).Count(&duplicateName).Error; err != nil {
+			return before, after, revision, "", err
+		}
+		if duplicateName > 0 {
+			return before, after, revision, "Nama baru sudah digunakan peserta didik lain.", nil
+		}
+		targets.names[nameKey] = true
+	}
 	if issue, err = targets.checkIdentifiers(db, current.ID, row.NIS, row.NISN, row.ExpectedNIK); issue != "" || err != nil {
 		return before, after, revision, issue, err
 	}
 	before = studentMCPView(current)
+	if row.Nama != "" {
+		current.Nama = row.Nama
+	}
 	if row.NIS != "" {
 		current.NIS = row.NIS
 	}
@@ -465,7 +483,10 @@ func (b *studentMCPAPI) apply(c *fiber.Ctx) error {
 			return fiber.NewError(409, "Batch atau data LMS berubah sejak pratinjau. Buat pratinjau baru dan tinjau lagi.")
 		}
 		for _, change := range plan.review.Changes {
-			fields := make(map[string]any, 2)
+			fields := make(map[string]any, 3)
+			if change.Before.Nama != change.After.Nama {
+				fields["nama"] = change.After.Nama
+			}
 			if change.Before.NIS != change.After.NIS {
 				fields["nis"] = change.After.NIS
 			}

@@ -65,6 +65,7 @@ type Update struct {
 	ExpectedName    string `json:"expectedName" jsonschema:"Nama lengkap pada catatan yang dipilih"`
 	ExpectedClassID string `json:"expectedClassId" jsonschema:"ID kelas pada catatan yang dipilih"`
 	ExpectedNIK     string `json:"expectedNik,omitempty" jsonschema:"NIK terverifikasi dari sumber, wajib bila ada nama sama dalam satu kelas"`
+	Nama            string `json:"nama,omitempty" jsonschema:"Nama resmi baru. Kosongkan bila tidak diubah."`
 	NIS             string `json:"nis,omitempty" jsonschema:"NIS baru sebagai teks. Abaikan kolom ini bila tidak berubah."`
 	NISN            string `json:"nisn,omitempty" jsonschema:"NISN resmi baru sebagai teks 10 digit. Abaikan kolom ini bila tidak berubah."`
 }
@@ -80,7 +81,7 @@ type Create struct {
 }
 
 type Batch struct {
-	Updates []Update `json:"updates,omitempty" jsonschema:"Pembaruan NIS dan/atau NISN untuk ID internal yang sudah dikonfirmasi"`
+	Updates []Update `json:"updates,omitempty" jsonschema:"Pembaruan nama, NIS, dan/atau NISN untuk ID internal yang sudah dikonfirmasi"`
 	Creates []Create `json:"creates,omitempty" jsonschema:"Peserta baru yang sudah diverifikasi. Maksimum 100 baris gabungan dengan updates."`
 }
 

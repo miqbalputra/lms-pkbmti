@@ -175,6 +175,73 @@ func TestStudentMCPUpdatePreservesHistoryAndRelatedRows(t *testing.T) {
 	}
 }
 
+func TestStudentMCPNameOnlyUpdatePreservesIdentifiersAndHistory(t *testing.T) {
+	key := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{24}, 32))
+	f := setupStudentMCP(t, key, "true", "test")
+	history := RiwayatKelasPesertaDidik{PesertaDidikID: f.student.ID, KelasID: f.student.KelasID, TahunAjaranID: f.year.ID, Status: "aktif"}
+	presensi := PresensiDetail{PesertaDidikID: f.student.ID, PresensiID: "presensi-nama-uji", StatusKehadiran: "hadir", Catatan: "Catatan uji"}
+	score := 86.0
+	gradeCP := NilaiCP{TemaID: "tema-nama-uji", PesertaDidikID: f.student.ID, UrutanCP: 1, NilaiKeterampilan: &score}
+	gradeUM := NilaiUM{TemaID: "tema-nama-uji", PesertaDidikID: f.student.ID, NilaiUM: &score}
+	studentMCPSeed(t, f.db, &history, &presensi, &gradeCP, &gradeUM)
+
+	newName := "Peserta Resmi"
+	batch := studentmcp.Batch{Updates: []studentmcp.Update{{StudentID: f.student.ID, ExpectedName: f.student.Nama,
+		ExpectedClassID: f.student.KelasID, Nama: newName}}}
+	var preview studentmcp.Preview
+	data := f.request(t, "/preview", batch, 200, &preview)
+	if preview.PreviewToken == "" || len(preview.Issues) != 0 || len(preview.Changes) != 1 || preview.Changes[0].Before.Nama != f.student.Nama ||
+		preview.Changes[0].After.Nama != newName || preview.Changes[0].After.NIS != f.student.NIS || preview.Changes[0].After.NISN != f.student.NISN ||
+		bytes.Contains(data, []byte(f.student.NIK)) {
+		t.Fatalf("unexpected name-only preview or sensitive data disclosure: %s", data)
+	}
+	var before PesertaDidik
+	if err := f.db.First(&before, "id = ?", f.student.ID).Error; err != nil || before.ID != f.student.ID || before.Nama != f.student.Nama ||
+		before.NIS != f.student.NIS || before.NISN != f.student.NISN || before.NIK != f.student.NIK || before.KelasID != f.student.KelasID ||
+		!before.UpdatedAt.Equal(f.student.UpdatedAt) {
+		t.Fatalf("preview changed the stored student: %v", err)
+	}
+
+	var receipt studentmcp.Receipt
+	f.request(t, "/apply", studentmcp.ApplyRequest{Changes: batch, PreviewToken: preview.PreviewToken}, 200, &receipt)
+	if receipt.Updated != 1 || receipt.Created != 0 || receipt.BatchID == "" {
+		t.Fatalf("bad name-only receipt: %+v", receipt)
+	}
+	var updated PesertaDidik
+	if err := f.db.First(&updated, "id = ?", f.student.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	expected := before
+	expected.Nama = newName
+	expected.UpdatedAt = updated.UpdatedAt
+	if !reflect.DeepEqual(expected, updated) {
+		t.Fatal("name-only update changed another student field or internal identity")
+	}
+	studentMCPAssertRowUnchanged(t, f.db, presensi, presensi.ID)
+	studentMCPAssertRowUnchanged(t, f.db, gradeCP, gradeCP.ID)
+	studentMCPAssertRowUnchanged(t, f.db, gradeUM, gradeUM.ID)
+	studentMCPAssertRowUnchanged(t, f.db, history, history.ID)
+	var audit AuditLog
+	if err := f.db.First(&audit, "action = ?", studentMCPAction).Error; err != nil || strings.Contains(audit.Detail, newName) || strings.Contains(audit.Detail, f.student.NIK) {
+		t.Fatalf("name or sensitive identifiers leaked into the audit entry: %v", err)
+	}
+
+	other := PesertaDidik{Nama: "Nama Tujuan Terpakai", JenisKelamin: "P", NIS: "NAMA-UNIK-01", NISN: "9876543210",
+		NIK: "2222222222222222", KelasID: f.student.KelasID, PokjarID: f.student.PokjarID, Status: "aktif"}
+	studentMCPSeed(t, f.db, &other)
+	conflict := studentmcp.Batch{Updates: []studentmcp.Update{{StudentID: f.student.ID, ExpectedName: newName,
+		ExpectedClassID: f.student.KelasID, Nama: other.Nama}}}
+	preview = studentmcp.Preview{}
+	f.request(t, "/preview", conflict, 200, &preview)
+	if preview.PreviewToken != "" || len(preview.Issues) != 1 {
+		t.Fatalf("a duplicate target name was not blocked: %+v", preview)
+	}
+	updated = PesertaDidik{}
+	if err := f.db.First(&updated, "id = ?", f.student.ID).Error; err != nil || updated.Nama != newName {
+		t.Fatalf("a rejected rename changed the student: %v", err)
+	}
+}
+
 func studentMCPAssertRowUnchanged[T any](t *testing.T, db *gorm.DB, expected T, id string) {
 	t.Helper()
 	var actual T
@@ -200,6 +267,9 @@ func TestStudentMCPRejectsStaleTamperedAndConflictingChanges(t *testing.T) {
 	f.request(t, "/apply", studentmcp.ApplyRequest{Changes: batch, PreviewToken: "1." + strings.SplitN(preview.PreviewToken, ".", 2)[1]}, 409, nil)
 	changed := f.batch()
 	changed.Updates[0].NIS = "DITAMBAH"
+	f.request(t, "/apply", studentmcp.ApplyRequest{Changes: changed, PreviewToken: preview.PreviewToken}, 409, nil)
+	changed = f.batch()
+	changed.Updates[0].Nama = "Nama Dipalsukan"
 	f.request(t, "/apply", studentmcp.ApplyRequest{Changes: changed, PreviewToken: preview.PreviewToken}, 409, nil)
 	if err := f.db.Model(&PesertaDidik{}).Where("id = ?", f.student.ID).Update("urutan", 9).Error; err != nil {
 		t.Fatal(err)

@@ -98,7 +98,7 @@ func studentAPIError(status int) error {
 
 func newStudentMCPServer(api *studentAPI) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "pkbm-lms-peserta-didik", Version: "1.0.0"}, &mcp.ServerOptions{
-		Instructions: "Cocokkan peserta dengan sumber resmi dan ID internal. Untuk batch tulis, jalankan peserta_didik_preview terlebih dahulu. Tampilkan ringkasan yang dapat ditinjau tanpa menampilkan NIK atau tanggal lahir. Panggil peserta_didik_apply hanya setelah pengguna secara eksplisit menyetujui pratinjau yang masih berlaku.",
+		Instructions: "Cocokkan peserta dengan sumber resmi dan ID internal. Untuk batch tulis, jalankan peserta_didik_preview terlebih dahulu. Tampilkan ringkasan nama, NIS, dan NISN yang dapat ditinjau tanpa menampilkan NIK atau tanggal lahir. Panggil peserta_didik_apply hanya setelah pengguna secara eksplisit menyetujui pratinjau yang masih berlaku.",
 	})
 	read := &mcp.ToolAnnotations{ReadOnlyHint: true}
 	mcp.AddTool(server, &mcp.Tool{Name: "peserta_didik_kelas_aktif", Description: "Cari ID kelas yang tersedia untuk peserta baru.", Annotations: read},
@@ -113,7 +113,7 @@ func newStudentMCPServer(api *studentAPI) *mcp.Server {
 			err := api.request(ctx, http.MethodPost, "search", input, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "peserta_didik_preview", Description: "Tinjau penambahan peserta baru dan perubahan NIS/NISN untuk maksimum 100 baris. Pratinjau tidak menyimpan data dan melaporkan konflik.", Annotations: read},
+	mcp.AddTool(server, &mcp.Tool{Name: "peserta_didik_preview", Description: "Tinjau penambahan peserta baru dan perubahan nama/NIS/NISN untuk maksimum 100 baris. Pratinjau tidak menyimpan data, menjaga ID serta riwayat terkait, dan melaporkan konflik.", Annotations: read},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input studentmcp.Batch) (*mcp.CallToolResult, studentmcp.Preview, error) {
 			var out studentmcp.Preview
 			err := api.request(ctx, http.MethodPost, "preview", input, &out)

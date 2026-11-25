@@ -30,8 +30,9 @@ func TestStudentMCPToolsUseScopedAPI(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(studentmcp.Classes{Kelas: []studentmcp.Class{{ID: "uji", NamaRombel: "A"}}})
 		case "POST " + studentmcp.APIPath + "/preview":
 			var batch studentmcp.Batch
-			if err := json.NewDecoder(r.Body).Decode(&batch); err != nil || len(batch.Creates) != 1 || batch.Creates[0].NIS != "00012" || batch.Creates[0].NISN != "0010000012" {
-				t.Error("preview did not preserve the identifiers as strings")
+			if err := json.NewDecoder(r.Body).Decode(&batch); err != nil || len(batch.Creates) != 1 || batch.Creates[0].NIS != "00012" || batch.Creates[0].NISN != "0010000012" ||
+				len(batch.Updates) != 1 || batch.Updates[0].Nama != "Nama Resmi" {
+				t.Error("preview did not preserve the name and identifiers as strings")
 				http.Error(w, "bad request", 400)
 				return
 			}
@@ -67,7 +68,10 @@ func TestStudentMCPToolsUseScopedAPI(t *testing.T) {
 	if err != nil || result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, `"id":"uji"`) {
 		t.Fatalf("classes tool did not return the response: %+v, %v", result, err)
 	}
-	batch := studentmcp.Batch{Creates: []studentmcp.Create{{Nama: "Peserta Uji", JenisKelamin: "P", NIK: "3333333333333333", NIS: "00012", NISN: "0010000012", KelasID: "uji"}}}
+	batch := studentmcp.Batch{
+		Updates: []studentmcp.Update{{StudentID: "siswa-uji", ExpectedName: "Nama Lama", ExpectedClassID: "kelas-uji", Nama: "Nama Resmi"}},
+		Creates: []studentmcp.Create{{Nama: "Peserta Uji", JenisKelamin: "P", NIK: "3333333333333333", NIS: "00012", NISN: "0010000012", KelasID: "uji"}},
+	}
 	result, err = client.CallTool(ctx, &mcp.CallToolParams{Name: "peserta_didik_preview", Arguments: batch})
 	if err != nil || result.IsError || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, `"previewToken":"sample"`) {
 		t.Fatalf("preview tool did not return the response: %+v, %v", result, err)
