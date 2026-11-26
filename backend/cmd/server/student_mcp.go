@@ -542,7 +542,10 @@ func (b *studentMCPAPI) apply(c *fiber.Ctx) error {
 			}
 		}
 		for _, entry := range plan.created {
-			if err := tx.Create(&entry.student).Error; err != nil {
+			// Parent links are optional and are not supplied by this API. Leave
+			// the column NULL: an empty string is an invalid foreign key in
+			// PostgreSQL. Never create or assign a parent implicitly.
+			if err := tx.Omit("OrangTuaID", clause.Associations).Create(&entry.student).Error; err != nil {
 				return err
 			}
 			history := RiwayatKelasPesertaDidik{PesertaDidikID: entry.student.ID, KelasID: entry.student.KelasID,
