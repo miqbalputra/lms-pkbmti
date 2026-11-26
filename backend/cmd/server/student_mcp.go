@@ -207,6 +207,8 @@ type studentMCPTargets struct {
 	nisn  map[string]bool
 	nik   map[string]bool
 	names map[string]bool
+	// Only IDs explicitly reviewed in this batch may release an occupied NIS.
+	nisReleases map[string]string
 }
 
 func (t studentMCPTargets) checkIdentifiers(db *gorm.DB, id, nis, nisn, nik string) (string, error) {
@@ -225,7 +227,15 @@ func (t studentMCPTargets) checkIdentifiers(db *gorm.DB, id, nis, nisn, nik stri
 			return field.display + " muncul lebih dari sekali di batch.", nil
 		}
 		var count int64
-		if err := db.Model(&PesertaDidik{}).Where(field.column+" = ? AND id <> ?", field.value, id).Count(&count).Error; err != nil {
+		query := db.Model(&PesertaDidik{}).Where(field.column+" = ? AND id <> ?", field.value, id)
+		if field.column == "nis" {
+			for ownerID, destination := range t.nisReleases {
+				if destination != field.value {
+					query = query.Where("id <> ?", ownerID)
+				}
+			}
+		}
+		if err := query.Count(&count).Error; err != nil {
 			return "", err
 		}
 		if count > 0 {
@@ -248,7 +258,12 @@ func (b *studentMCPAPI) plan(db *gorm.DB, input studentmcp.Batch, applying bool)
 	if count == 0 || count > studentmcp.MaxRows {
 		return plan, fiber.NewError(422, "Batch menerima 1 sampai 100 baris gabungan.")
 	}
-	targets := studentMCPTargets{ids: map[string]bool{}, nis: map[string]bool{}, nisn: map[string]bool{}, nik: map[string]bool{}, names: map[string]bool{}}
+	targets := studentMCPTargets{ids: map[string]bool{}, nis: map[string]bool{}, nisn: map[string]bool{}, nik: map[string]bool{}, names: map[string]bool{}, nisReleases: map[string]string{}}
+	for _, row := range input.Updates {
+		if studentMCPRowID.MatchString(row.StudentID) && studentMCPNIS.MatchString(row.NIS) {
+			targets.nisReleases[row.StudentID] = row.NIS
+		}
+	}
 	for i, row := range input.Updates {
 		before, after, revision, issue, err := studentMCPPlanUpdate(db, targets, row)
 		if err != nil {
@@ -314,7 +329,7 @@ func studentMCPPlanUpdate(db *gorm.DB, targets studentMCPTargets, row studentmcp
 		return before, after, revision, "Ada nama yang sama dalam kelas. Cocokkan NIK dari sumber resmi.", nil
 	}
 	if row.Nama != "" && !strings.EqualFold(strings.TrimSpace(current.Nama), row.Nama) {
-		nameKey := strings.ToLower(row.Nama)
+		nameKey := current.KelasID + "\x00" + strings.ToLower(row.Nama)
 		if targets.names[nameKey] {
 			return before, after, revision, "Nama baru muncul lebih dari sekali di batch.", nil
 		}
@@ -357,13 +372,22 @@ func studentMCPPlanCreate(db *gorm.DB, targets studentMCPTargets, row studentmcp
 		}
 		birthDate = &date
 	}
-	nameKey := strings.ToLower(row.Nama)
+	nameKey := row.KelasID + "\x00" + strings.ToLower(row.Nama)
 	var existingName int64
-	if err := db.Model(&PesertaDidik{}).Where("LOWER(TRIM(nama)) = LOWER(?)", row.Nama).Count(&existingName).Error; err != nil {
+	if err := db.Model(&PesertaDidik{}).Where("kelas_id = ? AND LOWER(TRIM(nama)) = LOWER(?)", row.KelasID, row.Nama).Count(&existingName).Error; err != nil {
 		return entry, class, "", err
 	}
 	if existingName > 0 || targets.names[nameKey] {
 		return entry, class, "Nama sudah ditemukan. Periksa identitas sebelum menambahkan peserta.", nil
+	}
+	// Shared names across classes need two official identifiers, never just a
+	// placeholder NISN. The global NIK/NISN checks below still reject duplicates.
+	var sharedName int64
+	if err := db.Model(&PesertaDidik{}).Where("kelas_id <> ? AND LOWER(TRIM(nama)) = LOWER(?)", row.KelasID, row.Nama).Count(&sharedName).Error; err != nil {
+		return entry, class, "", err
+	}
+	if sharedName > 0 && !studentMCPValidNISN(row.NISN) {
+		return entry, class, "Nama sama di kelas lain memerlukan NIK dan NISN resmi yang berbeda.", nil
 	}
 	targets.names[nameKey] = true
 	if issue, err = targets.checkIdentifiers(db, "", row.NIS, row.NISN, row.NIK); issue != "" || err != nil {
@@ -481,6 +505,22 @@ func (b *studentMCPAPI) apply(c *fiber.Ctx) error {
 		}
 		if !studentMCPWritable(plan) || !hmac.Equal([]byte(signature), []byte(b.sign(expiry, input.Changes, plan))) {
 			return fiber.NewError(409, "Batch atau data LMS berubah sejak pratinjau. Buat pratinjau baru dan tinjau lagi.")
+		}
+		// Release changed NIS values inside this transaction before assigning
+		// their reviewed destinations. Readers cannot observe these temporary
+		// values; any later failure rolls the whole batch back, including audit.
+		for i, change := range plan.review.Changes {
+			if change.Before.NIS == change.After.NIS {
+				continue
+			}
+			temporary := "mcp-" + batchID + "-" + strconv.Itoa(i)
+			result := tx.Model(&PesertaDidik{}).Where("id = ? AND nis = ?", change.Before.ID, change.Before.NIS).UpdateColumn("nis", temporary)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fiber.NewError(409, "NIS berubah selama proses. Buat pratinjau baru.")
+			}
 		}
 		for _, change := range plan.review.Changes {
 			fields := make(map[string]any, 3)

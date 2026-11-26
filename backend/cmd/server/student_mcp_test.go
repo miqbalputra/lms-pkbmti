@@ -279,8 +279,15 @@ func TestStudentMCPRejectsStaleTamperedAndConflictingChanges(t *testing.T) {
 	conflict.Creates[0].NIS = f.student.NIS
 	preview = studentmcp.Preview{}
 	f.request(t, "/preview", conflict, 200, &preview)
+	if preview.PreviewToken == "" || len(preview.Issues) != 0 {
+		t.Fatalf("reviewed release of an old NIS was rejected: %+v", preview)
+	}
+	conflict = f.batch()
+	conflict.Creates[0].NIS = conflict.Updates[0].NIS
+	preview = studentmcp.Preview{}
+	f.request(t, "/preview", conflict, 200, &preview)
 	if preview.PreviewToken != "" || len(preview.Issues) != 1 || preview.Issues[0].Section != "creates" {
-		t.Fatalf("existing NIS conflict was not blocked: %+v", preview)
+		t.Fatalf("duplicate destination NIS was not blocked: %+v", preview)
 	}
 	conflict = f.batch()
 	conflict.Creates[0].NISN = conflict.Updates[0].NISN
