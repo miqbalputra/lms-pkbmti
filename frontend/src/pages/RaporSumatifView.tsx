@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
 import { Card } from '../components/ui/card'
@@ -8,7 +8,7 @@ import { Select } from '../components/ui/select'
 import { request } from '../lib/api'
 import { automaticReportNarrative } from '../lib/report-narrative'
 import { ReportAttendancePanel, type ReportAttendanceActions } from '../components/ReportAttendancePanel'
-import { ReportGradeCPPanel, type ReportGradeCPActions } from '../components/ReportGradeCPPanel'
+import { ReportGradeCPPanel, type ReportCPAssignments, type ReportGradeCPActions } from '../components/ReportGradeCPPanel'
 import { useUnsavedChanges } from '../context/useUnsavedChanges'
 import { ReportWorkflowGuide } from '../components/ReportWorkflowGuide'
 import { useNavigate } from 'react-router-dom'
@@ -18,6 +18,7 @@ type ClassRow = { id: string; jenjang: number; namaRombel: string; tahunAjaranId
 type Subject = { mapelId: string; name: string; group: string }
 type Config = { subjects: Subject[]; program: string; phase: string; city: string; date: string; teacher: string; teacherNip: string; principal: string; principalNip: string; principalSignature?: string; extrasEnabled?: boolean; extraActivities?: string[]; attendanceMode?: string }
 type Period = { id: string; revision: number }
+type PeriodState = { period: Period; config: Config; students: Student[]; records: RecordRow[]; promotionRules: PromotionRules; semesterArchived: boolean; configLocked: boolean; canManage: boolean; canInput: string[]; canViewGrid?: string[]; isAdmin: boolean }
 type PromotionRules = { completion: boolean; nextClass: string; validGrade: boolean }
 type CP = { id: string; label: string; urutan: number }
 type Score = { cpId: string; studentId: string; value: number | null }
@@ -33,17 +34,25 @@ const base = import.meta.env.VITE_API_BASE_URL || '/api'
 const textClass = 'min-h-24 w-full rounded-lg border border-input bg-background p-3 text-sm disabled:opacity-60'
 const requiredClass = 'border-l-4 border-l-primary bg-primary/5 focus-visible:ring-primary/30'
 const statusLabels: Record<string, string> = { draft: 'Draf · masih dapat dilengkapi', ready: 'Siap diperiksa wali kelas', final: 'Final · versi terkunci', published: 'Terbit · tersedia untuk orang tua' }
+const statusNames: Record<string, string> = { draft: 'Draf', ready: 'Siap diperiksa', final: 'Final', published: 'Terbit' }
+const nextReportStatus: Record<string, string | undefined> = { draft: 'ready', ready: 'final', final: 'published' }
+const reportStatusActionLabels: Record<string, string> = { ready: 'Siap diperiksa', final: 'Finalkan rapor', published: 'Terbitkan untuk orang tua' }
 const emptyDetails: Details = { note: '', promotion: '', nextClass: '', extras: [] }
 
 export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token: string; readOnly: boolean; nilaiOnly?: boolean }) {
   const navigate = useNavigate()
   const [classes, setClasses] = useState<ClassRow[]>([])
+  const [classesLoading, setClassesLoading] = useState(true)
+  const [classesError, setClassesError] = useState('')
+  const [classesRetry, setClassesRetry] = useState(0)
   const [years, setYears] = useState<{ id: string; namaTahunAjaran: string; isAktif: boolean }[]>([])
   const [year, setYear] = useState('')
   const [kelasId, setKelasId] = useState('')
   const [semester, setSemester] = useState('Ganjil')
   const [period, setPeriod] = useState<Period>({ id: '', revision: 0 })
   const [config, setConfig] = useState<Config | null>(null)
+  const [periodError, setPeriodError] = useState('')
+  const [periodRetry, setPeriodRetry] = useState(0)
   const [students, setStudents] = useState<Student[]>([])
   const [records, setRecords] = useState<RecordRow[]>([])
   const [mapelId, setMapelId] = useState('')
@@ -73,7 +82,10 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   const [focusTarget, setFocusTarget] = useState('')
   const [canManage, setCanManage] = useState(false)
   const [canInput, setCanInput] = useState<string[]>([])
+  const [canViewGrid, setCanViewGrid] = useState<string[]>([])
   const [isAdmin, setIsAdmin] = useState(false)
+  const [cpAssignments, setCPAssignments] = useState<ReportCPAssignments | null>(null)
+  const [cpAssignmentError, setCPAssignmentError] = useState(false)
   const [previewURL, setPreviewURL] = useState('')
   const previewRef = useRef('')
   const [ai, setAI] = useState({ provider: '', model: '', geminiConfigured: false, openaiConfigured: false })
@@ -97,16 +109,60 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   scopeRef.current = qs
   const locked = (id: string) => records.some(r => r.studentId === id && ['final', 'published'].includes(r.status))
   const canWrite = !readOnly && canInput.includes(mapelId)
+  const canReview = canManage || readOnly
+  const availableClasses = classes.filter(k => k.tahunAjaranId === year)
+  const selectedClass = availableClasses.find(k => k.id === kelasId)
+  const writableSubjects = config?.subjects.filter(m => canInput.includes(m.mapelId)) || []
+  const viewableSubjects = config?.subjects.filter(m => canViewGrid.includes(m.mapelId) && !canInput.includes(m.mapelId)) || []
   const isArchived = semesterArchived || !!year && !years.find(y => y.id === year)?.isAktif
+  const canUseAI = !!ai.model && (ai.provider === 'gemini' && ai.geminiConfigured || ai.provider === 'openai' && ai.openaiConfigured)
   const settingsLocked = periodConfigLocked || records.some(r => ['final', 'published'].includes(r.status))
   const hasChanges = dirty || aiDirty
   const leave = useUnsavedChanges({ dirty: hasChanges, busy, save: saveCurrent, discard: discardCurrent })
   const gradeCPOpen = tab === 'cp'
+  const hasGradeCPTab = !readOnly && (gradeCPOpen || isAdmin || cpAssignmentError || !!cpAssignments?.isAdmin || !!cpAssignments?.grades.length)
+  const canDraftGradeCP = !isArchived && !!selectedClass && cpAssignments?.year.id === year && !cpAssignments.isAdmin && cpAssignments.grades.some(g => g.jenjang === selectedClass.jenjang)
+  const currentStep = !config ? 'report-scope' : tab === 'nilai' ? cps.length ? 'report-scores' : 'report-cp' : ['ready', 'final', 'published'].includes(record?.status || '') ? 'report-status' : 'report-student'
+  const scoresByStudent = useMemo(() => {
+    const result = new Map<string, Map<string, number | null>>()
+    for (const row of scores) {
+      const values = result.get(row.studentId) || new Map<string, number | null>()
+      values.set(row.cpId, row.value)
+      result.set(row.studentId, values)
+    }
+    return result
+  }, [scores])
+  const completedScores = cps.length ? students.filter(student => cps.every(cp => scoreValue(student.id, cp.id) !== null)).length : 0
+  const pendingReviews = narratives.filter(n => n.reviewedRevision === -1 && !narrativeEdits.has(n.studentId)).length
 
   useEffect(() => {
-    void Promise.all([request('/rapor-sumatif/classes', tokenRef.current), request('/rapor-sumatif/ai/settings', tokenRef.current)])
-      .then(([k, a]) => { const y = [...new Map<string, ClassRow['tahunAjaran']>((k as ClassRow[]).map(c => [c.tahunAjaranId, c.tahunAjaran])).values()]; setClasses(k); setYears(y); setYear(y.find(r => r.isAktif)?.id || y[0]?.id || ''); setAI(a) })
-      .catch(e => toast.error(e.message))
+    const controller = new AbortController()
+    setClassesLoading(true); setClassesError('')
+    void request('/rapor-sumatif/classes', tokenRef.current, 'GET', undefined, controller.signal)
+      .then((rows: ClassRow[]) => {
+        if (controller.signal.aborted) return
+        const schoolYears = [...new Map(rows.map(c => [c.tahunAjaranId, c.tahunAjaran])).values()]
+        setClasses(rows); setYears(schoolYears); setYear(schoolYears.find(r => r.isAktif)?.id || schoolYears[0]?.id || '')
+      })
+      .catch(e => { if (!controller.signal.aborted) setClassesError(e.message) })
+      .finally(() => { if (!controller.signal.aborted) setClassesLoading(false) })
+    return () => controller.abort()
+  }, [classesRetry])
+  useEffect(() => {
+    const controller = new AbortController()
+    if (!readOnly) {
+      void request('/rapor-sumatif/cp-assignments', tokenRef.current, 'GET', undefined, controller.signal)
+        .then(data => { if (!controller.signal.aborted) setCPAssignments(data) })
+        .catch(() => { if (!controller.signal.aborted) setCPAssignmentError(true) })
+    }
+    return () => controller.abort()
+  }, [readOnly])
+  useEffect(() => {
+    const controller = new AbortController()
+    void request('/rapor-sumatif/ai/settings', tokenRef.current, 'GET', undefined, controller.signal)
+      .then(data => { if (!controller.signal.aborted) setAI(data) })
+      .catch(() => undefined)
+    return () => controller.abort()
   }, [])
   useEffect(() => () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current); aiController.current?.abort(); documentController.current?.abort() }, [])
   useEffect(() => {
@@ -115,29 +171,30 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     if (target) { target.scrollIntoView({ behavior: 'smooth', block: 'center' }); target.focus(); setFocusTarget('') }
   }, [tab, focusTarget, config, cps, doc])
 
-  async function refreshPeriod() {
-    const data = await request('/rapor-sumatif/period?' + qs, token)
-    if (scopeRef.current !== qs) return data
+  function applyPeriod(data: PeriodState) {
     setPeriod(data.period); setConfig(data.config); setStudents(data.students); setRecords(data.records)
     setPromotionRules(data.promotionRules)
     setSemesterArchived(!!data.semesterArchived); setPeriodConfigLocked(!!data.configLocked)
     setCanManage(data.canManage); setCanInput(data.canInput); setIsAdmin(data.isAdmin)
+    setCanViewGrid(data.canViewGrid ?? (data.canManage || readOnly ? data.config.subjects.map(m => m.mapelId) : data.canInput))
+    if (!data.canManage && !readOnly) setTab(current => current === 'cp' ? current : 'nilai')
+  }
+  async function refreshPeriod() {
+    const data = await request('/rapor-sumatif/period?' + qs, token)
+    if (scopeRef.current === qs) applyPeriod(data)
     return data
   }
   useEffect(() => {
     const current = ++generation.current
     setConfig(null); setDoc(null); setCPs([]); setScores([]); setNarratives([]); setMapelId(''); setStudentId(''); setDirty(false); setImportData(null); setLedger([])
     setPromotionRules(null); setPromotionEdited(false)
-    setSemesterArchived(false); setPeriodConfigLocked(false); setSaved(false); setSaveError('')
+    setSemesterArchived(false); setPeriodConfigLocked(false); setSaved(false); setSaveError(''); setPeriodError('')
     if (!kelasId) return
     void request('/rapor-sumatif/period?' + qs, tokenRef.current).then(data => {
       if (current !== generation.current) return
-      setPeriod(data.period); setConfig(data.config); setStudents(data.students); setRecords(data.records)
-      setPromotionRules(data.promotionRules)
-      setSemesterArchived(!!data.semesterArchived); setPeriodConfigLocked(!!data.configLocked)
-      setCanManage(data.canManage); setCanInput(data.canInput); setIsAdmin(data.isAdmin)
-    }).catch(e => { if (current === generation.current) toast.error(e.message) })
-  }, [kelasId, semester, year]) // eslint-disable-line react-hooks/exhaustive-deps -- token refresh must not erase unsaved inputs
+      applyPeriod(data)
+    }).catch(e => { if (current === generation.current) setPeriodError(e.message) })
+  }, [kelasId, semester, year, periodRetry]) // eslint-disable-line react-hooks/exhaustive-deps -- token refresh must not erase unsaved inputs
 
   async function loadGrid() {
     if (!mapelId) return
@@ -200,7 +257,12 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     previewRef.current = ''; setPreviewURL('')
   }
   function goTo(nextTab: string, target: string) {
-    const show = () => { if (nextTab) setTab(nextTab); setFocusTarget(target === 'report-scores' && !mapelId ? 'report-cp' : target === 'report-status' && !studentId ? 'report-student' : target) }
+    const show = () => {
+      if (nextTab) setTab(nextTab)
+      if (target === 'report-scores' && !cps.length) setFocusTarget('report-cp')
+      else if (target === 'report-status' && (!studentId || readOnly || isArchived)) setFocusTarget('report-student')
+      else setFocusTarget(target)
+    }
     if (!nextTab || nextTab === tab) show()
     else leave(show)
   }
@@ -217,7 +279,14 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     if (/Catatan wali/i.test(issue)) { goTo('rapor', 'report-note'); return }
     if (/ekstrakurikuler/i.test(issue)) { goTo('rapor', 'report-extras'); return }
     const subject = doc?.subjects.find(m => issue.startsWith(m.name + ':'))
-    if (subject) leave(() => { setMapelId(subject.mapelId); setTab('nilai'); setFocusTarget('report-scores') })
+    if (subject) {
+      if (!canViewGrid.includes(subject.mapelId)) {
+        if (isAdmin) leave(() => navigate('/kelas-mapel'))
+        else toast.info('Mapel ini belum terdaftar untuk rombel tersebut. Minta admin memeriksa Mapel per Kelas.')
+        return
+      }
+      leave(() => { setMapelId(subject.mapelId); setTab('nilai'); setFocusTarget('report-cp') })
+    }
   }
   async function saveDetails() {
     await request('/rapor-sumatif/document/' + studentId + '?' + qs, token, 'PUT', { revision: period.revision, updatePromotion: promotionEdited, details: { note: details.note, promotion: details.promotion, nextClass: details.nextClass, extras: details.extras, identity: details.identity } })
@@ -257,7 +326,7 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     if (aiDirty) { setAI(await request('/rapor-sumatif/ai/settings', token)); setAIDirty(false) }
     setDirty(false); setSaveError('')
   }
-  function scoreValue(id: string, cpId: string) { return scores.find(s => s.studentId === id && s.cpId === cpId)?.value ?? null }
+  function scoreValue(id: string, cpId: string) { return scoresByStudent.get(id)?.get(cpId) ?? null }
   function updateScore(id: string, cpId: string, raw: string) {
     const value = raw.trim() === '' ? null : Number(raw)
     setScores(rows => [...rows.filter(r => !(r.studentId === id && r.cpId === cpId)), { studentId: id, cpId, value }]); setDirty(true)
@@ -316,46 +385,79 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     setImportData(data); setImportStudents(Object.fromEntries(data.preview.students.map((s: ImportStudent) => [s.row, s.studentId]))); setImportSubjects(Object.fromEntries(data.preview.subjects.map((s: ImportSubject) => [s.sheet, s.mapelId])))
   }
 
+  async function updateReportStatus(status: string) {
+    let reason = ''
+    if (status === 'draft' && locked(studentId)) {
+      const answer = window.prompt('Alasan pembukaan revisi rapor:')
+      if (!answer?.trim()) return
+      reason = answer
+    }
+    await request('/rapor-sumatif/document/' + studentId + '/status?' + qs, token, 'POST', { revision: period.revision, status, reason })
+    await refreshPeriod(); await loadDocument(); toast.success('Status rapor diperbarui')
+  }
+
+  const reportStatus = record?.status || 'draft'
+  const nextStatus = nextReportStatus[reportStatus]
+
   return <div className="space-y-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h2 className="text-xl font-bold">{nilaiOnly ? 'Nilai Sumatif CP' : 'Rapor Semester'}</h2><p className="text-sm text-muted-foreground">Nilai CP, deskripsi capaian, pemeriksaan, dan cetak sesuai blangko PKBM Tunas Ilmu.</p></div>
-      {!readOnly && <Button variant={gradeCPOpen ? 'default' : 'outline'} disabled={busy} onClick={() => leave(() => {
+      {hasGradeCPTab && <Button variant={gradeCPOpen ? 'default' : 'outline'} disabled={busy} onClick={() => leave(() => {
         if (gradeCPOpen) invalidateReport()
         setTab(gradeCPOpen ? 'nilai' : 'cp')
       })}>{gradeCPOpen ? 'Kembali ke nilai per rombel' : 'CP per jenjang'}</Button>}
     </div>
-    {gradeCPOpen ? <ReportGradeCPPanel token={token} initialSemester={semester} busy={busy} actionsRef={gradeCPActions} setBusy={setBusy} setDirty={setDirty} leave={leave} /> : <>
-    <ReportWorkflowGuide current={!kelasId ? 1 : tab === 'nilai' ? cps.length ? 3 : 2 : ['ready', 'final', 'published'].includes(record?.status || '') ? 5 : 4} ready={!!config} canReview={canManage || readOnly} busy={busy} onStep={goTo} />
+    {gradeCPOpen ? <ReportGradeCPPanel token={token} initialGrade={selectedClass?.jenjang} initialSubject={mapelId} initialSemester={semester} busy={busy} actionsRef={gradeCPActions} setBusy={setBusy} setDirty={setDirty} leave={leave} /> : <>
+    <ReportWorkflowGuide current={currentStep} ready={!!config} canReview={!!config && canReview} canScore={!readOnly && !isArchived && (!config || writableSubjects.length > 0)} readOnly={readOnly || isArchived} busy={busy} onStep={goTo} />
     {aiProgress && <div className="flex items-center gap-3 rounded-lg border p-3 text-sm" role="status">Membuat saran AI: {aiProgress.done}/{aiProgress.total} siswa<Button variant="outline" onClick={() => aiController.current?.abort()}>Hentikan</Button></div>}
     <Card id="report-scope" tabIndex={-1} className="grid gap-3 p-4 sm:grid-cols-3">
-      <div><Label>Tahun ajaran <span className="text-xs text-primary">Wajib</span></Label><Select aria-label="Tahun ajaran rapor" aria-required="true" value={year} disabled={busy} onChange={e => { const value = e.target.value; changeFilter(() => { setYear(value); setKelasId('') }) }}><option value="">Pilih tahun</option>{years.map(y => <option key={y.id} value={y.id}>{y.namaTahunAjaran}{y.isAktif ? '' : ' (arsip)'}</option>)}</Select></div>
-      <div><Label>Kelas <span className="text-xs text-primary">Wajib</span></Label><Select aria-label="Kelas rapor" aria-required="true" value={kelasId} disabled={busy} onChange={e => { const value = e.target.value; changeFilter(() => setKelasId(value)) }}><option value="">Pilih kelas</option>{classes.filter(k => k.tahunAjaranId === year).map(k => <option key={k.id} value={k.id}>Kelas {k.jenjang} {k.namaRombel}</option>)}</Select></div>
+      <div><Label>Tahun ajaran <span className="text-xs text-primary">Wajib</span></Label><Select aria-label="Tahun ajaran rapor" aria-required="true" value={year} disabled={busy || classesLoading} onChange={e => { const value = e.target.value; changeFilter(() => { setYear(value); setKelasId('') }) }}><option value="">Pilih tahun</option>{years.map(y => <option key={y.id} value={y.id}>{y.namaTahunAjaran}{y.isAktif ? '' : ' (arsip)'}</option>)}</Select></div>
+      <div><Label>Kelas <span className="text-xs text-primary">Wajib</span></Label><Select aria-label="Kelas rapor" aria-required="true" value={kelasId} disabled={busy || classesLoading || availableClasses.length === 0} onChange={e => { const value = e.target.value; changeFilter(() => setKelasId(value)) }}><option value="">Pilih kelas</option>{availableClasses.map(k => <option key={k.id} value={k.id}>Kelas {k.jenjang} {k.namaRombel}</option>)}</Select></div>
       <div><Label>Semester <span className="text-xs text-primary">Wajib</span></Label><Select aria-label="Semester rapor" aria-required="true" value={semester} disabled={busy} onChange={e => { const value = e.target.value; changeFilter(() => setSemester(value)) }}><option>Ganjil</option><option>Genap</option></Select></div>
     </Card>
+    {classesLoading && <p role="status" className="text-sm text-muted-foreground">Memuat daftar kelas…</p>}
+    {classesError && <p role="alert" className="text-sm text-destructive">Daftar kelas gagal dimuat. <Button variant="outline" size="sm" onClick={() => setClassesRetry(v => v + 1)}>Muat ulang daftar kelas</Button></p>}
+    {!classesLoading && !classesError && classes.length === 0 && <p className="rounded-lg border bg-muted/50 p-3 text-sm">Belum ada kelas yang tersedia untuk akun ini. Jika Anda bertugas mengisi nilai atau memeriksa rapor, minta admin memeriksa penugasan mapel atau wali kelas.</p>}
+    {kelasId && !config && !periodError && <p role="status" className="text-sm text-muted-foreground">Memuat pengaturan dan data rombel…</p>}
+    {periodError && <p role="alert" className="text-sm text-destructive">{periodError} <Button variant="outline" size="sm" onClick={() => setPeriodRetry(v => v + 1)}>Muat ulang periode</Button></p>}
     {config && <>
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Bagian rapor">{[['nilai', 'Nilai & deskripsi'], ['rapor', 'Pemeriksaan & cetak'], ...(canManage || readOnly ? [['presensi', 'Presensi rapor']] : []), ['leger', 'Leger'], ['pengaturan', 'Pengaturan'], ...(isAdmin ? [['impor', 'Impor workbook']] : [])].map(([id, label]) => <Button key={id} variant={tab === id ? 'default' : 'outline'} disabled={busy} onClick={() => { if (id !== tab) leave(() => setTab(id)) }}>{label}</Button>)}</div>
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Bagian rapor">{[['nilai', 'Nilai & deskripsi'], ...(canReview ? [['rapor', 'Pemeriksaan & cetak'], ['presensi', 'Presensi rapor'], ['leger', 'Leger'], ['pengaturan', 'Pengaturan']] : []), ...(isAdmin ? [['impor', 'Impor workbook']] : [])].map(([id, label]) => <Button key={id} variant={tab === id ? 'default' : 'outline'} disabled={busy} onClick={() => { if (id !== tab) leave(() => setTab(id)) }}>{label}</Button>)}</div>
       <div role="status" aria-live="polite" className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 text-sm ${hasChanges ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-primary/20 bg-primary/5'}`}><span><strong>{busy ? 'Sedang memproses…' : hasChanges ? 'Belum disimpan' : saved ? 'Tersimpan' : 'Belum ada perubahan'}</strong>{hasChanges && ' · Simpan sebelum melanjutkan ke bagian lain.'}</span>{hasChanges && <Button size="sm" disabled={busy} onClick={() => void run(saveCurrent)}>Simpan perubahan</Button>}</div>
       {saveError && <p role="alert" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{saveError}</p>}
       {isArchived && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">{semesterArchived ? 'Semester ini sudah diarsipkan.' : 'Tahun ajaran ini sudah diarsipkan.'} Nilai, CP, catatan, dan pengaturan hanya dapat dilihat. Admin dapat mengimpor data historis melalui pratinjau.</p>}
       {tab === 'presensi' && (canManage || readOnly) && <div id="report-attendance" tabIndex={-1}><ReportAttendancePanel key={qs} actionsRef={attendanceActions} token={token} qs={qs} students={students} isAdmin={isAdmin} canEdit={canManage && !readOnly && !isArchived} setDirty={setDirty} setParentBusy={setBusy} onSaved={async () => { invalidateReport(); await refreshPeriod(); setSaved(true) }} /></div>}
       {tab === 'nilai' && <>
-        <Card id="report-cp" tabIndex={-1} className="space-y-3 p-4"><Label>Mata pelajaran <span className="text-xs text-primary">Wajib</span></Label><Select aria-label="Mata pelajaran rapor" aria-required="true" value={mapelId} disabled={busy} onChange={e => { const value = e.target.value; changeFilter(() => setMapelId(value)) }}><option value="">Pilih mapel</option>{config.subjects.map(m => <option value={m.mapelId} key={m.mapelId}>{m.name}</option>)}</Select>
+        <Card id="report-cp" tabIndex={-1} className="space-y-3 p-4"><Label>Mata pelajaran <span className="text-xs text-primary">Wajib</span></Label>
+          <Select aria-label="Mata pelajaran rapor" aria-required="true" value={mapelId} disabled={busy || writableSubjects.length + viewableSubjects.length === 0} onChange={e => { const value = e.target.value; changeFilter(() => setMapelId(value)) }}>
+            <option value="">Pilih mapel</option>
+            {isArchived || readOnly ? [...writableSubjects, ...viewableSubjects].map(m => <option value={m.mapelId} key={m.mapelId}>{m.name}</option>) : <>
+              {writableSubjects.length > 0 && <optgroup label="Bisa diisi">{writableSubjects.map(m => <option value={m.mapelId} key={m.mapelId}>{m.name}</option>)}</optgroup>}
+              {viewableSubjects.length > 0 && <optgroup label="Hanya lihat">{viewableSubjects.map(m => <option value={m.mapelId} key={m.mapelId}>{m.name}</option>)}</optgroup>}
+            </>}
+          </Select>
+          {(config.subjects.length === 0 || canReview && canViewGrid.length === 0) ? <div className="rounded-lg bg-muted/50 p-3 text-sm"><p>Belum ada mata pelajaran untuk rombel ini. {!isAdmin && 'Minta admin menyiapkannya di Mapel per Kelas.'}</p>{isAdmin && <Button size="sm" variant="outline" className="mt-2" onClick={() => leave(() => navigate('/kelas-mapel'))}>Atur mapel kelas</Button>}</div> : !canReview && !isArchived && writableSubjects.length === 0 && <p className="rounded-lg bg-muted/50 p-3 text-sm">Belum ada mapel yang dapat diisi untuk akun Anda di rombel ini. Minta admin memeriksa penugasan.</p>}
+          {canManage && !isAdmin && !isArchived && writableSubjects.length > 0 && <p className="text-sm text-muted-foreground">Sebagai wali kelas, Anda bisa mengisi nilai semua mapel di rombel ini.</p>}
           {gridLoading && <p role="status">Memuat CP dan nilai tersimpan…</p>}
           {gridError && <p role="alert" className="text-red-700">{gridError} <Button variant="outline" onClick={() => void run(loadGrid)}>Muat ulang nilai</Button></p>}
-          {mapelId && !canWrite && !gridLoading && <p className="rounded-lg bg-muted/50 p-3 text-sm">Bagian ini hanya dapat dilihat. Pengisian dilakukan tutor yang ditugaskan pada mapel ini atau admin.</p>}
-          {mapelId && !gridLoading && !gridError && cpSource === 'pending' && <p role="status" className="rounded-lg bg-muted/50 p-3 text-sm">CP jenjang belum tersedia untuk mapel dan semester ini. Hubungi admin atau guru penyusun CP.</p>}
+          {mapelId && !canWrite && !readOnly && !isArchived && !gridLoading && !gridError && <p className="rounded-lg bg-muted/50 p-3 text-sm">Nilai mapel ini tersedia untuk diperiksa.</p>}
+          {mapelId && !gridLoading && !gridError && cpSource === 'pending' && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <p role="status"><strong>CP belum tersedia untuk mapel dan semester ini.</strong>{' '}{isArchived ? 'Belum ada daftar CP tersimpan pada periode ini.' : canDraftGradeCP ? 'Anda ditugaskan menyusun CP jenjang ini. Simpan daftar CP terlebih dahulu.' : isAdmin ? 'Tetapkan guru penyusun CP, lalu minta guru tersebut menyimpan daftar CP di CP per jenjang.' : 'Minta guru penyusun CP menyimpan daftar CP. Jika penyusun belum ditetapkan, hubungi admin.'}</p>
+            {!isArchived && (canDraftGradeCP || isAdmin) && <Button size="sm" variant="outline" onClick={() => goTo('cp', 'report-grade-cp')}>{isAdmin ? 'Buka penugasan CP' : 'Susun CP jenjang ini'}</Button>}
+          </div>}
           {mapelId && !gridLoading && cpSource === 'legacy' && <p className="rounded-lg bg-muted/50 p-3 text-sm">Rombel ini memakai daftar CP lama untuk menjaga keterkaitan nilai dan deskripsi yang sudah tersimpan.</p>}
           {mapelId && !gridLoading && cpSource === 'shared' && <p className="text-sm text-muted-foreground">Daftar CP jenjang dikelola oleh guru yang ditugaskan admin.</p>}
           {mapelId && cps.length > 0 && <><p className="text-sm text-muted-foreground">Nilai rapor adalah rata-rata CP yang terisi, dibulatkan. Tempel blok angka dari Excel ke sel nilai pertama.</p>
-            <details className="rounded-lg border bg-muted/30 p-3 text-sm"><summary className="cursor-pointer font-semibold">Bantuan deskripsi otomatis dan manual</summary><p className="mt-2 text-sm text-muted-foreground">Deskripsi otomatis memakai 1 CP tertinggi dan 1 terendah untuk 1–4 CP terisi, atau masing-masing 2 untuk lebih dari 4 CP. Khusus 1 CP, hanya capaian yang ditampilkan. Awali deskripsi CP dengan huruf kecil; antar-CP digabung dengan “serta”. Deskripsi manual yang sudah tersimpan tetap dipertahankan.</p>
+            <details className="rounded-lg border bg-muted/30 p-3 text-sm"><summary className="cursor-pointer font-semibold">Bantuan deskripsi otomatis dan manual</summary><p className="mt-2 text-sm text-muted-foreground">Deskripsi otomatis dirangkai dari hasil nilai CP tertinggi dan terendah. Jika hanya satu nilai terisi, sistem menampilkan capaian saja. Tinjau hasilnya sebelum menyimpan nilai.</p>
             <p className="text-sm text-muted-foreground">Untuk memperbarui deskripsi draf, pilih “Susun ulang dari CP” di baris siswa, periksa hasilnya, lalu klik “Simpan nilai”. Rapor final dan terbit tetap memakai versi yang sudah dibekukan.</p></details>
-            <div className="flex flex-wrap gap-2">{canWrite && !isArchived && !gridLoading && !gridError && <><Button variant="outline" disabled={busy || dirty} onClick={() => void run(suggestClass)}>Bantu AI satu kelas</Button><Button disabled={busy || !dirty} onClick={() => void run(saveGrid)}>Simpan nilai</Button></>}</div>
+            {canUseAI && canWrite && !isArchived && !gridLoading && !gridError && <Button variant="outline" disabled={busy || dirty || scores.every(score => score.value === null)} onClick={() => void run(suggestClass)}>Bantu AI satu kelas</Button>}
             <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{cps.map((cp, i) => <div key={cp.id} className="rounded-md border p-3 text-sm"><dt className="font-semibold">CP {i + 1}</dt><dd>{cp.label}</dd></div>)}</dl>
           </>}
         </Card>
         {mapelId && cps.length > 0 && <Card id="report-scores" tabIndex={-1} className="overflow-auto p-3"><p className="mb-3 text-sm text-muted-foreground">Nilai CP <strong className="text-primary">Wajib sebelum finalisasi</strong>. Kolom kosong dapat disimpan sebagai draf; isi 0 hanya jika nilainya memang nol.</p><table className="w-full text-sm"><thead><tr><th className="min-w-44 p-2 text-left">Peserta didik</th>{cps.map((cp, i) => <th key={cp.id || i} className="min-w-24 p-2">CP {i + 1}</th>)}<th className="p-2">Nilai rapor</th><th className="min-w-80 p-2">Deskripsi akhir</th></tr></thead><tbody>{students.map((student, ri) => {
           const values = cps.map(cp => scoreValue(student.id, cp.id)).filter((v): v is number => v !== null)
-          const narrative: Narrative = narratives.find(n => n.studentId === student.id) || { studentId: student.id, ...automaticNarrative(student.id) }
+          const savedNarrative = narratives.find(n => n.studentId === student.id)
+          const narrative = savedNarrative || automaticNarrative(student.id)
+          const needsReview = savedNarrative?.reviewedRevision === -1 && !narrativeEdits.has(student.id)
           const disabled = !canWrite || busy || isArchived || locked(student.id)
           return <tr key={student.id} className="border-t align-top"><td className="p-2 font-medium">{student.nama}<div className="text-xs text-muted-foreground">NIS {student.nis}{locked(student.id) ? ' · final' : ''}</div></td>{cps.map((cp, ci) => <td key={cp.id || ci} className="p-1"><Input aria-required="true" className={scoreValue(student.id, cp.id) === null ? requiredClass + ' bg-amber-50 dark:bg-amber-950/20' : 'border-l-4 border-l-primary/25'} aria-label={`${student.nama} CP ${ci + 1}`} type="number" min="0" max="100" step="0.01" disabled={disabled} value={scoreValue(student.id, cp.id) ?? ''} onChange={e => updateScore(student.id, cp.id, e.target.value)} onPaste={e => {
             const raw = e.clipboardData.getData('text/plain'); if (!raw.includes('\t') && !raw.includes('\n')) return
@@ -364,17 +466,27 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
             rows.forEach((row, r) => row.split('\t').forEach((cell, c) => { const st = students[ri + r], target = cps[ci + c]; if (!st || !target || locked(st.id)) return; const value = cell.trim() === '' ? null : Number(cell.replace(',', '.')); if (value !== null && (!Number.isFinite(value) || value < 0 || value > 100)) { invalid = true; return }; updates.push({ studentId: st.id, cpId: target.id, value }) }))
             if (invalid) { setSaveError('Blok berisi nilai tidak valid. Gunakan angka 0–100; isian sebelumnya tetap ada.'); return }
             setScores(prev => [...prev.filter(v => !updates.some(u => u.cpId === v.cpId && u.studentId === v.studentId)), ...updates]); setDirty(true)
-          }} /></td>)}<td className="p-2 text-center font-semibold">{values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : '—'}<div className="text-xs font-normal">{values.length}/{cps.length} CP</div></td><td className="space-y-2 p-2"><textarea aria-label={'Capaian ' + student.nama} placeholder="Kosong: gunakan narasi otomatis dari CP tertinggi" className={textClass} disabled={disabled} value={narrative?.strength || ''} onChange={e => editNarrative(student.id, 'strength', e.target.value)} /><textarea aria-label={'Penguatan ' + student.nama} placeholder="Penguatan capaian lainnya" className={textClass} disabled={disabled} value={narrative?.growth || ''} onChange={e => editNarrative(student.id, 'growth', e.target.value)} />{narrative?.reviewedRevision === -1 && <p className="text-amber-700">Nilai berubah. Tinjau deskripsi dan simpan kembali.</p>}<div className="flex flex-wrap gap-2">{narratives.some(row => row.studentId === student.id) && <Button size="sm" variant="outline" aria-label={'Susun ulang deskripsi ' + student.nama} title="Mengganti deskripsi pada draf siswa ini dari nilai CP. Klik Simpan nilai / CP untuk menyimpan." disabled={disabled || values.length === 0} onClick={() => { const automatic = automaticNarrative(student.id); editNarrative(student.id, 'strength', automatic.strength); editNarrative(student.id, 'growth', automatic.growth) }}>Susun ulang dari CP</Button>}<Button size="sm" variant="outline" disabled={disabled || dirty} onClick={() => void run(() => suggest(student.id))}>Bantu AI</Button>{narrative && <Button size="sm" variant="outline" disabled={disabled} onClick={() => { setNarrativeEdits(prev => new Set([...prev, student.id])); setDirty(true) }}>Tandai ditinjau</Button>}</div></td></tr>
+          }} /></td>)}<td className="p-2 text-center font-semibold">{values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : '—'}<div className="text-xs font-normal">{values.length}/{cps.length} CP</div></td><td className="space-y-2 p-2"><textarea aria-label={'Capaian ' + student.nama} placeholder="Capaian otomatis muncul setelah nilai diisi" className={textClass} disabled={disabled} value={narrative.strength} onChange={e => editNarrative(student.id, 'strength', e.target.value)} /><textarea aria-label={'Penguatan ' + student.nama} placeholder="Penguatan capaian lainnya" className={textClass} disabled={disabled} value={narrative.growth} onChange={e => editNarrative(student.id, 'growth', e.target.value)} />{needsReview && <p className="text-amber-700">Nilai atau CP berubah. Tinjau kembali deskripsi yang tersimpan.</p>}<div className="flex flex-wrap gap-2">{savedNarrative && !disabled && <Button size="sm" variant="outline" aria-label={'Susun ulang deskripsi ' + student.nama} title="Susun ulang dari nilai CP, lalu klik Simpan nilai." disabled={values.length === 0} onClick={() => { const automatic = automaticNarrative(student.id); editNarrative(student.id, 'strength', automatic.strength); editNarrative(student.id, 'growth', automatic.growth) }}>Susun ulang dari CP</Button>}{canUseAI && !disabled && <Button size="sm" variant="outline" disabled={dirty || values.length === 0} onClick={() => void run(() => suggest(student.id))}>Bantu AI</Button>}{needsReview && !disabled && <Button size="sm" variant="outline" onClick={() => { setNarrativeEdits(prev => new Set([...prev, student.id])); setDirty(true) }}>Tandai ditinjau</Button>}</div></td></tr>
         })}</tbody></table></Card>}
+        {mapelId && cps.length > 0 && !gridLoading && !gridError && <Card className="sticky bottom-2 z-10 flex flex-wrap items-center justify-between gap-3 p-3">
+          <div className="text-sm"><p className="font-semibold">{completedScores} dari {students.length} siswa sudah lengkap nilai CP</p>
+            {pendingReviews > 0 && <p className="text-muted-foreground">{pendingReviews} deskripsi perlu ditinjau.</p>}
+            {canWrite && !isArchived && !canManage && saved && !dirty && <p className="text-muted-foreground">Nilai yang tersimpan sudah tersedia untuk wali kelas.</p>}
+          </div>
+          {canWrite && !isArchived && <Button disabled={busy || !dirty} onClick={() => void run(saveGrid)}>Simpan nilai</Button>}
+          {canManage && saved && !dirty && <Button variant="outline" disabled={busy} onClick={() => goTo('rapor', 'report-student')}>Periksa rapor siswa</Button>}
+        </Card>}
       </>}
       {tab === 'rapor' && <>
         {!canManage && !readOnly ? <p>Pengisian nilai tersedia pada tab Nilai & deskripsi. Pemeriksaan rapor dilakukan wali kelas atau admin.</p> : <>
-          <Card id="report-student" tabIndex={-1} className="space-y-3 p-4"><Label>Peserta didik <span className="text-xs text-primary">Pilih untuk memeriksa rapor</span></Label><Select aria-label="Peserta didik rapor" value={studentId} disabled={busy} onChange={e => { const value = e.target.value; changeFilter(() => setStudentId(value)) }}><option value="">Pilih siswa</option>{students.map(s => <option key={s.id} value={s.id}>{s.nama} · {records.find(r => r.studentId === s.id)?.status || 'draft'}</option>)}</Select>
+          <Card id="report-student" tabIndex={-1} className="space-y-3 p-4"><Label>Peserta didik <span className="text-xs text-primary">Pilih untuk memeriksa rapor</span></Label><Select aria-label="Peserta didik rapor" value={studentId} disabled={busy || students.length === 0} onChange={e => { const value = e.target.value; changeFilter(() => setStudentId(value)) }}><option value="">Pilih siswa</option>{students.map(s => <option key={s.id} value={s.id}>{s.nama} · {statusNames[records.find(r => r.studentId === s.id)?.status || 'draft']}</option>)}</Select>
+            {!students.length && <p className="text-sm text-muted-foreground">Belum ada peserta didik di rombel ini.</p>}
+            {!!students.length && !studentId && <p className="text-sm text-muted-foreground">Pilih siswa untuk melihat nilai, presensi, dan apa yang perlu dilengkapi.</p>}
             <div className="flex flex-wrap gap-2">{['rapor', 'cover', 'identitas', 'lengkap'].map(kind => <Button key={kind} variant="outline" disabled={busy || docLoading || !studentId || !doc} onClick={() => void run(() => showPDF(kind))}>Cetak {kind}</Button>)}<Button variant="outline" disabled={busy || hasChanges || students.length === 0} onClick={() => void run(() => showPDF('lengkap', true))}>Cetak lengkap satu kelas</Button></div>
           </Card>
           {docLoading && <p role="status" className="rounded-lg border p-4">Memuat nilai dan deskripsi terbaru untuk pemeriksaan…</p>}
           {docError && <div role="alert" className="space-y-2 rounded-lg border border-red-300 p-4 text-sm"><p>{docError}</p><Button variant="outline" disabled={busy} onClick={() => void run(loadDocument)}>Muat ulang pemeriksaan</Button></div>}
-          {doc && <Card className="space-y-4 p-4"><div><h3 className="font-bold">{doc.student.nama}</h3><p className="mt-1 text-sm font-semibold text-primary">{statusLabels[record?.status || 'draft'] || 'Draf'}</p><p className="text-xs text-muted-foreground">Status: {record?.status || 'draft'} · Versi {record?.version || 0}</p>{record && record.version > 0 && <details className="mt-2"><summary className="cursor-pointer text-sm">Riwayat versi final</summary><div className="mt-2 flex flex-wrap gap-2">{Array.from({ length: record.version }, (_, i) => <Button key={i} variant="outline" size="sm" disabled={busy || dirty} onClick={() => void run(() => showPDF('rapor', false, i + 1))}>Lihat versi {i + 1}</Button>)}</div></details>}</div>
+          {doc && <Card className="space-y-4 p-4"><div><h3 className="font-bold">{doc.student.nama}</h3><p className="mt-1 text-sm font-semibold text-primary">{statusLabels[reportStatus] || 'Draf'}</p>{record && record.version > 0 && <details className="mt-2"><summary className="cursor-pointer text-sm">Riwayat versi final · Versi {record.version}</summary><div className="mt-2 flex flex-wrap gap-2">{Array.from({ length: record.version }, (_, i) => <Button key={i} variant="outline" size="sm" disabled={busy || dirty} onClick={() => void run(() => showPDF('rapor', false, i + 1))}>Lihat versi {i + 1}</Button>)}</div></details>}</div>
             <table className="w-full text-sm"><thead><tr><th className="text-left">Mata pelajaran</th><th>Nilai</th><th className="text-left">Capaian kompetensi</th></tr></thead><tbody>{doc.subjects.map(m => <tr key={m.mapelId} className="border-t"><td className="p-2">{m.name}</td><td className="p-2 text-center">{m.score ?? '—'}</td><td className="space-y-2 p-2"><p>{m.strength}</p><p>{m.growth}</p>{m.stale && <p className="text-amber-700">Perlu ditinjau</p>}</td></tr>)}</tbody></table>
             <p className="text-sm">Ketidakhadiran: Sakit {doc.attendance.sakit} hari · Izin {doc.attendance.izin} hari · Tanpa keterangan {doc.attendance.alpa} hari</p>
             <p className="text-xs text-muted-foreground">Sumber presensi: {['final', 'published'].includes(record?.status || '') ? 'versi rapor yang sudah dibekukan' : doc.attendanceSource === 'manual' ? 'rekap manual dari catatan kertas' : doc.attendanceSource === 'historical' ? 'rekap historis hasil impor Excel' : 'otomatis dari presensi aplikasi'}. {doc.attendanceSource === 'manual' && canManage && !locked(studentId) && <Button size="sm" variant="outline" disabled={busy || dirty} onClick={() => setTab('presensi')}>Isi / periksa rekap presensi</Button>}</p>
@@ -406,8 +518,14 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
               </section>
               <Button disabled={!dirty} onClick={() => void run(saveDetails)}>Simpan catatan</Button>
             </fieldset>
-            {doc.issues.length > 0 ? <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><strong>Perlu dilengkapi sebelum final:</strong><p className="mt-1">Pilih bagian di bawah untuk menuju isian yang perlu diperiksa.</p><ul className="mt-2 space-y-2">{doc.issues.map((issue, i) => <li key={i}><button type="button" className="min-h-10 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-left font-medium underline decoration-amber-400 underline-offset-4 hover:bg-amber-100 disabled:opacity-60" disabled={busy} onClick={() => openIssue(issue)}>{issue} →</button></li>)}</ul></div> : <p className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-900">Isian wajib lengkap. Periksa nilai, deskripsi, dan identitas sebelum memfinalkan rapor.</p>}
-            {canManage && !isArchived && <div id="report-status" tabIndex={-1} className="flex flex-wrap gap-2">{[['ready', 'Siap diperiksa'], ['final', 'Finalkan rapor'], ['published', 'Terbitkan untuk orang tua'], ['draft', 'Buka / revisi draf']].map(([status, label]) => <Button key={status} variant="outline" disabled={busy || dirty || status === 'final' && (record?.status !== 'ready' || doc.issues.length > 0) || status === 'published' && record?.status !== 'final' || status === 'ready' && locked(studentId)} onClick={() => void run(async () => { let reason = ''; if (status === 'draft' && locked(studentId)) { const answer = window.prompt('Alasan pembukaan revisi rapor:'); if (!answer?.trim()) return; reason = answer } await request('/rapor-sumatif/document/' + studentId + '/status?' + qs, token, 'POST', { revision: period.revision, status, reason }); await refreshPeriod(); await loadDocument(); toast.success('Status rapor diperbarui') })}>{label}</Button>)}</div>}
+            {!locked(studentId) && (doc.issues.length > 0 ? <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><strong>Perlu dilengkapi sebelum final</strong><p className="mt-1">Pilih bagian di bawah untuk menuju isian yang perlu diperiksa.</p><ul className="mt-2 space-y-2">{doc.issues.map((issue, i) => <li key={i}><button type="button" className="min-h-10 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-left font-medium underline decoration-amber-400 underline-offset-4 hover:bg-amber-100 disabled:opacity-60" disabled={busy} onClick={() => openIssue(issue)}>{issue} →</button></li>)}</ul></div> : <p className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-900">Isian wajib lengkap. Periksa nilai, deskripsi, dan identitas sebelum memfinalkan rapor.</p>)}
+            {canManage && !isArchived && <div id="report-status" tabIndex={-1} className="space-y-2 rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">{reportStatus === 'draft' ? 'Tandai siap diperiksa untuk memulai pemeriksaan akhir.' : reportStatus === 'ready' ? 'Lengkapi isian yang ditandai, lalu finalkan rapor.' : reportStatus === 'final' ? 'Setelah terbit, rapor bisa dibuka oleh orang tua.' : 'Rapor sudah tersedia untuk orang tua. Gunakan tombol cetak untuk membuat PDF.'}</p>
+              <div className="flex flex-wrap gap-2">
+                {nextStatus && <Button disabled={busy || hasChanges || nextStatus === 'final' && doc.issues.length > 0} onClick={() => void run(() => updateReportStatus(nextStatus))}>{reportStatusActionLabels[nextStatus]}</Button>}
+                {reportStatus !== 'draft' && <Button variant="outline" disabled={busy || hasChanges} onClick={() => void run(() => updateReportStatus('draft'))}>{locked(studentId) ? 'Buka revisi' : 'Kembalikan ke draf'}</Button>}
+              </div>
+            </div>}
           </Card>}
         </>}
       </>}

@@ -49,10 +49,7 @@ func (s *Server) reportAISuggest(c *fiber.Ctx) error {
 		return err
 	}
 	mp := c.Query("mapelId")
-	if err = s.reportReadMapel(c, k.ID, mp); err != nil {
-		return err
-	}
-	if err = s.canManageKelasMapel(c, k.ID, mp); err != nil {
+	if err = s.reportAccessMapel(c, k.ID, mp, true); err != nil {
 		return err
 	}
 	var in struct {

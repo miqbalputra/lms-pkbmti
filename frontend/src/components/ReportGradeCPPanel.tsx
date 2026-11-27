@@ -9,7 +9,7 @@ import { Label } from './ui/label'
 import { Select } from './ui/select'
 
 type Grade = { jenjang: number; userId: string; subjects?: { id: string; namaMapel: string }[] }
-type Assignments = {
+export type ReportCPAssignments = {
   year: { id: string; namaTahunAjaran: string }
   isAdmin: boolean
   grades: Grade[]
@@ -19,8 +19,10 @@ type Definition = { id: string; label: string }
 type Template = { revision: number; cps: Definition[]; archived: boolean }
 export type ReportGradeCPActions = { save: () => Promise<void>; discard: () => Promise<void> }
 
-export function ReportGradeCPPanel({ token, initialSemester, busy, actionsRef, setBusy, setDirty, leave }: {
+export function ReportGradeCPPanel({ token, initialGrade, initialSubject, initialSemester, busy, actionsRef, setBusy, setDirty, leave }: {
   token: string
+  initialGrade?: number
+  initialSubject?: string
   initialSemester: string
   busy: boolean
   actionsRef: MutableRefObject<ReportGradeCPActions | null>
@@ -28,7 +30,7 @@ export function ReportGradeCPPanel({ token, initialSemester, busy, actionsRef, s
   setDirty: (dirty: boolean) => void
   leave: (action: () => void) => void
 }) {
-  const [metadata, setMetadata] = useState<Assignments | null>(null)
+  const [metadata, setMetadata] = useState<ReportCPAssignments | null>(null)
   const [grade, setGrade] = useState('')
   const [teacher, setTeacher] = useState('')
   const [semester, setSemester] = useState(initialSemester)
@@ -50,15 +52,17 @@ export function ReportGradeCPPanel({ token, initialSemester, busy, actionsRef, s
   useEffect(() => {
     const controller = new AbortController()
     void request('/rapor-sumatif/cp-assignments', tokenRef.current, 'GET', undefined, controller.signal)
-      .then((data: Assignments) => {
+      .then((data: ReportCPAssignments) => {
         if (controller.signal.aborted) return
+        const row = data.grades.find(item => item.jenjang === initialGrade) || data.grades[0]
         setMetadata(data)
-        setGrade(String(data.grades[0]?.jenjang || ''))
-        setTeacher(data.grades[0]?.userId || '')
+        setGrade(String(row?.jenjang || ''))
+        setTeacher(row?.userId || '')
+        setSubject(row?.subjects?.find(item => item.id === initialSubject)?.id || '')
       })
       .catch(e => { if (!controller.signal.aborted) setError(e.message) })
     return () => controller.abort()
-  }, [metadataRetry])
+  }, [initialGrade, initialSubject, metadataRetry])
 
   useEffect(() => {
     if (!path) return
@@ -112,7 +116,7 @@ export function ReportGradeCPPanel({ token, initialSemester, busy, actionsRef, s
     return () => { actionsRef.current = null }
   })
 
-  return <Card className="space-y-4 p-4" aria-label="CP per jenjang">
+  return <Card id="report-grade-cp" tabIndex={-1} className="space-y-4 p-4" aria-label="CP per jenjang">
     <div>
       <h3 className="font-bold">{metadata?.isAdmin ? 'Penugasan guru CP per jenjang' : 'CP per jenjang'}</h3>
       {year && <p className="text-sm text-muted-foreground">Tahun ajaran {metadata?.year.namaTahunAjaran}</p>}
@@ -121,6 +125,7 @@ export function ReportGradeCPPanel({ token, initialSemester, busy, actionsRef, s
     {!metadata && !error && <p role="status">Memuat penugasan CP…</p>}
     {metadata && !metadata.grades.length && <p className="text-sm text-muted-foreground">{metadata.isAdmin ? 'Belum ada jenjang kelas pada tahun ajaran aktif.' : 'Admin belum menugaskan Anda untuk menyusun CP pada tahun ajaran aktif.'}</p>}
     {!!metadata?.grades.length && <>
+      {!metadata.isAdmin && <p className="text-sm text-muted-foreground">Pilih jenjang, semester, dan mapel. Tambahkan deskripsi CP, lalu klik <strong>Simpan CP jenjang</strong>. Nilai siswa diisi dari tampilan nilai per rombel.</p>}
       <div className="grid gap-3 md:grid-cols-3">
         <div><Label htmlFor="report-cp-grade">Jenjang</Label><Select id="report-cp-grade" disabled={busy} value={grade} onChange={e => {
           const value = e.target.value

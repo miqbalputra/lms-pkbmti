@@ -42,7 +42,7 @@ test('admin enables paper recap, wali fills totals, and final reports stay froze
   await expect(page.getByText(/Lengkapi Sakit, Izin, dan Alpa dengan bilangan bulat/)).toHaveCount(0)
   if (process.env.E2E_REPORT_OUTPUT) await page.screenshot({ path: process.env.E2E_REPORT_OUTPUT + '/admin-rekap-manual.png', fullPage: true })
   await page.getByRole('button', { name: 'Pemeriksaan & cetak', exact: true }).click()
-  await page.getByLabel('Peserta didik rapor').selectOption({ label: 'Siswa A · draft' })
+  await page.getByLabel('Peserta didik rapor').selectOption({ label: 'Siswa A · Draf' })
   await expect(page.getByText('Ketidakhadiran: Sakit 3 hari · Izin 2 hari · Tanpa keterangan 0 hari', { exact: true })).toBeVisible()
   await expect(page.getByText(/Sumber presensi: rekap manual dari catatan kertas/)).toBeVisible()
   await page.getByLabel('Catatan wali kelas', { exact: true }).fill('Catatan wali tetap tersimpan.')

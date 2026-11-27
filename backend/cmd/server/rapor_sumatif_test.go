@@ -68,11 +68,30 @@ func TestReportBrowserServer(t *testing.T) {
 	s.db.Create(&PenugasanGuruMapel{TutorID: tutor.ID, KelasID: k.ID, MapelID: mp.ID})
 	wali := User{Username: "wali-rapor", Email: "wali.rapor.fixture@gmail.com", PasswordHash: hash, Role: "guru", TutorID: k.WaliKelasID, IsActive: true}
 	s.db.Create(&wali)
-	parallel := Kelas{Jenjang: k.Jenjang, NamaRombel: "S", PokjarID: k.PokjarID, TahunAjaranID: k.TahunAjaranID}
+	parallel := Kelas{Jenjang: k.Jenjang, NamaRombel: "S", PokjarID: k.PokjarID, TahunAjaranID: k.TahunAjaranID, WaliKelasID: k.WaliKelasID}
 	if err := s.db.Create(&parallel).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.Create(&KelasMapel{KelasID: parallel.ID, MapelID: mp.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	matematika := MataPelajaran{NamaMapel: "Matematika Uji", KodeMapel: "MTK-UJI", IsActive: true}
+	for _, row := range []interface{}{
+		&matematika,
+		&PenugasanGuruMapel{TutorID: tutor.ID, KelasID: parallel.ID, MapelID: mp.ID},
+	} {
+		if err := s.db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.db.Create(&KelasMapel{KelasID: parallel.ID, MapelID: matematika.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	unassigned := Tutor{Nama: "Tutor Tanpa Penugasan"}
+	if err := s.db.Create(&unassigned).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&User{Username: "guru-tanpa-kelas", Email: "tanpa.rapor.fixture@gmail.com", Role: "guru", TutorID: &unassigned.ID, IsActive: true, PasswordHash: hash}).Error; err != nil {
 		t.Fatal(err)
 	}
 	app.Static("/", "../../../frontend/dist")

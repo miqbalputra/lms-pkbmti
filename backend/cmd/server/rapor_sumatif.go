@@ -400,13 +400,21 @@ func (s *Server) reportPeriod(c *fiber.Ctx) error {
 	for _, record := range records {
 		configLocked = configLocked || record.Status == "final" || record.Status == "published"
 	}
-	canInput := []string{}
-	for _, m := range cfg.Subjects {
-		if s.canManageKelasMapel(c, k.ID, m.MapelID) == nil {
-			canInput = append(canInput, m.MapelID)
+	var linkedMapel []string
+	if err = s.db.Model(&KelasMapel{}).Where("kelas_id = ?", k.ID).Pluck("mapel_id", &linkedMapel).Error; err != nil {
+		return err
+	}
+	canInput, canViewGrid := []string{}, []string{}
+	for _, mapelID := range linkedMapel {
+		canWrite := canManage || s.canManageKelasMapel(c, k.ID, mapelID) == nil
+		if canWrite {
+			canInput = append(canInput, mapelID)
+		}
+		if canWrite || c.Locals("role") == "kepala_sekolah" {
+			canViewGrid = append(canViewGrid, mapelID)
 		}
 	}
-	return c.JSON(fiber.Map{"period": p, "config": cfg, "students": roster, "records": records, "class": k, "canManage": canManage, "canInput": canInput, "isAdmin": c.Locals("role") == "admin", "promotionRules": reportPromotionRules(k.Jenjang), "semesterArchived": semester.IsArchived, "configLocked": configLocked})
+	return c.JSON(fiber.Map{"period": p, "config": cfg, "students": roster, "records": records, "class": k, "canManage": canManage, "canInput": canInput, "canViewGrid": canViewGrid, "isAdmin": c.Locals("role") == "admin", "promotionRules": reportPromotionRules(k.Jenjang), "semesterArchived": semester.IsArchived, "configLocked": configLocked})
 }
 func (s *Server) reportSaveConfig(c *fiber.Ctx) error {
 	k, p, err := s.reportScope(c, true)
@@ -483,7 +491,7 @@ func (s *Server) reportGrid(c *fiber.Ctx) error {
 		return err
 	}
 	mp := c.Query("mapelId")
-	if err = s.reportReadMapel(c, k.ID, mp); err != nil {
+	if err = s.reportAccessMapel(c, k.ID, mp, false); err != nil {
 		return err
 	}
 	grid, err := reportEffectiveCPs(s.db, k, p, mp)
@@ -542,7 +550,9 @@ func (s *Server) reportGrid(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"period": p, "cps": grid.CPs, "cpSource": grid.Source, "scores": scores, "narratives": narratives, "students": roster})
 }
-func (s *Server) reportReadMapel(c *fiber.Ctx, kelasID, mapelID string) error {
+
+// Sumatif grades can be managed by the homeroom tutor for any subject in that class.
+func (s *Server) reportAccessMapel(c *fiber.Ctx, kelasID, mapelID string, write bool) error {
 	var n int64
 	if err := s.db.Model(&KelasMapel{}).Where("kelas_id = ? AND mapel_id = ?", kelasID, mapelID).Count(&n).Error; err != nil {
 		return err
@@ -550,7 +560,7 @@ func (s *Server) reportReadMapel(c *fiber.Ctx, kelasID, mapelID string) error {
 	if n != 1 {
 		return fiber.NewError(400, "Mapel tidak terdaftar pada kelas")
 	}
-	if c.Locals("role") == "admin" || c.Locals("role") == "kepala_sekolah" {
+	if !write && c.Locals("role") == "kepala_sekolah" {
 		return nil
 	}
 	if s.canManageKelas(c, kelasID) == nil {
@@ -572,10 +582,7 @@ func (s *Server) reportSaveGrid(c *fiber.Ctx) error {
 		return err
 	}
 	mp := c.Query("mapelId")
-	if err = s.reportReadMapel(c, k.ID, mp); err != nil {
-		return err
-	}
-	if err = s.canManageKelasMapel(c, k.ID, mp); err != nil {
+	if err = s.reportAccessMapel(c, k.ID, mp, true); err != nil {
 		return err
 	}
 	var in reportGridInput

@@ -9,8 +9,9 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const guard = useRef<Guard | null>(null)
   const [pending, setPending] = useState<(() => void) | null>(null)
   const [saving, setSaving] = useState(false)
+  const [awaitingCommit, setAwaitingCommit] = useState(false)
   const [error, setError] = useState('')
-  const [, update] = useState(0)
+  const [formVersion, update] = useState(0)
   const blocker = useBlocker(useCallback(() => {
     const state = guard.current?.read()
     return !!state && (state.dirty || state.busy)
@@ -33,6 +34,27 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     window.addEventListener('beforeunload', handle)
     return () => window.removeEventListener('beforeunload', handle)
   }, [])
+  // A resolved save can precede the React commit that clears the form guard.
+  // Proceed when the guard reports both flags cleared, including slow renders.
+  useEffect(() => {
+    if (!awaitingCommit) return
+    const state = guard.current?.read()
+    if (state?.dirty || state?.busy) return
+    setAwaitingCommit(false)
+    setSaving(false)
+    setPending(null)
+    if (blocker.state === 'blocked') blocker.proceed()
+    else pending?.()
+  }, [awaitingCommit, blocker, formVersion, pending])
+  useEffect(() => {
+    if (!awaitingCommit) return
+    const timeout = window.setTimeout(() => {
+      setAwaitingCommit(false)
+      setSaving(false)
+      setError('Perubahan belum selesai disimpan. Tetap di halaman ini dan periksa isian Anda.')
+    }, 3000)
+    return () => window.clearTimeout(timeout)
+  }, [awaitingCommit])
 
   const open = !!pending || blocker.state === 'blocked'
   const busy = saving || !!guard.current?.read().busy
@@ -48,16 +70,11 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     try {
       if (save) await state.save()
       else await state.discard()
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-      if (guard.current?.read().dirty || guard.current?.read().busy) {
-        throw new Error('Perubahan belum selesai disimpan. Tetap di halaman ini dan periksa isian Anda.')
-      }
-      const action = pending
-      setPending(null)
-      if (blocker.state === 'blocked') blocker.proceed()
-      else action?.()
-    } catch (e) { setError(e instanceof Error ? e.message : 'Penyimpanan gagal. Isian Anda tetap dipertahankan.') }
-    finally { setSaving(false) }
+      setAwaitingCommit(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Penyimpanan gagal. Isian Anda tetap dipertahankan.')
+      setSaving(false)
+    }
   }
   return <Context.Provider value={{ register, leave }}>{children}
     <Dialog open={open} onOpenChange={value => { if (!value) stay() }}>

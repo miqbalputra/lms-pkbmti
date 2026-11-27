@@ -176,12 +176,14 @@ func TestReportCPJenjangAssignmentAndPreservation(t *testing.T) {
 	if grid(k, "Genap").CPSource != "pending" || grid(otherGrade, "Ganjil").CPSource != "pending" {
 		t.Fatal("CP leaked across semester or grade")
 	}
+	call("PUT", gridPath(parallel, "Ganjil"), ownerToken, reportGridInput{CPs: b.CPs}, 403, nil)
+	call("PUT", base+"/grid"+scope(k, "Ganjil")+"&mapelId=unlinked", ownerToken, reportGridInput{CPs: a.CPs}, 400, nil)
 	for _, sample := range []struct {
 		row    Kelas
 		result gridResponse
 		token  string
 		value  float64
-	}{{k, a, otherToken, 81}, {parallel, b, admin, 94}} {
+	}{{k, a, ownerToken, 81}, {parallel, b, admin, 94}} {
 		call("PUT", gridPath(sample.row, "Ganjil"), sample.token, reportGridInput{Revision: sample.result.Period.Revision, CPs: sample.result.CPs, Scores: []ReportScore{{CPID: sample.result.CPs[0].ID, StudentID: sharedStudent, Value: &sample.value}}}, 200, nil)
 	}
 	a, b = grid(k, "Ganjil"), grid(parallel, "Ganjil")
@@ -195,6 +197,14 @@ func TestReportCPJenjangAssignmentAndPreservation(t *testing.T) {
 	call("PUT", template, otherToken, request, 200, &saved)
 	call("PUT", gridPath(k, "Ganjil"), otherToken, reportGridInput{Revision: a.Period.Revision, CPs: a.CPs}, 409, nil)
 	call("PUT", template, otherToken, fiber.Map{"revision": saved.Revision, "cps": []reportCPDefinition{{Label: "CP pengganti"}}}, 409, nil)
+	a = grid(k, "Ganjil")
+	updatedScore := 83.0
+	call("PUT", gridPath(k, "Ganjil"), ownerToken, reportGridInput{
+		Revision: a.Period.Revision, CPs: a.CPs, Scores: []ReportScore{{CPID: a.CPs[0].ID, StudentID: sharedStudent, Value: &updatedScore}},
+	}, 200, nil)
+	if scores := grid(k, "Ganjil").Scores; len(scores) != 1 || scores[0].Value == nil || *scores[0].Value != updatedScore {
+		t.Fatalf("homeroom score was not saved after CP reassignment: %+v", scores)
+	}
 	document := func(row Kelas, student string) ReportSubject {
 		t.Helper()
 		var result struct{ Document ReportDocument }
