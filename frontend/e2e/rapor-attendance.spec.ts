@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { saveFixtureGradeCP } from './report-grade-cp-fixture'
 
 test('admin enables paper recap, wali fills totals, and final reports stay frozen', async ({ page, request, context }) => {
   test.skip(process.env.E2E_RAPOR_ISOLATED !== '1', 'Requires a fresh in-memory report browser harness.')
@@ -59,9 +60,7 @@ test('admin enables paper recap, wali fills totals, and final reports stay froze
   const mapelId = state.config.subjects[0].mapelId
   let result = await request.put('/api/rapor-sumatif/config' + qs, { headers, data: { revision: state.period.revision, config: { ...state.config, date: '2026-12-20', teacher: 'Tutor Contoh' } } })
   expect(result.status()).toBe(200)
-  const period = await result.json()
-  result = await request.put('/api/rapor-sumatif/grid' + qs + '&mapelId=' + mapelId, { headers, data: { revision: period.revision, cps: [{ id: '', label: 'membaca kata', urutan: 1 }], scores: [], narratives: [] } })
-  expect(result.status()).toBe(200)
+  await saveFixtureGradeCP(request, token, classId, mapelId, ['membaca kata'])
   const grid = await (await request.get('/api/rapor-sumatif/grid' + qs + '&mapelId=' + mapelId, { headers })).json()
   result = await request.put('/api/rapor-sumatif/grid' + qs + '&mapelId=' + mapelId, { headers, data: { revision: grid.period.revision, cps: grid.cps, scores: grid.students.map((s: { id: string }) => ({ studentId: s.id, cpId: grid.cps[0].id, value: 85 })), narratives: [] } })
   expect(result.status()).toBe(200)

@@ -68,9 +68,16 @@ func TestReportBrowserServer(t *testing.T) {
 	s.db.Create(&PenugasanGuruMapel{TutorID: tutor.ID, KelasID: k.ID, MapelID: mp.ID})
 	wali := User{Username: "wali-rapor", Email: "wali.rapor.fixture@gmail.com", PasswordHash: hash, Role: "guru", TutorID: k.WaliKelasID, IsActive: true}
 	s.db.Create(&wali)
+	parallel := Kelas{Jenjang: k.Jenjang, NamaRombel: "S", PokjarID: k.PokjarID, TahunAjaranID: k.TahunAjaranID}
+	if err := s.db.Create(&parallel).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&KelasMapel{KelasID: parallel.ID, MapelID: mp.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
 	app.Static("/", "../../../frontend/dist")
 	app.Get("/*", func(c *fiber.Ctx) error { return c.SendFile("../../../frontend/dist/index.html") })
-	if err := app.Listen("127.0.0.1:19089"); err != nil {
+	if err := app.Listen("127.0.0.1:" + env("RAPOR_BROWSER_PORT", "19089")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -202,13 +209,19 @@ func TestReportLifecycle(t *testing.T) {
 		Period ReportPeriod
 		CPs    []ReportCP
 	}
-	json.Unmarshal(call("PUT", "/api/rapor-sumatif/grid"+qs+"&mapelId="+mp.ID, reportGridInput{CPs: []ReportCP{{Label: "Membaca"}, {Label: "Menulis"}}}, 200), &grid)
+	if err := s.db.Create(&ReportCPTemplate{TahunAjaranID: k.TahunAjaranID, Jenjang: k.Jenjang, Semester: "Ganjil", MapelID: mp.ID, Revision: 1, Definitions: reportJSON([]reportCPDefinition{{ID: "cp-membaca", Label: "membaca"}, {ID: "cp-menulis", Label: "menulis"}})}).Error; err != nil {
+		t.Fatal(err)
+	}
+	json.Unmarshal(call("GET", "/api/rapor-sumatif/grid"+qs+"&mapelId="+mp.ID, nil, 200), &grid)
 	if len(grid.CPs) != 2 {
 		t.Fatal("missing CP IDs")
 	}
 	v1, v2 := 84.5, 85.5
 	scores := []ReportScore{{CPID: grid.CPs[0].ID, StudentID: students[0].ID, Value: &v1}, {CPID: grid.CPs[1].ID, StudentID: students[0].ID, Value: &v2}}
 	json.Unmarshal(call("PUT", "/api/rapor-sumatif/grid"+qs+"&mapelId="+mp.ID, reportGridInput{Revision: grid.Period.Revision, CPs: grid.CPs, Scores: scores}, 200), &grid)
+	for i := range scores {
+		scores[i].CPID = grid.CPs[i].ID
+	}
 	call("PUT", "/api/rapor-sumatif/grid"+qs+"&mapelId="+mp.ID, reportGridInput{Revision: 0, CPs: grid.CPs}, 409)
 	// Reject a score from another class and roll back the period's revision.
 	call("PUT", "/api/rapor-sumatif/grid"+qs+"&mapelId="+mp.ID, reportGridInput{Revision: grid.Period.Revision, CPs: grid.CPs, Scores: []ReportScore{{CPID: grid.CPs[0].ID, StudentID: "other-student", Value: &v1}}}, 400)
@@ -295,6 +308,9 @@ func TestReportLifecycle(t *testing.T) {
 func TestReportImportTransaction(t *testing.T) {
 	s, app, token, k, students, mp := reportFixture(t)
 	qs := "?kelasId=" + k.ID + "&semester=Genap"
+	if err := s.db.Model(&Semester{}).Where("tahun_ajaran_id = ? AND nama_semester = ?", k.TahunAjaranID, "Genap").Update("is_archived", true).Error; err != nil {
+		t.Fatal(err)
+	}
 	f := excelize.NewFile()
 	f.SetSheetName("Sheet1", "IDENTITAS PD")
 	f.NewSheet("1 BIND")
@@ -375,6 +391,9 @@ func TestReportReferenceWorkbook(t *testing.T) {
 	}
 	defer f.Close()
 	s, app, token, k, _, _ := reportFixture(t)
+	if err := s.db.Model(&Semester{}).Where("tahun_ajaran_id = ? AND nama_semester = ?", k.TahunAjaranID, "Genap").Update("is_archived", true).Error; err != nil {
+		t.Fatal(err)
+	}
 	value := func(sheet, cell string) string { v, _ := f.GetCellValue(sheet, cell); return strings.TrimSpace(v) }
 	year := value("CETAK RAPOR", "AA14")
 	if err = s.db.Model(&TahunAjaran{}).Where("id = ?", k.TahunAjaranID).Update("nama_tahun_ajaran", year).Error; err != nil {

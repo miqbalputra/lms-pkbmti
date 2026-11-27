@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
+import { saveFixtureGradeCP } from './report-grade-cp-fixture'
 
 test('CP descriptions: 1/4/5 boundaries, server parity, and stored tutor text', async ({ page, request, context }) => {
   test.skip(process.env.E2E_RAPOR_ISOLATED !== '1', 'Requires a fresh TestReportBrowserServer in-memory fixture.')
@@ -24,17 +25,13 @@ test('CP descriptions: 1/4/5 boundaries, server parity, and stored tutor text', 
   const mapelId = await page.getByLabel('Mata pelajaran rapor').inputValue()
   async function save() {
     const response = page.waitForResponse(res => res.url().includes('/rapor-sumatif/grid?') && res.request().method() === 'PUT')
-    await page.getByRole('button', { name: 'Simpan nilai / CP', exact: true }).click()
+    await page.getByRole('button', { name: 'Simpan nilai', exact: true }).click()
     expect((await response).status()).toBe(200)
     await expect(page.getByText('Perubahan belum disimpan', { exact: true })).toHaveCount(0)
   }
-  for (const [i, label] of (example.labels as string[]).entries()) {
-    await page.getByRole('button', { name: 'Tambah CP', exact: true }).click()
-    const input = page.getByLabel(`Label CP ${i + 1}`, { exact: true })
-    await input.fill(label)
-    await expect(input).toHaveValue(label[0].toLowerCase() + label.slice(1))
-  }
-  await save()
+  await saveFixtureGradeCP(request, accessToken, classId, mapelId, example.labels)
+  await page.reload()
+  await selectClass()
   for (const [i, value] of (example.values as number[]).entries()) await page.getByLabel(`Siswa A CP ${i + 1}`, { exact: true }).fill(String(value))
   await expect(page.getByLabel('Capaian Siswa A', { exact: true })).toHaveValue(example.strength)
   await expect(page.getByLabel('Penguatan Siswa A', { exact: true })).toHaveValue(example.growth)

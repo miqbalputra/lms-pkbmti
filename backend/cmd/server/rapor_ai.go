@@ -86,21 +86,17 @@ func (s *Server) reportAISuggest(c *fiber.Ctx) error {
 		return fiber.NewError(503, "Admin belum mengatur penyedia dan model AI")
 	}
 	// Send only academic evidence. The student's identity is intentionally excluded.
-	cps := []ReportCP{}
-	if err = s.db.Where("period_id = ? AND mapel_id = ?", p.ID, mp).Order("urutan, id").Find(&cps).Error; err != nil {
+	grid, err := reportEffectiveCPs(s.db, k, p, mp)
+	if err != nil {
 		return err
 	}
-	ids := []string{}
-	for _, cp := range cps {
-		ids = append(ids, cp.ID)
-	}
 	scores := []ReportScore{}
-	if len(ids) > 0 {
+	if ids := reportCPIDs(grid.CPs); len(ids) > 0 {
 		if err = s.db.Where("cp_id IN ? AND student_id = ?", ids, in.StudentID).Find(&scores).Error; err != nil {
 			return err
 		}
 	}
-	strong, growth := reportSelectNarrativeCPs(cps, scores)
+	strong, growth := reportSelectNarrativeCPs(grid.CPs, scores)
 	if len(strong) == 0 {
 		return fiber.NewError(400, "Lengkapi deskripsi CP yang memiliki nilai sebelum meminta saran AI")
 	}

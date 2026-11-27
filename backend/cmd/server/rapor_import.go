@@ -272,6 +272,9 @@ func (s *Server) reportImportConfirm(c *fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if e := lockReportCPAssignment(tx, k); e != nil {
+			return e
+		}
 		var imp ReportImport
 		if e := tx.First(&imp, "id = ?", c.Params("id")).Error; e != nil {
 			return fiber.ErrNotFound
@@ -295,6 +298,12 @@ func (s *Server) reportImportConfirm(c *fiber.Ctx) error {
 		if e := reportUnlocked(tx, p.ID, ""); e != nil {
 			return e
 		}
+		var sem Semester
+		e := tx.Where("tahun_ajaran_id = ? AND nama_semester = ?", k.TahunAjaranID, p.Semester).First(&sem).Error
+		if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
+			return e
+		}
+		archived := !k.TahunAjaran.IsAktif || sem.IsArchived
 		roster, e := s.reportRoster(tx, k)
 		if e != nil {
 			return e
@@ -361,8 +370,25 @@ func (s *Server) reportImportConfirm(c *fiber.Ctx) error {
 			if existing > 0 {
 				return fiber.NewError(409, sub.Name+": sudah ada CP; impor tidak menimpa data")
 			}
+			_, definitions, e := loadReportCPTemplate(tx, k.TahunAjaranID, k.Jenjang, p.Semester, mp)
+			if e != nil {
+				return e
+			}
+			if len(definitions) == 0 && !archived && len(sub.Labels) > 0 {
+				return fiber.NewError(409, sub.Name+": minta guru yang ditugaskan menyimpan CP jenjang sebelum impor")
+			}
+			if len(definitions) > 0 && len(sub.Labels) != len(definitions) {
+				return fiber.NewError(409, sub.Name+": daftar CP workbook harus sesuai dengan CP jenjang")
+			}
 			for i, label := range sub.Labels {
 				cp := ReportCP{PeriodID: p.ID, MapelID: mp, Label: label, Urutan: i + 1}
+				if len(definitions) > 0 {
+					def := definitions[i]
+					if reportLowercaseCPStart(strings.TrimSpace(label)) != def.Label {
+						return fiber.NewError(409, sub.Name+": daftar CP workbook harus sesuai dengan CP jenjang")
+					}
+					cp.SharedCPID, cp.Label = def.ID, def.Label
+				}
 				if e = tx.Create(&cp).Error; e != nil {
 					return e
 				}

@@ -3,7 +3,7 @@ export function ReportWorkflowGuide({ current, ready, canReview, busy, onStep }:
 }) {
   const steps = [
     ['Pilih kelas', 'Tentukan tahun dan semester.', '', 'report-scope'],
-    ['Susun CP', 'Pilih mapel dan tulis CP.', 'nilai', 'report-cp'],
+    ['Cek CP', 'Pilih mapel dan lihat daftar CP.', 'nilai', 'report-cp'],
     ['Isi nilai', 'Isi nilai dan tinjau deskripsi.', 'nilai', 'report-scores'],
     ['Periksa rapor', 'Lengkapi bagian yang ditandai.', 'rapor', 'report-student'],
     ['Final & cetak', 'Wali kelas memfinalkan rapor.', 'rapor', 'report-status'],

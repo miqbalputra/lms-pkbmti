@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { saveFixtureGradeCP } from './report-grade-cp-fixture'
 
 test.use({ actionTimeout: 15_000 })
 
@@ -24,8 +25,7 @@ test('isian aman, pemeriksaan terbaru, kunci periode jelas, dan panduan wajib', 
   expect(response.status()).toBe(200)
   state = await period()
   const mapel = state.config.subjects[0].mapelId
-  response = await request.put('/api/rapor-sumatif/grid' + qs + '&mapelId=' + mapel, { headers, data: { revision: state.period.revision, cps: [{ label: 'membaca kata' }, { label: 'menulis kalimat' }], scores: [], narratives: [] } })
-  expect(response.status()).toBe(200)
+  await saveFixtureGradeCP(request, accessToken, klass.id, mapel, ['membaca kata', 'menulis kalimat'])
   let grid = await (await request.get('/api/rapor-sumatif/grid' + qs + '&mapelId=' + mapel, { headers })).json()
   response = await request.put('/api/rapor-sumatif/grid' + qs + '&mapelId=' + mapel, { headers, data: { revision: grid.period.revision, cps: grid.cps, scores: grid.students.flatMap((s: { id: string; nama: string }) => grid.cps.map((cp: { id: string }, i: number) => ({ studentId: s.id, cpId: cp.id, value: s.nama === 'Siswa B' ? [88, 80][i] : 90 }))), narratives: [] } })
   expect(response.status()).toBe(200)
@@ -37,7 +37,7 @@ test('isian aman, pemeriksaan terbaru, kunci periode jelas, dan panduan wajib', 
     await page.getByLabel('Kelas rapor').selectOption({ label: 'Kelas 1 R' })
     await page.getByLabel('Mata pelajaran rapor').selectOption({ label: 'Bahasa Indonesia' })
   }
-  async function saved() { await expect(page.getByRole('button', { name: 'Simpan nilai / CP', exact: true })).toBeDisabled() }
+  async function saved() { await expect(page.getByRole('button', { name: 'Simpan nilai', exact: true })).toBeDisabled() }
   const cell = page.getByLabel('Siswa B CP 1', { exact: true })
   const prompt = page.getByRole('dialog', { name: 'Ada isian yang belum disimpan', exact: true })
   await chooseNilai()
@@ -70,7 +70,7 @@ test('isian aman, pemeriksaan terbaru, kunci periode jelas, dan panduan wajib', 
   await page.getByRole('button', { name: 'Nilai & deskripsi', exact: true }).click()
   await page.getByLabel('Mata pelajaran rapor').selectOption({ label: 'Bahasa Indonesia' })
   await cell.fill('60')
-  await page.getByRole('button', { name: 'Simpan nilai / CP', exact: true }).click()
+  await page.getByRole('button', { name: 'Simpan nilai', exact: true }).click()
   await saved()
   await page.getByRole('button', { name: 'Pemeriksaan & cetak', exact: true }).click()
   await expect(page.getByRole('cell', { name: '70', exact: true })).toBeVisible()
@@ -173,7 +173,7 @@ test('isian aman, pemeriksaan terbaru, kunci periode jelas, dan panduan wajib', 
   await page.getByLabel('Mata pelajaran rapor').selectOption({ label: 'Bahasa Indonesia' })
   await expect(page.getByText(/Semester ini sudah diarsipkan/)).toBeVisible()
   await expect(cell).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Simpan nilai / CP', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Simpan nilai', exact: true })).toHaveCount(0)
   const unchanged = await (await request.get(`/api/rapor-sumatif/document/${studentA.id}${qs}`, { headers })).json()
   expect(unchanged.document).toEqual(frozen.document)
   if (process.env.E2E_REPORT_OUTPUT) await page.screenshot({ path: process.env.E2E_REPORT_OUTPUT + '/semester-arsip.png', fullPage: true })

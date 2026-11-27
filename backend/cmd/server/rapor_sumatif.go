@@ -28,10 +28,11 @@ type ReportPeriod struct {
 }
 type ReportCP struct {
 	Base
-	PeriodID string `gorm:"index" json:"periodId"`
-	MapelID  string `gorm:"index" json:"mapelId"`
-	Label    string `json:"label"`
-	Urutan   int    `json:"urutan"`
+	PeriodID   string `gorm:"index" json:"periodId"`
+	MapelID    string `gorm:"index" json:"mapelId"`
+	Label      string `json:"label"`
+	Urutan     int    `json:"urutan"`
+	SharedCPID string `gorm:"index" json:"-"`
 }
 type ReportScore struct {
 	Base
@@ -138,7 +139,7 @@ type ReportDocument struct {
 }
 
 func reportModels() []interface{} {
-	return []interface{}{&ReportPeriod{}, &ReportCP{}, &ReportScore{}, &ReportNarrative{}, &ReportRecord{}, &ReportRevision{}, &ReportImport{}, &ReportSettings{}}
+	return []interface{}{&ReportPeriod{}, &ReportCP{}, &ReportScore{}, &ReportNarrative{}, &ReportRecord{}, &ReportRevision{}, &ReportImport{}, &ReportSettings{}, &ReportCPAssignment{}, &ReportCPTemplate{}}
 }
 func (s *Server) reportRoutes(api fiber.Router) {
 	api.Get("/rapor-sumatif/classes", s.reportClasses)
@@ -149,6 +150,10 @@ func (s *Server) reportRoutes(api fiber.Router) {
 	api.Put("/rapor-sumatif/attendance-mode", s.reportSaveAttendanceMode)
 	api.Get("/rapor-sumatif/grid", s.reportGrid)
 	api.Put("/rapor-sumatif/grid", s.reportSaveGrid)
+	api.Get("/rapor-sumatif/cp-assignments", s.reportListCPAssignments)
+	api.Put("/rapor-sumatif/cp-assignments/:jenjang", s.reportSetCPAssignment)
+	api.Get("/rapor-sumatif/cp-templates/:jenjang", s.reportCPTemplate)
+	api.Put("/rapor-sumatif/cp-templates/:jenjang", s.reportCPTemplate)
 	api.Get("/rapor-sumatif/document/:studentId", s.reportDocumentHandler)
 	api.Put("/rapor-sumatif/document/:studentId", s.reportSaveDetails)
 	api.Post("/rapor-sumatif/document/:studentId/status", s.reportSetStatus)
@@ -481,18 +486,14 @@ func (s *Server) reportGrid(c *fiber.Ctx) error {
 	if err = s.reportReadMapel(c, k.ID, mp); err != nil {
 		return err
 	}
-	cps := []ReportCP{}
+	grid, err := reportEffectiveCPs(s.db, k, p, mp)
+	if err != nil {
+		return err
+	}
 	scores := []ReportScore{}
 	narratives := []ReportNarrative{}
 	if p.ID != "" {
-		if err = s.db.Where("period_id = ? AND mapel_id = ?", p.ID, mp).Order("urutan, id").Find(&cps).Error; err != nil {
-			return err
-		}
-		ids := []string{}
-		for _, cp := range cps {
-			ids = append(ids, cp.ID)
-		}
-		if len(ids) > 0 {
+		if ids := reportCPIDs(grid.CPs); len(ids) > 0 {
 			if err = s.db.Where("cp_id IN ?", ids).Find(&scores).Error; err != nil {
 				return err
 			}
@@ -539,7 +540,7 @@ func (s *Server) reportGrid(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"period": p, "cps": cps, "scores": scores, "narratives": narratives, "students": roster})
+	return c.JSON(fiber.Map{"period": p, "cps": grid.CPs, "cpSource": grid.Source, "scores": scores, "narratives": narratives, "students": roster})
 }
 func (s *Server) reportReadMapel(c *fiber.Ctx, kelasID, mapelID string) error {
 	var n int64
@@ -593,89 +594,41 @@ func (s *Server) reportSaveGrid(c *fiber.Ctx) error {
 		validStudents[pd.ID] = true
 	}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if e := lockReportCPAssignment(tx, k); e != nil {
+			return e
+		}
 		if e := reportLock(tx, &p, in.Revision); e != nil {
 			return e
 		}
-		// CP changes affect all reports. Score and narrative edits affect only their student.
-		old := []ReportCP{}
-		if e := tx.Where("period_id = ? AND mapel_id = ?", p.ID, mp).Order("urutan, id").Find(&old).Error; e != nil {
+		grid, e := reportEffectiveCPs(tx, k, p, mp)
+		if e != nil {
 			return e
 		}
-		oldByID := map[string]ReportCP{}
-		for _, cp := range old {
-			oldByID[cp.ID] = cp
+		if len(in.CPs) != len(grid.CPs) {
+			return fiber.NewError(409, "Daftar CP berbeda. Muat ulang nilai. Perubahan CP melalui menu CP per jenjang")
 		}
-		changed := len(old) != len(in.CPs)
-		ids := []string{}
-		seen := map[string]bool{}
-		for i := range in.CPs {
-			cp := &in.CPs[i]
-			originalLabel := cp.Label
-			cp.Label = strings.TrimSpace(cp.Label)
-			if cp.Label == "" || len([]rune(cp.Label)) > 500 {
-				return fiber.NewError(400, "Label CP wajib diisi (maksimal 500 karakter)")
+		indexes := map[string]int{}
+		for i, cp := range grid.CPs {
+			if cp.ID != in.CPs[i].ID || cp.Label != in.CPs[i].Label {
+				return fiber.NewError(409, "Daftar CP berbeda. Muat ulang nilai. Perubahan CP melalui menu CP per jenjang")
 			}
-			if cp.ID != "" {
-				prev, ok := oldByID[cp.ID]
-				if !ok || seen[cp.ID] {
-					return fiber.NewError(400, "ID CP tidak valid")
-				}
-				// An unchanged historical label must survive a score-only save.
-				if prev.Label == originalLabel {
-					cp.Label = prev.Label
-				} else {
-					cp.Label = reportLowercaseCPStart(cp.Label)
-				}
-				if prev.Label != cp.Label || prev.Urutan != i+1 {
-					changed = true
-				}
-			}
-			if cp.ID == "" {
-				cp.Label = reportLowercaseCPStart(cp.Label)
-				changed = true
-			}
-			seen[cp.ID] = true
-			cp.PeriodID = p.ID
-			cp.MapelID = mp
-			cp.Urutan = i + 1
-		}
-		if changed {
-			if e := reportUnlocked(tx, p.ID, ""); e != nil {
-				return e
-			}
-		}
-		for i := range in.CPs {
-			cp := &in.CPs[i]
-			if e := tx.Save(cp).Error; e != nil {
-				return e
-			}
-			ids = append(ids, cp.ID)
-		}
-		for _, cp := range old {
-			if !seen[cp.ID] {
-				if e := tx.Where("cp_id = ?", cp.ID).Delete(&ReportScore{}).Error; e != nil {
-					return e
-				}
-				if e := tx.Delete(&cp).Error; e != nil {
-					return e
-				}
-			}
-		}
-		validCP := map[string]bool{}
-		for _, id := range ids {
-			validCP[id] = true
+			indexes[cp.ID] = i
 		}
 		seenScores := map[string]bool{}
 		for _, v := range in.Scores {
 			key := v.StudentID + "/" + v.CPID
-			if !validCP[v.CPID] || !validStudents[v.StudentID] || seenScores[key] || v.Value != nil && (math.IsNaN(*v.Value) || math.IsInf(*v.Value, 0) || *v.Value < 0 || *v.Value > 100) {
+			idx, found := indexes[v.CPID]
+			if !found || !validStudents[v.StudentID] || seenScores[key] || v.Value != nil && (math.IsNaN(*v.Value) || math.IsInf(*v.Value, 0) || *v.Value < 0 || *v.Value > 100) {
 				return fiber.NewError(400, "Nilai, CP, atau siswa tidak valid")
 			}
 			seenScores[key] = true
+			cp := &grid.CPs[idx]
 			var oldScore ReportScore
-			e := tx.Where("cp_id = ? AND student_id = ?", v.CPID, v.StudentID).First(&oldScore).Error
-			if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
-				return e
+			if cp.ID != cp.SharedCPID {
+				e := tx.Where("cp_id = ? AND student_id = ?", cp.ID, v.StudentID).First(&oldScore).Error
+				if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
+					return e
+				}
 			}
 			same := oldScore.Value == nil && v.Value == nil || oldScore.Value != nil && v.Value != nil && *oldScore.Value == *v.Value
 			if same {
@@ -684,7 +637,15 @@ func (s *Server) reportSaveGrid(c *fiber.Ctx) error {
 			if e := reportUnlocked(tx, p.ID, v.StudentID); e != nil {
 				return e
 			}
-			oldScore.CPID = v.CPID
+			if cp.ID == cp.SharedCPID {
+				// Give the template a class-local score key on first use. A student
+				// may have a score in more than one class during the same semester.
+				cp.ID = ""
+				if e := tx.Create(cp).Error; e != nil {
+					return e
+				}
+			}
+			oldScore.CPID = cp.ID
 			oldScore.StudentID = v.StudentID
 			oldScore.Value = v.Value
 			if e := tx.Save(&oldScore).Error; e != nil {
@@ -716,9 +677,7 @@ func (s *Server) reportSaveGrid(c *fiber.Ctx) error {
 				return e
 			}
 		}
-		if changed {
-			return tx.Model(&ReportNarrative{}).Where("period_id = ? AND mapel_id = ?", p.ID, mp).Update("reviewed_revision", -1).Error
-		}
+		in.CPs = grid.CPs
 		return nil
 	})
 	if err != nil {
@@ -821,18 +780,14 @@ func (s *Server) buildReport(db *gorm.DB, k Kelas, p ReportPeriod, studentID str
 		d.Issues = append(d.Issues, "Belum ada mapel kelas")
 	}
 	for _, mp := range d.Config.Subjects {
-		cps := []ReportCP{}
+		grid, e := reportEffectiveCPs(db, k, p, mp.MapelID)
+		if e != nil {
+			return d, rec, e
+		}
 		scores := []ReportScore{}
 		var narrative ReportNarrative
 		if p.ID != "" {
-			if err = db.Where("period_id = ? AND mapel_id = ?", p.ID, mp.MapelID).Order("urutan, id").Find(&cps).Error; err != nil {
-				return d, rec, err
-			}
-			ids := []string{}
-			for _, cp := range cps {
-				ids = append(ids, cp.ID)
-			}
-			if len(ids) > 0 {
+			if ids := reportCPIDs(grid.CPs); len(ids) > 0 {
 				if err = db.Where("cp_id IN ? AND student_id = ?", ids, studentID).Find(&scores).Error; err != nil {
 					return d, rec, err
 				}
@@ -842,7 +797,7 @@ func (s *Server) buildReport(db *gorm.DB, k Kelas, p ReportPeriod, studentID str
 				return d, rec, err
 			}
 		}
-		value, a, b, complete := reportCalculate(cps, scores)
+		value, a, b, complete := reportCalculate(grid.CPs, scores)
 		stale := false
 		if narrative.ID != "" {
 			a = narrative.Strength
