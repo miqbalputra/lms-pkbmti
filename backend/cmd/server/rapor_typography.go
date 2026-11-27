@@ -14,12 +14,20 @@ func reportStyledTemplate(t reportTemplate) reportTemplate {
 		return t
 	}
 	t.styled = true
+	// Keep the heading at the top of its row and leave a little room above the table.
+	t.Rows = append([]float64(nil), t.Rows...)
+	t.Rows[15] += 3.4 // points, about 1.2 mm
 	// The source workbook relies on text spilling across these attendance
 	// cells. Merge the label explicitly so wrapping uses its complete width.
 	t.Merges = append(append([]string(nil), t.Merges...), "A49:F49")
 	t.Cells = append([]reportTemplateCell(nil), t.Cells...)
 	for i := range t.Cells {
 		cell := &t.Cells[i]
+		if cell.Address == "A16" {
+			style := *cell.Style
+			style.Alignment = &excelize.Alignment{Vertical: "top"}
+			cell.Style = &style
+		}
 		if cell.Style != nil && cell.Style.Fill.Pattern == 1 && len(cell.Style.Fill.Color) > 0 {
 			r, g, b := reportRGB(cell.Style.Fill.Color[0])
 			if max(r, g, b)-min(r, g, b) <= 12 && min(r, g, b) < 245 {

@@ -403,6 +403,21 @@ func reportRenderTemplate(p *gofpdf.Fpdf, t reportTemplate, d ReportDocument, fr
 			}
 		}
 		p.SetFont(family, fontStyle, fontSize*scale)
+		coverIDRow := t.Name == "CETAK COVER" && (cell.Address == "B30" || cell.Address == "E30" || cell.Address == "F30")
+		guardianJobLabel := t.Name == "CETAK IDENTITAS" && cell.Address == "B24"
+		if coverIDRow || guardianJobLabel {
+			availableWidth := w - 2*padding
+			if textWidth := p.GetStringWidth(text); textWidth > availableWidth {
+				fontSize *= availableWidth / textWidth
+				p.SetFont(family, fontStyle, fontSize*scale)
+			}
+		}
+		if coverIDRow {
+			// Center the visible capitals and digits, whose height is about 72% of Arial's em.
+			baseline := y + h/2 + .36*fontSize*25.4/72*scale
+			p.Text(x+(w-p.GetStringWidth(text))/2, baseline, text)
+			continue
+		}
 		lineHeight := fontSize * 25.4 / 72 * 1.29 * scale
 		align := "L"
 		vertical := "bottom"
