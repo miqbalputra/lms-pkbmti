@@ -9,9 +9,9 @@ export function ReportWorkflowGuide({ current, ready, canReview, canScore, readO
 }) {
   const steps = [
     ['Pilih periode', 'Pilih tahun ajaran, kelas, dan semester.', '', 'report-scope'],
-    ['Cek daftar CP', 'Pilih mata pelajaran dan periksa CP yang tersedia.', 'nilai', 'report-cp'],
+    ['Daftar CP', 'Pilih mata pelajaran untuk melihat CP. Guru penyusun dapat mengedit atau menambah CP di sini.', 'nilai', 'report-cp'],
     canScore
-      ? ['Isi dan simpan nilai', 'Isi nilai per CP, tinjau deskripsi, lalu klik Simpan nilai.', 'nilai', 'report-scores']
+      ? ['Isi nilai', 'Nilai per CP dan deskripsi tersimpan otomatis setelah Anda berhenti mengisi.', 'nilai', 'report-scores']
       : ['Lihat nilai dan deskripsi', 'Periksa nilai yang tersimpan untuk mata pelajaran ini.', 'nilai', 'report-scores'],
     ...(canReview ? [
       ['Periksa rapor', 'Pilih siswa. Periksa nilai, presensi, dan daftar isian yang perlu dilengkapi.', 'rapor', 'report-student'],

@@ -76,7 +76,7 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
       setSaving(false)
     }
   }
-  return <Context.Provider value={{ register, leave }}>{children}
+  return <Context.Provider value={{ register, leave, dialogOpen: open }}>{children}
     <Dialog open={open} onOpenChange={value => { if (!value) stay() }}>
       <DialogContent onInteractOutside={event => event.preventDefault()} onEscapeKeyDown={event => { if (saving) event.preventDefault() }}>
         <DialogHeader><DialogTitle>Ada isian yang belum disimpan</DialogTitle><DialogDescription>Simpan isian sebelum melanjutkan. Jika memilih buang perubahan, hanya isian yang belum disimpan yang dibatalkan; data yang sudah tersimpan tetap ada.</DialogDescription></DialogHeader>

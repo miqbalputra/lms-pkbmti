@@ -7,8 +7,9 @@ import { Label } from '../components/ui/label'
 import { Select } from '../components/ui/select'
 import { request } from '../lib/api'
 import { automaticReportNarrative } from '../lib/report-narrative'
+import { useReportAutosave } from '../lib/useReportAutosave'
 import { ReportAttendancePanel, type ReportAttendanceActions } from '../components/ReportAttendancePanel'
-import { ReportGradeCPPanel, type ReportCPAssignments, type ReportGradeCPActions } from '../components/ReportGradeCPPanel'
+import { ReportGradeCPPanel, maxReportCPs, type ReportCPAssignments, type ReportGradeCPActions, type ReportGradeCPEntry } from '../components/ReportGradeCPPanel'
 import { useUnsavedChanges } from '../context/useUnsavedChanges'
 import { ReportWorkflowGuide } from '../components/ReportWorkflowGuide'
 import { useNavigate } from 'react-router-dom'
@@ -23,6 +24,7 @@ type PromotionRules = { completion: boolean; nextClass: string; validGrade: bool
 type CP = { id: string; label: string; urutan: number }
 type Score = { cpId: string; studentId: string; value: number | null }
 type Narrative = { studentId: string; strength: string; growth: string; reviewedRevision?: number }
+type ScoreGrid = { period: Period; cps: CP[]; cpSource: 'legacy' | 'shared' | 'pending'; scores: Score[]; narratives: Narrative[] }
 type Details = { note: string; promotion: string; nextClass: string; extras: { name: string; description: string }[]; identity?: Record<string, string> }
 type DocumentSubject = Subject & { score: number | null; strength: string; growth: string; stale: boolean; complete: boolean }
 type ReportDocument = { student: Student; subjects: DocumentSubject[]; attendance: { sakit: number; izin: number; alpa: number }; attendanceSource?: string; details: Details; issues: string[] }
@@ -38,6 +40,15 @@ const statusNames: Record<string, string> = { draft: 'Draf', ready: 'Siap diperi
 const nextReportStatus: Record<string, string | undefined> = { draft: 'ready', ready: 'final', final: 'published' }
 const reportStatusActionLabels: Record<string, string> = { ready: 'Siap diperiksa', final: 'Finalkan rapor', published: 'Terbitkan untuk orang tua' }
 const emptyDetails: Details = { note: '', promotion: '', nextClass: '', extras: [] }
+
+function validScore(value: number | null) {
+  return value === null || Number.isFinite(value) && value >= 0 && value <= 100
+}
+
+function validActivityNames(names: string[]) {
+  const keys = names.map(name => name.trim().toLowerCase())
+  return keys.every(Boolean) && new Set(keys).size === keys.length
+}
 
 export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token: string; readOnly: boolean; nilaiOnly?: boolean }) {
   const navigate = useNavigate()
@@ -61,17 +72,24 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   const [cpSource, setCPSource] = useState<'legacy' | 'shared' | 'pending'>('pending')
   const [scores, setScores] = useState<Score[]>([])
   const [narratives, setNarratives] = useState<Narrative[]>([])
-  const [narrativeEdits, setNarrativeEdits] = useState<Set<string>>(new Set())
+  const [narrativeEdits, setNarrativeEdits] = useState(new Map<string, number>())
   const [doc, setDoc] = useState<ReportDocument | null>(null)
   const [record, setRecord] = useState<RecordRow | null>(null)
   const [details, setDetails] = useState<Details>(emptyDetails)
   const [promotionRules, setPromotionRules] = useState<PromotionRules | null>(null)
   const [promotionEdited, setPromotionEdited] = useState(false)
   const [tab, setTab] = useState(nilaiOnly ? 'nilai' : 'rapor')
+  const activeTabRef = useRef(tab)
+  activeTabRef.current = tab
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [aiDirty, setAIDirty] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [saved, setSaved] = useState<'manual' | 'automatic' | false>(false)
+  const [saving, setSaving] = useState<'manual' | 'automatic' | null>(null)
+  const [editVersion, setEditVersion] = useState(0)
+  const formEdit = useRef(0)
+  const aiEdit = useRef(0)
+  const saveInFlight = useRef<Promise<void> | null>(null)
   const [saveError, setSaveError] = useState('')
   const [semesterArchived, setSemesterArchived] = useState(false)
   const [periodConfigLocked, setPeriodConfigLocked] = useState(false)
@@ -86,6 +104,7 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   const [isAdmin, setIsAdmin] = useState(false)
   const [cpAssignments, setCPAssignments] = useState<ReportCPAssignments | null>(null)
   const [cpAssignmentError, setCPAssignmentError] = useState(false)
+  const [cpEntry, setCPEntry] = useState<ReportGradeCPEntry>()
   const [previewURL, setPreviewURL] = useState('')
   const previewRef = useRef('')
   const [ai, setAI] = useState({ provider: '', model: '', geminiConfigured: false, openaiConfigured: false })
@@ -114,14 +133,20 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   const selectedClass = availableClasses.find(k => k.id === kelasId)
   const writableSubjects = config?.subjects.filter(m => canInput.includes(m.mapelId)) || []
   const viewableSubjects = config?.subjects.filter(m => canViewGrid.includes(m.mapelId) && !canInput.includes(m.mapelId)) || []
-  const isArchived = semesterArchived || !!year && !years.find(y => y.id === year)?.isAktif
+  const activeReportYear = !year || years.some(y => y.id === year && y.isAktif)
+  const isArchived = semesterArchived || !activeReportYear
   const canUseAI = !!ai.model && (ai.provider === 'gemini' && ai.geminiConfigured || ai.provider === 'openai' && ai.openaiConfigured)
   const settingsLocked = periodConfigLocked || records.some(r => ['final', 'published'].includes(r.status))
   const hasChanges = dirty || aiDirty
+  const inputsBusy = busy && saving !== 'automatic'
   const leave = useUnsavedChanges({ dirty: hasChanges, busy, save: saveCurrent, discard: discardCurrent })
   const gradeCPOpen = tab === 'cp'
   const hasGradeCPTab = !readOnly && (gradeCPOpen || isAdmin || cpAssignmentError || !!cpAssignments?.isAdmin || !!cpAssignments?.grades.length)
-  const canDraftGradeCP = !isArchived && !!selectedClass && cpAssignments?.year.id === year && !cpAssignments.isAdmin && cpAssignments.grades.some(g => g.jenjang === selectedClass.jenjang)
+  const cpGrade = !readOnly && !isArchived && cpAssignments?.year.id === year && !cpAssignments.isAdmin
+    ? cpAssignments.grades.find(row => row.jenjang === selectedClass?.jenjang)
+    : undefined
+  const canDraftGradeCP = !!cpGrade?.subjects?.some(subject => subject.id === mapelId)
+  const hasOtherCPSubjects = !!cpGrade?.subjects?.some(subject => subject.id !== mapelId)
   const currentStep = !config ? 'report-scope' : tab === 'nilai' ? cps.length ? 'report-scores' : 'report-cp' : ['ready', 'final', 'published'].includes(record?.status || '') ? 'report-status' : 'report-student'
   const scoresByStudent = useMemo(() => {
     const result = new Map<string, Map<string, number | null>>()
@@ -134,6 +159,25 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   }, [scores])
   const completedScores = cps.length ? students.filter(student => cps.every(cp => scoreValue(student.id, cp.id) !== null)).length : 0
   const pendingReviews = narratives.filter(n => n.reviewedRevision === -1 && !narrativeEdits.has(n.studentId)).length
+  const scoresOpen = tab === 'nilai'
+  const formValidation = !dirty ? '' : scoresOpen && scores.some(score => !validScore(score.value))
+    ? 'Nilai harus berupa angka 0–100.'
+    : tab === 'rapor' && !validActivityNames(details.extras.map(extra => extra.name))
+      ? 'Isi nama ekstrakurikuler. Setiap nama harus berbeda.'
+      : tab === 'pengaturan' && config && (!config.subjects.every(subject => subject.name.trim()) || !validActivityNames(config.extraActivities || []))
+        ? 'Lengkapi nama mapel dan kegiatan. Nama kegiatan harus berbeda.' : ''
+  const canSaveForm = dirty && !formValidation && (
+    scoresOpen && canWrite && !gridLoading && !gridError && cps.length > 0 ||
+    tab === 'rapor' && canManage && !!doc && !locked(studentId) ||
+    tab === 'pengaturan' && canManage && !!config && !settingsLocked
+  )
+  const aiValidation = aiDirty && (ai.model.length > 100 || /[ /?#\\]/.test(ai.model)) ? 'ID model AI tidak valid.' : ''
+  const canSaveAI = tab === 'pengaturan' && isAdmin && aiDirty && !aiValidation
+  useReportAutosave(!readOnly && !isArchived && !busy && !saveError && (canSaveForm || canSaveAI), editVersion,
+    () => saveCurrent(true, canSaveForm && canSaveAI ? 'all' : canSaveForm ? 'form' : 'ai'))
+  const saveStatus = saving ? 'Menyimpan perubahan…' : busy ? 'Sedang memproses…'
+    : hasChanges ? saveError ? 'Belum disimpan' : formValidation || aiValidation || (tab === 'presensi' ? 'Ada rekap yang belum tersimpan.' : 'Menunggu simpan otomatis…')
+    : saved === 'automatic' ? 'Tersimpan otomatis' : saved ? 'Tersimpan' : 'Belum ada perubahan'
 
   useEffect(() => {
     const controller = new AbortController()
@@ -179,9 +223,9 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     setCanViewGrid(data.canViewGrid ?? (data.canManage || readOnly ? data.config.subjects.map(m => m.mapelId) : data.canInput))
     if (!data.canManage && !readOnly) setTab(current => current === 'cp' ? current : 'nilai')
   }
-  async function refreshPeriod() {
+  async function refreshPeriod(afterEdit?: number) {
     const data = await request('/rapor-sumatif/period?' + qs, token)
-    if (scopeRef.current === qs) applyPeriod(data)
+    if (scopeRef.current === qs && (afterEdit === undefined || formEdit.current === afterEdit)) applyPeriod(data)
     return data
   }
   useEffect(() => {
@@ -196,43 +240,46 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     }).catch(e => { if (current === generation.current) setPeriodError(e.message) })
   }, [kelasId, semester, year, periodRetry]) // eslint-disable-line react-hooks/exhaustive-deps -- token refresh must not erase unsaved inputs
 
+  function applyGrid(data: ScoreGrid) {
+    setPeriod(data.period); setCPs(data.cps); setCPSource(data.cpSource); setScores(data.scores); setNarratives(data.narratives); setNarrativeEdits(new Map())
+  }
   async function loadGrid() {
     if (!mapelId) return
     setGridLoading(true); setGridError('')
     try {
       const data = await request('/rapor-sumatif/grid?' + qs + '&mapelId=' + mapelId, token)
       if (scopeRef.current !== qs) return
-      setPeriod(data.period); setCPs(data.cps); setCPSource(data.cpSource); setScores(data.scores); setNarratives(data.narratives); setNarrativeEdits(new Set()); setDirty(false)
+      applyGrid(data); setDirty(false)
     } catch (e) { setGridError(e instanceof Error ? e.message : 'Nilai gagal dimuat'); throw e }
     finally { if (scopeRef.current === qs) setGridLoading(false) }
   }
   useEffect(() => {
-    if (gradeCPOpen) return
+    if (!scoresOpen) return
     let cancelled = false
     const controller = new AbortController()
-    setCPs([]); setCPSource('pending'); setScores([]); setNarratives([]); setNarrativeEdits(new Set()); setSuggestion(null)
+    setCPs([]); setCPSource('pending'); setScores([]); setNarratives([]); setNarrativeEdits(new Map()); setSuggestion(null)
     setGridError(''); setGridLoading(!!mapelId)
     if (!mapelId) return
     void request('/rapor-sumatif/grid?' + qs + '&mapelId=' + mapelId, tokenRef.current, 'GET', undefined, controller.signal).then(data => {
       if (cancelled) return
-      setPeriod(data.period); setCPs(data.cps); setCPSource(data.cpSource); setScores(data.scores); setNarratives(data.narratives); setDirty(false)
+      applyGrid(data)
     }).catch(e => { if (!cancelled) setGridError(e.message) }).finally(() => { if (!cancelled) setGridLoading(false) })
     return () => { cancelled = true; controller.abort() }
-  }, [mapelId, qs, gradeCPOpen])
+  }, [mapelId, qs, scoresOpen])
 
-  async function loadDocument() {
+  async function loadDocument(afterEdit?: number) {
     if (!studentId || !canManage && !readOnly) return
     const current = ++documentRequest.current
     documentController.current?.abort()
     const controller = new AbortController(); documentController.current = controller
-    setDoc(null); setDocError(''); setDocLoading(true)
+    if (afterEdit === undefined) { setDoc(null); setDocError(''); setDocLoading(true) }
     try {
       const data = await request('/rapor-sumatif/document/' + studentId + '?' + qs, tokenRef.current, 'GET', undefined, controller.signal)
-      if (current !== documentRequest.current || scopeRef.current !== qs) return
+      if (current !== documentRequest.current || scopeRef.current !== qs || afterEdit !== undefined && formEdit.current !== afterEdit) return
       setDoc(data.document); setRecord(data.record); setPeriod(data.period); setDetails({ ...emptyDetails, ...data.document.details, extras: data.document.details.extras || [] })
       setPromotionEdited(false)
     } catch (e) {
-      if (current === documentRequest.current && !controller.signal.aborted) setDocError(e instanceof Error ? e.message : 'Pemeriksaan gagal dimuat')
+      if (afterEdit === undefined && current === documentRequest.current && !controller.signal.aborted) setDocError(e instanceof Error ? e.message : 'Pemeriksaan gagal dimuat')
       throw e
     } finally { if (current === documentRequest.current) setDocLoading(false) }
   }
@@ -255,6 +302,17 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     ++documentRequest.current; documentController.current?.abort(); setDoc(null); setLedger([])
     if (previewRef.current) URL.revokeObjectURL(previewRef.current)
     previewRef.current = ''; setPreviewURL('')
+  }
+  function openCP(entry?: ReportGradeCPEntry) {
+    leave(() => { setCPEntry(entry); setTab('cp'); setFocusTarget('report-grade-cp') })
+  }
+  function closeCP() {
+    leave(() => {
+      invalidateReport()
+      setSaved(false)
+      setTab('nilai')
+      setFocusTarget(config ? 'report-cp' : 'report-scope')
+    })
   }
   function goTo(nextTab: string, target: string) {
     const show = () => {
@@ -288,32 +346,56 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
       leave(() => { setMapelId(subject.mapelId); setTab('nilai'); setFocusTarget('report-cp') })
     }
   }
-  async function saveDetails() {
-    await request('/rapor-sumatif/document/' + studentId + '?' + qs, token, 'PUT', { revision: period.revision, updatePromotion: promotionEdited, details: { note: details.note, promotion: details.promotion, nextClass: details.nextClass, extras: details.extras, identity: details.identity } })
-    invalidateReport(); await refreshPeriod(); await loadDocument(); setDirty(false); setSaved(true); toast.success('Catatan tersimpan')
+  async function saveDetails(version: number) {
+    const next: Period = await request('/rapor-sumatif/document/' + studentId + '?' + qs, token, 'PUT', { revision: period.revision, updatePromotion: promotionEdited, details: { note: details.note, promotion: details.promotion, nextClass: details.nextClass, extras: details.extras, identity: details.identity } })
+    setPeriod(next); setLedger([])
+    setRecords(rows => rows.map(row => row.studentId === studentId ? { ...row, status: 'draft' } : row))
+    setRecord(row => row ? { ...row, status: 'draft' } : row)
+    if (formEdit.current !== version) return
+    setDirty(false); setPromotionEdited(false)
+    await loadDocument(version).catch(() => undefined)
   }
-  async function saveConfig() {
-    await request('/rapor-sumatif/config?' + qs, token, 'PUT', { revision: period.revision, config })
-    invalidateReport(); await refreshPeriod(); setDirty(false); setSaved(true); toast.success('Pengaturan rapor tersimpan')
+  async function saveConfig(version: number) {
+    const next: Period = await request('/rapor-sumatif/config?' + qs, token, 'PUT', { revision: period.revision, config })
+    setPeriod(next); invalidateReport()
+    if (formEdit.current !== version) return
+    setDirty(false)
+    await refreshPeriod(version).catch(() => undefined)
   }
-  async function saveAI() {
-    setAI(await request('/rapor-sumatif/ai/settings', token, 'PUT', { provider: ai.provider, model: ai.model }))
-    setAIDirty(false); setSaved(true); toast.success('Pengaturan AI tersimpan')
+  async function saveAI(version: number) {
+    const updated: typeof ai = await request('/rapor-sumatif/ai/settings', token, 'PUT', { provider: ai.provider, model: ai.model })
+    if (aiEdit.current === version) { setAI(updated); setAIDirty(false) }
   }
-  async function saveCurrent() {
+  function saveCurrent(automatic = false, section: 'form' | 'ai' | 'all' = 'all') {
+    if (!saveInFlight.current) {
+      saveInFlight.current = persistCurrent(automatic, section).finally(() => { saveInFlight.current = null })
+    }
+    return saveInFlight.current
+  }
+  async function persistCurrent(automatic: boolean, section: 'form' | 'ai' | 'all') {
+    const version = formEdit.current
+    const aiVersion = aiEdit.current
+    const saveKind = automatic ? 'automatic' : 'manual'
+    setSaving(saveKind)
     setBusy(true); setSaveError('')
     try {
-      if (dirty) {
-        if (tab === 'nilai') await saveGrid()
-        else if (tab === 'rapor') await saveDetails()
-        else if (tab === 'pengaturan') await saveConfig()
-        else if (tab === 'presensi' && attendanceActions.current) { await attendanceActions.current.save(); setSaved(true) }
+      if (section !== 'ai' && dirty) {
+        if (formValidation) throw new Error(formValidation)
+        if (tab === 'nilai') { await saveGrid(version); if (!automatic) toast.success('Nilai dan deskripsi tersimpan.') }
+        else if (tab === 'rapor') { await saveDetails(version); if (!automatic) toast.success('Catatan tersimpan') }
+        else if (tab === 'pengaturan') { await saveConfig(version); if (!automatic) toast.success('Pengaturan rapor tersimpan') }
+        else if (tab === 'presensi' && attendanceActions.current) await attendanceActions.current.save()
         else if (gradeCPOpen && gradeCPActions.current) await gradeCPActions.current.save()
-        else throw new Error('Gunakan tombol simpan pada bagian yang sedang diisi')
+        else throw new Error('Isian belum siap disimpan')
       }
-      if (aiDirty) await saveAI()
+      if (section !== 'form' && aiDirty) {
+        if (aiValidation) throw new Error(aiValidation)
+        await saveAI(aiVersion)
+        if (!automatic) toast.success('Pengaturan AI tersimpan')
+      }
+      setSaved(saveKind)
     } catch (e) { setSaveError(e instanceof Error ? e.message : 'Penyimpanan gagal. Isian tetap ada.'); throw e }
-    finally { setBusy(false) }
+    finally { setBusy(false); setSaving(null) }
   }
   async function discardCurrent() {
     if (dirty) {
@@ -326,14 +408,27 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     if (aiDirty) { setAI(await request('/rapor-sumatif/ai/settings', token)); setAIDirty(false) }
     setDirty(false); setSaveError('')
   }
+  function markEdited() {
+    const version = ++formEdit.current
+    setEditVersion(value => value + 1); setDirty(true); setSaveError('')
+    return version
+  }
+  function markAIEdited() {
+    ++aiEdit.current
+    setEditVersion(value => value + 1); setAIDirty(true); setSaveError('')
+  }
+  function markNarrativeEdited(student: string) {
+    const version = markEdited()
+    setNarrativeEdits(rows => new Map(rows).set(student, version))
+  }
   function scoreValue(id: string, cpId: string) { return scoresByStudent.get(id)?.get(cpId) ?? null }
   function updateScore(id: string, cpId: string, raw: string) {
     const value = raw.trim() === '' ? null : Number(raw)
-    setScores(rows => [...rows.filter(r => !(r.studentId === id && r.cpId === cpId)), { studentId: id, cpId, value }]); setDirty(true)
+    setScores(rows => [...rows.filter(r => !(r.studentId === id && r.cpId === cpId)), { studentId: id, cpId, value }]); markEdited()
   }
   function editNarrative(id: string, field: 'strength' | 'growth', value: string) {
     setNarratives(rows => { const prev = rows.find(r => r.studentId === id) || { studentId: id, ...automaticNarrative(id) }; return [...rows.filter(r => r.studentId !== id), { ...prev, [field]: value }] })
-    setNarrativeEdits(rows => new Set([...rows, id])); setDirty(true)
+    markNarrativeEdited(id)
   }
   function automaticNarrative(id: string) {
     return automaticReportNarrative(cps, scores.filter(score => score.studentId === id))
@@ -351,14 +446,23 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     aiController.current = null; setAIProgress(null)
     if (queue.length) { setSuggestion(queue[0]); setSuggestionQueue(queue.slice(1)) }
   }
-  async function saveGrid() {
+  async function saveGrid(version: number) {
     if (!cps.length) throw new Error('Daftar CP belum tersedia')
-    if (scores.some(s => s.value !== null && (!Number.isFinite(s.value) || s.value < 0 || s.value > 100))) throw new Error('Nilai harus berupa angka 0–100')
-    await request('/rapor-sumatif/grid?' + qs + '&mapelId=' + mapelId, token, 'PUT', {
+    const path = '/rapor-sumatif/grid?' + qs + '&mapelId=' + mapelId
+    const result: Pick<ScoreGrid, 'period' | 'cps'> = await request(path, token, 'PUT', {
       revision: period.revision, cps, scores: scores.filter(s => !locked(s.studentId)),
-      narratives: narratives.filter(n => narrativeEdits.has(n.studentId)),
+      narratives: narratives.filter(n => narrativeEdits.has(n.studentId) && !locked(n.studentId)),
     })
-    invalidateReport(); await refreshPeriod(); await loadGrid(); setSaved(true); toast.success('Nilai dan deskripsi tersimpan.')
+    setPeriod(result.period); setCPs(result.cps); invalidateReport()
+    // The first score for a shared CP creates a class-local ID. Move both saved
+    // and newly typed scores to that ID before the next save.
+    const ids = new Map(cps.map((cp, index) => [cp.id, result.cps[index].id]))
+    setScores(rows => rows.map(score => ({ ...score, cpId: ids.get(score.cpId) ?? score.cpId })))
+    setNarrativeEdits(rows => new Map([...rows].filter(([, edit]) => edit > version)))
+    if (formEdit.current !== version) return
+    setDirty(false)
+    const latest: ScoreGrid | null = await request(path, token).catch(() => null)
+    if (latest && formEdit.current === version) applyGrid(latest)
   }
   async function suggest(id: string) {
     if (dirty) throw new Error('Simpan perubahan sebelum meminta saran AI')
@@ -402,12 +506,11 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
   return <div className="space-y-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h2 className="text-xl font-bold">{nilaiOnly ? 'Nilai Sumatif CP' : 'Rapor Semester'}</h2><p className="text-sm text-muted-foreground">Nilai CP, deskripsi capaian, pemeriksaan, dan cetak sesuai blangko PKBM Tunas Ilmu.</p></div>
-      {hasGradeCPTab && <Button variant={gradeCPOpen ? 'default' : 'outline'} disabled={busy} onClick={() => leave(() => {
-        if (gradeCPOpen) invalidateReport()
-        setTab(gradeCPOpen ? 'nilai' : 'cp')
-      })}>{gradeCPOpen ? 'Kembali ke nilai per rombel' : 'CP per jenjang'}</Button>}
+      {hasGradeCPTab && <Button variant="outline" disabled={busy} onClick={gradeCPOpen ? closeCP : () => openCP()}>
+        {gradeCPOpen ? 'Kembali ke nilai per rombel' : isAdmin || cpAssignments?.isAdmin ? 'Penugasan CP' : activeReportYear ? 'Kelola CP' : 'Kelola CP tahun aktif'}
+      </Button>}
     </div>
-    {gradeCPOpen ? <ReportGradeCPPanel token={token} initialGrade={selectedClass?.jenjang} initialSubject={mapelId} initialSemester={semester} busy={busy} actionsRef={gradeCPActions} setBusy={setBusy} setDirty={setDirty} leave={leave} /> : <>
+    {gradeCPOpen ? <ReportGradeCPPanel token={token} initialGrade={activeReportYear ? selectedClass?.jenjang : undefined} initialSubject={activeReportYear && cpEntry !== 'other-subject' ? mapelId : undefined} initialSemester={semester} entry={cpEntry} busy={busy} actionsRef={gradeCPActions} setBusy={setBusy} setDirty={setDirty} leave={leave} /> : <>
     <ReportWorkflowGuide current={currentStep} ready={!!config} canReview={!!config && canReview} canScore={!readOnly && !isArchived && (!config || writableSubjects.length > 0)} readOnly={readOnly || isArchived} busy={busy} onStep={goTo} />
     {aiProgress && <div className="flex items-center gap-3 rounded-lg border p-3 text-sm" role="status">Membuat saran AI: {aiProgress.done}/{aiProgress.total} siswa<Button variant="outline" onClick={() => aiController.current?.abort()}>Hentikan</Button></div>}
     <Card id="report-scope" tabIndex={-1} className="grid gap-3 p-4 sm:grid-cols-3">
@@ -422,10 +525,10 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
     {periodError && <p role="alert" className="text-sm text-destructive">{periodError} <Button variant="outline" size="sm" onClick={() => setPeriodRetry(v => v + 1)}>Muat ulang periode</Button></p>}
     {config && <>
       <div className="flex flex-wrap gap-2" role="tablist" aria-label="Bagian rapor">{[['nilai', 'Nilai & deskripsi'], ...(canReview ? [['rapor', 'Pemeriksaan & cetak'], ['presensi', 'Presensi rapor'], ['leger', 'Leger'], ['pengaturan', 'Pengaturan']] : []), ...(isAdmin ? [['impor', 'Impor workbook']] : [])].map(([id, label]) => <Button key={id} variant={tab === id ? 'default' : 'outline'} disabled={busy} onClick={() => { if (id !== tab) leave(() => setTab(id)) }}>{label}</Button>)}</div>
-      <div role="status" aria-live="polite" className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 text-sm ${hasChanges ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-primary/20 bg-primary/5'}`}><span><strong>{busy ? 'Sedang memproses…' : hasChanges ? 'Belum disimpan' : saved ? 'Tersimpan' : 'Belum ada perubahan'}</strong>{hasChanges && ' · Simpan sebelum melanjutkan ke bagian lain.'}</span>{hasChanges && <Button size="sm" disabled={busy} onClick={() => void run(saveCurrent)}>Simpan perubahan</Button>}</div>
+      <div role="status" aria-live="polite" className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 text-sm ${hasChanges ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-primary/20 bg-primary/5'}`}><strong>{saveStatus}</strong>{hasChanges && <Button size="sm" disabled={busy} onClick={() => void saveCurrent().catch(() => {})}>Simpan perubahan</Button>}</div>
       {saveError && <p role="alert" className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{saveError}</p>}
       {isArchived && <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">{semesterArchived ? 'Semester ini sudah diarsipkan.' : 'Tahun ajaran ini sudah diarsipkan.'} Nilai, CP, catatan, dan pengaturan hanya dapat dilihat. Admin dapat mengimpor data historis melalui pratinjau.</p>}
-      {tab === 'presensi' && (canManage || readOnly) && <div id="report-attendance" tabIndex={-1}><ReportAttendancePanel key={qs} actionsRef={attendanceActions} token={token} qs={qs} students={students} isAdmin={isAdmin} canEdit={canManage && !readOnly && !isArchived} setDirty={setDirty} setParentBusy={setBusy} onSaved={async () => { invalidateReport(); await refreshPeriod(); setSaved(true) }} /></div>}
+      {tab === 'presensi' && (canManage || readOnly) && <div id="report-attendance" tabIndex={-1}><ReportAttendancePanel key={qs} actionsRef={attendanceActions} token={token} qs={qs} students={students} isAdmin={isAdmin} canEdit={canManage && !readOnly && !isArchived} setDirty={setDirty} setParentBusy={setBusy} onSaved={async kind => { invalidateReport(); await refreshPeriod().catch(() => undefined); setSaveError(''); setSaved(kind) }} /></div>}
       {tab === 'nilai' && <>
         <Card id="report-cp" tabIndex={-1} className="space-y-3 p-4"><Label>Mata pelajaran <span className="text-xs text-primary">Wajib</span></Label>
           <Select aria-label="Mata pelajaran rapor" aria-required="true" value={mapelId} disabled={busy || writableSubjects.length + viewableSubjects.length === 0} onChange={e => { const value = e.target.value; changeFilter(() => setMapelId(value)) }}>
@@ -440,17 +543,28 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
           {gridLoading && <p role="status">Memuat CP dan nilai tersimpan…</p>}
           {gridError && <p role="alert" className="text-red-700">{gridError} <Button variant="outline" onClick={() => void run(loadGrid)}>Muat ulang nilai</Button></p>}
           {mapelId && !canWrite && !readOnly && !isArchived && !gridLoading && !gridError && <p className="rounded-lg bg-muted/50 p-3 text-sm">Nilai mapel ini tersedia untuk diperiksa.</p>}
-          {mapelId && !gridLoading && !gridError && cpSource === 'pending' && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-            <p role="status"><strong>CP belum tersedia untuk mapel dan semester ini.</strong>{' '}{isArchived ? 'Belum ada daftar CP tersimpan pada periode ini.' : canDraftGradeCP ? 'Anda ditugaskan menyusun CP jenjang ini. Simpan daftar CP terlebih dahulu.' : isAdmin ? 'Tetapkan guru penyusun CP, lalu minta guru tersebut menyimpan daftar CP di CP per jenjang.' : 'Minta guru penyusun CP menyimpan daftar CP. Jika penyusun belum ditetapkan, hubungi admin.'}</p>
-            {!isArchived && (canDraftGradeCP || isAdmin) && <Button size="sm" variant="outline" onClick={() => goTo('cp', 'report-grade-cp')}>{isAdmin ? 'Buka penugasan CP' : 'Susun CP jenjang ini'}</Button>}
-          </div>}
-          {mapelId && !gridLoading && cpSource === 'legacy' && <p className="rounded-lg bg-muted/50 p-3 text-sm">Rombel ini memakai daftar CP lama untuk menjaga keterkaitan nilai dan deskripsi yang sudah tersimpan.</p>}
-          {mapelId && !gridLoading && cpSource === 'shared' && <p className="text-sm text-muted-foreground">Daftar CP jenjang dikelola oleh guru yang ditugaskan admin.</p>}
+          {mapelId && !gridLoading && !gridError && <section className="space-y-3 border-t pt-3" aria-labelledby="report-cp-list-title">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 id="report-cp-list-title" className="font-semibold">Capaian Pembelajaran (CP)</h3>
+              <div className="flex flex-wrap gap-2">
+                {canDraftGradeCP && cpSource !== 'legacy' && <>
+                  {cps.length > 0 && <Button size="sm" variant="outline" disabled={busy} onClick={() => openCP('edit')}>Edit CP</Button>}
+                  {cps.length < maxReportCPs && <Button size="sm" disabled={busy} onClick={() => openCP('add')}>Tambah CP {cps.length + 1}</Button>}
+                </>}
+                {hasOtherCPSubjects && <Button size="sm" variant="outline" disabled={busy} onClick={() => openCP('other-subject')}>Tambah CP mapel lain</Button>}
+                {cpSource === 'pending' && !isArchived && isAdmin && <Button size="sm" variant="outline" disabled={busy} onClick={() => openCP()}>Buka penugasan CP</Button>}
+              </div>
+            </div>
+            {cpSource === 'pending' && <p role="status" className="text-sm text-muted-foreground">Belum ada CP untuk mapel dan semester ini.{!isArchived && (canDraftGradeCP ? ' Tambahkan CP pertama agar nilai bisa diisi.' : isAdmin ? ' Tetapkan guru penyusun CP melalui Penugasan CP.' : ' Hubungi guru penyusun CP, atau minta admin memeriksa penugasannya.')}</p>}
+            {cpSource === 'legacy' && <p className="rounded-lg bg-muted/50 p-3 text-sm">Rombel ini memakai daftar CP lama untuk menjaga keterkaitan nilai dan deskripsi yang sudah tersimpan.</p>}
+            {cpSource === 'shared' && !isArchived && !readOnly && !canDraftGradeCP && <p className="text-sm text-muted-foreground">Hubungi guru penyusun CP yang ditugaskan admin untuk mengedit atau menambah CP pada jenjang ini.</p>}
+            {cps.length > 0 && <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{cps.map((cp, i) => <div key={cp.id} className="rounded-md border p-3 text-sm"><dt className="font-semibold">CP {i + 1}</dt><dd className="break-words">{cp.label}</dd></div>)}</dl>}
+            {canDraftGradeCP && !hasOtherCPSubjects && <p className="text-sm text-muted-foreground">Mapel lain akan tersedia setelah admin mendaftarkannya pada jenjang ini.</p>}
+          </section>}
           {mapelId && cps.length > 0 && <><p className="text-sm text-muted-foreground">Nilai rapor adalah rata-rata CP yang terisi, dibulatkan. Tempel blok angka dari Excel ke sel nilai pertama.</p>
-            <details className="rounded-lg border bg-muted/30 p-3 text-sm"><summary className="cursor-pointer font-semibold">Bantuan deskripsi otomatis dan manual</summary><p className="mt-2 text-sm text-muted-foreground">Deskripsi otomatis dirangkai dari hasil nilai CP tertinggi dan terendah. Jika hanya satu nilai terisi, sistem menampilkan capaian saja. Tinjau hasilnya sebelum menyimpan nilai.</p>
-            <p className="text-sm text-muted-foreground">Untuk memperbarui deskripsi draf, pilih “Susun ulang dari CP” di baris siswa, periksa hasilnya, lalu klik “Simpan nilai”. Rapor final dan terbit tetap memakai versi yang sudah dibekukan.</p></details>
+            <details className="rounded-lg border bg-muted/30 p-3 text-sm"><summary className="cursor-pointer font-semibold">Bantuan deskripsi otomatis dan manual</summary><p className="mt-2 text-sm text-muted-foreground">Deskripsi otomatis dirangkai dari hasil nilai CP tertinggi dan terendah. Jika hanya satu nilai terisi, sistem menampilkan capaian saja. Tinjau hasilnya setelah mengisi nilai.</p>
+            <p className="text-sm text-muted-foreground">Untuk memperbarui deskripsi draf, pilih “Susun ulang dari CP” di baris siswa, lalu tinjau hasilnya. Perubahan disimpan otomatis. Rapor final dan terbit tetap memakai versi yang sudah dibekukan.</p></details>
             {canUseAI && canWrite && !isArchived && !gridLoading && !gridError && <Button variant="outline" disabled={busy || dirty || scores.every(score => score.value === null)} onClick={() => void run(suggestClass)}>Bantu AI satu kelas</Button>}
-            <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{cps.map((cp, i) => <div key={cp.id} className="rounded-md border p-3 text-sm"><dt className="font-semibold">CP {i + 1}</dt><dd>{cp.label}</dd></div>)}</dl>
           </>}
         </Card>
         {mapelId && cps.length > 0 && <Card id="report-scores" tabIndex={-1} className="overflow-auto p-3"><p className="mb-3 text-sm text-muted-foreground">Nilai CP <strong className="text-primary">Wajib sebelum finalisasi</strong>. Kolom kosong dapat disimpan sebagai draf; isi 0 hanya jika nilainya memang nol.</p><table className="w-full text-sm"><thead><tr><th className="min-w-44 p-2 text-left">Peserta didik</th>{cps.map((cp, i) => <th key={cp.id || i} className="min-w-24 p-2">CP {i + 1}</th>)}<th className="p-2">Nilai rapor</th><th className="min-w-80 p-2">Deskripsi akhir</th></tr></thead><tbody>{students.map((student, ri) => {
@@ -458,22 +572,23 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
           const savedNarrative = narratives.find(n => n.studentId === student.id)
           const narrative = savedNarrative || automaticNarrative(student.id)
           const needsReview = savedNarrative?.reviewedRevision === -1 && !narrativeEdits.has(student.id)
-          const disabled = !canWrite || busy || isArchived || locked(student.id)
-          return <tr key={student.id} className="border-t align-top"><td className="p-2 font-medium">{student.nama}<div className="text-xs text-muted-foreground">NIS {student.nis}{locked(student.id) ? ' · final' : ''}</div></td>{cps.map((cp, ci) => <td key={cp.id || ci} className="p-1"><Input aria-required="true" className={scoreValue(student.id, cp.id) === null ? requiredClass + ' bg-amber-50 dark:bg-amber-950/20' : 'border-l-4 border-l-primary/25'} aria-label={`${student.nama} CP ${ci + 1}`} type="number" min="0" max="100" step="0.01" disabled={disabled} value={scoreValue(student.id, cp.id) ?? ''} onChange={e => updateScore(student.id, cp.id, e.target.value)} onPaste={e => {
+          const disabled = !canWrite || inputsBusy || isArchived || gridLoading || locked(student.id)
+          return <tr key={student.id} className="border-t align-top"><td className="p-2 font-medium">{student.nama}<div className="text-xs text-muted-foreground">NIS {student.nis}{locked(student.id) ? ' · final' : ''}</div></td>{cps.map((cp, ci) => <td key={ci} className="p-1"><Input aria-required="true" className={scoreValue(student.id, cp.id) === null ? requiredClass + ' bg-amber-50 dark:bg-amber-950/20' : 'border-l-4 border-l-primary/25'} aria-label={`${student.nama} CP ${ci + 1}`} type="number" min="0" max="100" step="0.01" disabled={disabled} value={scoreValue(student.id, cp.id) ?? ''} onChange={e => { if (!e.target.validity.badInput) updateScore(student.id, cp.id, e.target.value) }} onPaste={e => {
             const raw = e.clipboardData.getData('text/plain'); if (!raw.includes('\t') && !raw.includes('\n')) return
             e.preventDefault(); const rows = raw.trimEnd().split(/\r?\n/); const updates: Score[] = []
             let invalid = false
             rows.forEach((row, r) => row.split('\t').forEach((cell, c) => { const st = students[ri + r], target = cps[ci + c]; if (!st || !target || locked(st.id)) return; const value = cell.trim() === '' ? null : Number(cell.replace(',', '.')); if (value !== null && (!Number.isFinite(value) || value < 0 || value > 100)) { invalid = true; return }; updates.push({ studentId: st.id, cpId: target.id, value }) }))
             if (invalid) { setSaveError('Blok berisi nilai tidak valid. Gunakan angka 0–100; isian sebelumnya tetap ada.'); return }
-            setScores(prev => [...prev.filter(v => !updates.some(u => u.cpId === v.cpId && u.studentId === v.studentId)), ...updates]); setDirty(true)
-          }} /></td>)}<td className="p-2 text-center font-semibold">{values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : '—'}<div className="text-xs font-normal">{values.length}/{cps.length} CP</div></td><td className="space-y-2 p-2"><textarea aria-label={'Capaian ' + student.nama} placeholder="Capaian otomatis muncul setelah nilai diisi" className={textClass} disabled={disabled} value={narrative.strength} onChange={e => editNarrative(student.id, 'strength', e.target.value)} /><textarea aria-label={'Penguatan ' + student.nama} placeholder="Penguatan capaian lainnya" className={textClass} disabled={disabled} value={narrative.growth} onChange={e => editNarrative(student.id, 'growth', e.target.value)} />{needsReview && <p className="text-amber-700">Nilai atau CP berubah. Tinjau kembali deskripsi yang tersimpan.</p>}<div className="flex flex-wrap gap-2">{savedNarrative && !disabled && <Button size="sm" variant="outline" aria-label={'Susun ulang deskripsi ' + student.nama} title="Susun ulang dari nilai CP, lalu klik Simpan nilai." disabled={values.length === 0} onClick={() => { const automatic = automaticNarrative(student.id); editNarrative(student.id, 'strength', automatic.strength); editNarrative(student.id, 'growth', automatic.growth) }}>Susun ulang dari CP</Button>}{canUseAI && !disabled && <Button size="sm" variant="outline" disabled={dirty || values.length === 0} onClick={() => void run(() => suggest(student.id))}>Bantu AI</Button>}{needsReview && !disabled && <Button size="sm" variant="outline" onClick={() => { setNarrativeEdits(prev => new Set([...prev, student.id])); setDirty(true) }}>Tandai ditinjau</Button>}</div></td></tr>
+            if (updates.length) { setScores(prev => [...prev.filter(v => !updates.some(u => u.cpId === v.cpId && u.studentId === v.studentId)), ...updates]); markEdited() }
+          }} /></td>)}<td className="p-2 text-center font-semibold">{values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : '—'}<div className="text-xs font-normal">{values.length}/{cps.length} CP</div></td><td className="space-y-2 p-2"><textarea aria-label={'Capaian ' + student.nama} placeholder="Capaian otomatis muncul setelah nilai diisi" className={textClass} disabled={disabled} value={narrative.strength} onChange={e => editNarrative(student.id, 'strength', e.target.value)} /><textarea aria-label={'Penguatan ' + student.nama} placeholder="Penguatan capaian lainnya" className={textClass} disabled={disabled} value={narrative.growth} onChange={e => editNarrative(student.id, 'growth', e.target.value)} />{needsReview && <p className="text-amber-700">Nilai atau CP berubah. Tinjau kembali deskripsi yang tersimpan.</p>}<div className="flex flex-wrap gap-2">{savedNarrative && !disabled && <Button size="sm" variant="outline" aria-label={'Susun ulang deskripsi ' + student.nama} title="Susun ulang deskripsi dari nilai CP." disabled={values.length === 0} onClick={() => { const automatic = automaticNarrative(student.id); editNarrative(student.id, 'strength', automatic.strength); editNarrative(student.id, 'growth', automatic.growth) }}>Susun ulang dari CP</Button>}{canUseAI && !disabled && <Button size="sm" variant="outline" disabled={dirty || values.length === 0} onClick={() => void run(() => suggest(student.id))}>Bantu AI</Button>}{needsReview && !disabled && <Button size="sm" variant="outline" onClick={() => markNarrativeEdited(student.id)}>Tandai ditinjau</Button>}</div></td></tr>
         })}</tbody></table></Card>}
         {mapelId && cps.length > 0 && !gridLoading && !gridError && <Card className="sticky bottom-2 z-10 flex flex-wrap items-center justify-between gap-3 p-3">
           <div className="text-sm"><p className="font-semibold">{completedScores} dari {students.length} siswa sudah lengkap nilai CP</p>
             {pendingReviews > 0 && <p className="text-muted-foreground">{pendingReviews} deskripsi perlu ditinjau.</p>}
+            {canWrite && !isArchived && <p className="text-muted-foreground">{hasChanges || busy || saved ? saveStatus : 'Nilai dan deskripsi disimpan otomatis.'}</p>}
             {canWrite && !isArchived && !canManage && saved && !dirty && <p className="text-muted-foreground">Nilai yang tersimpan sudah tersedia untuk wali kelas.</p>}
           </div>
-          {canWrite && !isArchived && <Button disabled={busy || !dirty} onClick={() => void run(saveGrid)}>Simpan nilai</Button>}
+          {canWrite && !isArchived && <Button disabled={busy || !dirty} onClick={() => void saveCurrent(false, 'form').catch(() => {})}>Simpan nilai</Button>}
           {canManage && saved && !dirty && <Button variant="outline" disabled={busy} onClick={() => goTo('rapor', 'report-student')}>Periksa rapor siswa</Button>}
         </Card>}
       </>}
@@ -490,16 +605,16 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
             <table className="w-full text-sm"><thead><tr><th className="text-left">Mata pelajaran</th><th>Nilai</th><th className="text-left">Capaian kompetensi</th></tr></thead><tbody>{doc.subjects.map(m => <tr key={m.mapelId} className="border-t"><td className="p-2">{m.name}</td><td className="p-2 text-center">{m.score ?? '—'}</td><td className="space-y-2 p-2"><p>{m.strength}</p><p>{m.growth}</p>{m.stale && <p className="text-amber-700">Perlu ditinjau</p>}</td></tr>)}</tbody></table>
             <p className="text-sm">Ketidakhadiran: Sakit {doc.attendance.sakit} hari · Izin {doc.attendance.izin} hari · Tanpa keterangan {doc.attendance.alpa} hari</p>
             <p className="text-xs text-muted-foreground">Sumber presensi: {['final', 'published'].includes(record?.status || '') ? 'versi rapor yang sudah dibekukan' : doc.attendanceSource === 'manual' ? 'rekap manual dari catatan kertas' : doc.attendanceSource === 'historical' ? 'rekap historis hasil impor Excel' : 'otomatis dari presensi aplikasi'}. {doc.attendanceSource === 'manual' && canManage && !locked(studentId) && <Button size="sm" variant="outline" disabled={busy || dirty} onClick={() => setTab('presensi')}>Isi / periksa rekap presensi</Button>}</p>
-            <fieldset disabled={!canManage || busy || isArchived || locked(studentId)} className="space-y-3"><Label htmlFor="report-note">Catatan wali kelas <span className="text-xs text-muted-foreground">Opsional</span></Label><textarea id="report-note" aria-label="Catatan wali kelas" className={textClass} value={details.note} onChange={e => { setDetails({ ...details, note: e.target.value }); setDirty(true) }} />
-              <details className="rounded-lg border p-3"><summary className="cursor-pointer font-medium">Identitas untuk lembar cetak</summary><p className="my-2 text-xs text-muted-foreground">Nama, NIS, dan NISN mengikuti master peserta didik. Data pelengkap disimpan pada rapor semester ini.</p><div className="grid gap-3 sm:grid-cols-2">{[['birthPlace', 'Tempat lahir'], ['birthDate', 'Tanggal lahir'], ['religion', 'Agama'], ['phone', 'Telepon'], ['address', 'Alamat'], ['father', 'Nama ayah'], ['mother', 'Nama ibu'], ['fatherJob', 'Pekerjaan ayah'], ['motherJob', 'Pekerjaan ibu'], ['guardian', 'Nama wali'], ['guardianJob', 'Pekerjaan wali'], ['admissionClass', 'Kelas saat diterima'], ['admissionYear', 'Tahun masuk'], ['admissionStatus', 'Status saat diterima']].map(([key, label]) => <div key={key}><Label>{label}</Label><Input aria-label={label} type={key === 'birthDate' ? 'date' : 'text'} value={details.identity?.[key] || ''} onChange={e => { setDetails({ ...details, identity: { ...details.identity, [key]: e.target.value } }); setDirty(true) }} /></div>)}</div></details>
+            <fieldset disabled={readOnly || !canManage || inputsBusy || isArchived || locked(studentId)} className="space-y-3"><Label htmlFor="report-note">Catatan wali kelas <span className="text-xs text-muted-foreground">Opsional</span></Label><textarea id="report-note" aria-label="Catatan wali kelas" className={textClass} value={details.note} onChange={e => { setDetails({ ...details, note: e.target.value }); markEdited() }} />
+              <details className="rounded-lg border p-3"><summary className="cursor-pointer font-medium">Identitas untuk lembar cetak</summary><p className="my-2 text-xs text-muted-foreground">Nama, NIS, dan NISN mengikuti master peserta didik. Data pelengkap disimpan pada rapor semester ini.</p><div className="grid gap-3 sm:grid-cols-2">{[['birthPlace', 'Tempat lahir'], ['birthDate', 'Tanggal lahir'], ['religion', 'Agama'], ['phone', 'Telepon'], ['address', 'Alamat'], ['father', 'Nama ayah'], ['mother', 'Nama ibu'], ['fatherJob', 'Pekerjaan ayah'], ['motherJob', 'Pekerjaan ibu'], ['guardian', 'Nama wali'], ['guardianJob', 'Pekerjaan wali'], ['admissionClass', 'Kelas saat diterima'], ['admissionYear', 'Tahun masuk'], ['admissionStatus', 'Status saat diterima']].map(([key, label]) => <div key={key}><Label>{label}</Label><Input aria-label={label} type={key === 'birthDate' ? 'date' : 'text'} value={details.identity?.[key] || ''} onChange={e => { setDetails({ ...details, identity: { ...details.identity, [key]: e.target.value } }); markEdited() }} /></div>)}</div></details>
               {semester === 'Genap' && promotionRules && <div id="report-promotion" tabIndex={-1} className="space-y-3 rounded-lg border border-primary/25 bg-primary/5 p-4">
-                <div><Label>{promotionRules.completion ? 'Keputusan kelulusan' : 'Keputusan kenaikan'} <span className="text-xs text-primary">Wajib</span></Label><Select aria-required="true" aria-label={promotionRules.completion ? 'Keputusan kelulusan' : 'Keputusan kenaikan'} value={details.promotion} disabled={!promotionRules.validGrade} onChange={e => { setDetails({ ...details, promotion: e.target.value, nextClass: e.target.value === 'naik' ? promotionRules.nextClass : '' }); setPromotionEdited(true); setDirty(true) }}>
+                <div><Label>{promotionRules.completion ? 'Keputusan kelulusan' : 'Keputusan kenaikan'} <span className="text-xs text-primary">Wajib</span></Label><Select aria-required="true" aria-label={promotionRules.completion ? 'Keputusan kelulusan' : 'Keputusan kenaikan'} value={details.promotion} disabled={!promotionRules.validGrade} onChange={e => { setDetails({ ...details, promotion: e.target.value, nextClass: e.target.value === 'naik' ? promotionRules.nextClass : '' }); setPromotionEdited(true); markEdited() }}>
                   <option value="">Belum ditentukan</option>
                   {promotionRules.completion ? <><option value="lulus">Lulus</option><option value="belum_lulus">Belum lulus</option>{['naik', 'tinggal'].includes(details.promotion) && <option value={details.promotion} disabled>{details.promotion === 'naik' ? 'Naik kelas' : 'Tinggal kelas'} (keputusan lama)</option>}</> : <><option value="naik">Naik kelas</option><option value="tinggal">Tinggal kelas</option>{['lulus', 'belum_lulus'].includes(details.promotion) && <option value={details.promotion} disabled>{details.promotion === 'lulus' ? 'Lulus' : 'Belum lulus'} (keputusan lama)</option>}</>}
                 </Select></div>
                 {!promotionRules.validGrade ? <p className="text-sm text-amber-700">Jenjang kelas belum valid. Hubungi admin untuk memeriksa data kelas.</p> : promotionRules.completion ? <p className="text-sm text-muted-foreground">Kelas 6, 9, dan 12 merupakan kelas akhir program. Pilih keputusan kelulusan sesuai hasil penetapan; tidak ada kelas tujuan kenaikan otomatis.</p> : <p className="text-sm text-muted-foreground">Cukup pilih keputusan. Jika naik kelas, kelas tujuan terisi otomatis berdasarkan kelas pada rapor ini.</p>}
                 {details.promotion === 'naik' && <div className="rounded-lg bg-muted/50 p-3 text-sm"><span>{promotionRules.completion ? 'Kelas tujuan pada isian lama' : 'Naik ke kelas'}: </span><output aria-label="Kelas tujuan kenaikan" className="font-semibold">{details.nextClass || promotionRules.nextClass || '—'}</output>
-                  {!promotionRules.completion && details.nextClass && details.nextClass !== promotionRules.nextClass && !locked(studentId) && <div className="mt-2 space-y-2"><p className="text-muted-foreground">Tujuan lama tetap tersimpan. Kelas tujuan otomatis untuk rapor ini adalah {promotionRules.nextClass}.</p><Button size="sm" variant="outline" onClick={() => { setDetails({ ...details, nextClass: promotionRules.nextClass }); setPromotionEdited(true); setDirty(true) }}>Gunakan kelas tujuan otomatis</Button></div>}
+                  {!promotionRules.completion && details.nextClass && details.nextClass !== promotionRules.nextClass && !locked(studentId) && <div className="mt-2 space-y-2"><p className="text-muted-foreground">Tujuan lama tetap tersimpan. Kelas tujuan otomatis untuk rapor ini adalah {promotionRules.nextClass}.</p><Button size="sm" variant="outline" onClick={() => { setDetails({ ...details, nextClass: promotionRules.nextClass }); setPromotionEdited(true); markEdited() }}>Gunakan kelas tujuan otomatis</Button></div>}
                 </div>}
                 {promotionRules.completion && ['naik', 'tinggal'].includes(details.promotion) && !locked(studentId) && <p className="text-sm text-amber-700">Keputusan lama tetap tersimpan. Sebelum finalisasi, pilih Lulus atau Belum lulus untuk kelas akhir program.</p>}
               </div>}
@@ -509,14 +624,14 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
                   <p className="text-sm text-muted-foreground">Tambahkan kegiatan yang diikuti siswa, lalu isi keterangan perkembangannya. Siswa yang tidak mengikuti kegiatan boleh dikosongkan.</p>
                   {details.extras.length === 0 && <p className="text-sm">Belum ada kegiatan untuk siswa ini.</p>}
                   {details.extras.map((extra, i) => <div key={i} className="space-y-2 rounded-lg bg-muted/40 p-3">
-                    <div className="flex items-center justify-between gap-2"><Label htmlFor={'extra-name-' + i}>Kegiatan {i + 1}</Label><Button variant="ghost" aria-label={'Hapus ekstrakurikuler ' + (i + 1)} onClick={() => { setDetails({ ...details, extras: details.extras.filter((_, j) => i !== j) }); setDirty(true) }}>Hapus</Button></div>
-                    {config.extraActivities?.length ? <Select id={'extra-name-' + i} aria-label={'Nama ekstrakurikuler ' + (i + 1)} value={extra.name} onChange={e => { setDetails({ ...details, extras: details.extras.map((v, j) => i === j ? { ...v, name: e.target.value } : v) }); setDirty(true) }}><option value="">Pilih kegiatan...</option>{extra.name && !config.extraActivities.includes(extra.name) && <option value={extra.name}>{extra.name} (isian sebelumnya)</option>}{config.extraActivities.map(name => <option key={name} value={name} disabled={details.extras.some((v, j) => j !== i && v.name === name)}>{name}</option>)}</Select> : <Input id={'extra-name-' + i} aria-label={'Nama ekstrakurikuler ' + (i + 1)} maxLength={100} placeholder="Contoh: Pramuka" value={extra.name} onChange={e => { setDetails({ ...details, extras: details.extras.map((v, j) => i === j ? { ...v, name: e.target.value } : v) }); setDirty(true) }} />}
-                    <Label htmlFor={'extra-description-' + i}>Keterangan perkembangan</Label><textarea id={'extra-description-' + i} aria-label={'Keterangan ekstrakurikuler ' + (i + 1)} className={textClass} maxLength={1000} placeholder="Contoh: Aktif mengikuti latihan dan mampu bekerja sama dalam regu." value={extra.description} onChange={e => { setDetails({ ...details, extras: details.extras.map((v, j) => i === j ? { ...v, description: e.target.value } : v) }); setDirty(true) }} /><p className="text-right text-xs text-muted-foreground">{extra.description.length}/1.000 karakter</p>
+                    <div className="flex items-center justify-between gap-2"><Label htmlFor={'extra-name-' + i}>Kegiatan {i + 1}</Label><Button variant="ghost" aria-label={'Hapus ekstrakurikuler ' + (i + 1)} onClick={() => { setDetails({ ...details, extras: details.extras.filter((_, j) => i !== j) }); markEdited() }}>Hapus</Button></div>
+                    {config.extraActivities?.length ? <Select id={'extra-name-' + i} aria-label={'Nama ekstrakurikuler ' + (i + 1)} value={extra.name} onChange={e => { setDetails({ ...details, extras: details.extras.map((v, j) => i === j ? { ...v, name: e.target.value } : v) }); markEdited() }}><option value="">Pilih kegiatan...</option>{extra.name && !config.extraActivities.includes(extra.name) && <option value={extra.name}>{extra.name} (isian sebelumnya)</option>}{config.extraActivities.map(name => <option key={name} value={name} disabled={details.extras.some((v, j) => j !== i && v.name === name)}>{name}</option>)}</Select> : <Input id={'extra-name-' + i} aria-label={'Nama ekstrakurikuler ' + (i + 1)} maxLength={100} placeholder="Contoh: Pramuka" value={extra.name} onChange={e => { setDetails({ ...details, extras: details.extras.map((v, j) => i === j ? { ...v, name: e.target.value } : v) }); markEdited() }} />}
+                    <Label htmlFor={'extra-description-' + i}>Keterangan perkembangan</Label><textarea id={'extra-description-' + i} aria-label={'Keterangan ekstrakurikuler ' + (i + 1)} className={textClass} maxLength={1000} placeholder="Contoh: Aktif mengikuti latihan dan mampu bekerja sama dalam regu." value={extra.description} onChange={e => { setDetails({ ...details, extras: details.extras.map((v, j) => i === j ? { ...v, description: e.target.value } : v) }); markEdited() }} /><p className="text-right text-xs text-muted-foreground">{extra.description.length}/1.000 karakter</p>
                   </div>)}
-                  <Button variant="outline" disabled={details.extras.length >= 10} onClick={() => { setDetails({ ...details, extras: [...details.extras, { name: '', description: '' }] }); setDirty(true) }}>Tambah ekstrakurikuler</Button>
+                  <Button variant="outline" disabled={details.extras.length >= 10} onClick={() => { setDetails({ ...details, extras: [...details.extras, { name: '', description: '' }] }); markEdited() }}>Tambah ekstrakurikuler</Button>
                 </>}
               </section>
-              <Button disabled={!dirty} onClick={() => void run(saveDetails)}>Simpan catatan</Button>
+              <Button disabled={busy || !dirty} onClick={() => void saveCurrent(false, 'form').catch(() => {})}>Simpan catatan</Button>
             </fieldset>
             {!locked(studentId) && (doc.issues.length > 0 ? <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><strong>Perlu dilengkapi sebelum final</strong><p className="mt-1">Pilih bagian di bawah untuk menuju isian yang perlu diperiksa.</p><ul className="mt-2 space-y-2">{doc.issues.map((issue, i) => <li key={i}><button type="button" className="min-h-10 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-left font-medium underline decoration-amber-400 underline-offset-4 hover:bg-amber-100 disabled:opacity-60" disabled={busy} onClick={() => openIssue(issue)}>{issue} →</button></li>)}</ul></div> : <p className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-900">Isian wajib lengkap. Periksa nilai, deskripsi, dan identitas sebelum memfinalkan rapor.</p>)}
             {canManage && !isArchived && <div id="report-status" tabIndex={-1} className="space-y-2 rounded-lg border p-3">
@@ -531,23 +646,23 @@ export function RaporSumatifView({ token, readOnly, nilaiOnly = false }: { token
       </>}
       {tab === 'leger' && <Card className="space-y-3 overflow-auto p-4"><div className="flex gap-2"><Button disabled={busy} onClick={() => void run(async () => setLedger(await request('/rapor-sumatif/leger?' + qs, token)))}>Muat leger</Button><Button variant="outline" disabled={busy} onClick={() => void run(() => exportLedger('xlsx'))}>Unduh Excel</Button><Button variant="outline" disabled={busy} onClick={() => void run(() => exportLedger('pdf'))}>Unduh PDF</Button></div><table className="w-full text-sm"><thead><tr><th>Nama</th>{config.subjects.map(m => <th key={m.mapelId} className="p-2">{m.name}</th>)}<th>Jumlah</th><th>Peringkat</th></tr></thead><tbody>{ledger.map(row => <tr key={row.student.id} className="border-t"><td className="p-2">{row.student.nama}</td>{row.subjects.map(m => <td key={m.mapelId} className="p-2 text-center">{m.score ?? '—'}</td>)}<td>{row.total ?? '—'}</td><td>{row.rank ?? '—'}</td></tr>)}</tbody></table></Card>}
       {tab === 'pengaturan' && <>
-        <Card id="report-config" tabIndex={-1} className="space-y-4 p-4"><h3 className="font-bold">Identitas dan cetak rapor</h3><p className="text-sm text-muted-foreground">Lembar rapor semester 1 ditandatangani orang tua/wali dan wali kelas. Semester 2 ditambah tanda tangan Kepala PKBM tersendiri di bagian paling akhir tengah, di bawah orang tua/wali dan wali kelas.</p>{settingsLocked && <div role="status" className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"><strong>Pengaturan kelas dikunci</strong><p>Sudah ada rapor final / terbit pada periode ini. Pengaturan digunakan bersama oleh satu kelas. Untuk koreksi, wali kelas atau admin perlu membuka revisi rapor final / terbit yang terkait, disertai alasan.</p><Button variant="outline" disabled={busy} onClick={() => leave(() => { setStudentId(records.find(r => ['final', 'published'].includes(r.status))?.studentId || ''); setTab('rapor') })}>Lihat rapor yang terkunci</Button></div>}<p className="text-sm text-muted-foreground">Kolom bertanda Wajib harus lengkap sebelum finalisasi. Draf pengaturan dapat disimpan bertahap.</p><fieldset disabled={!canManage || busy || isArchived || settingsLocked} className="grid gap-3 sm:grid-cols-2">{[['program', 'Program'], ['phase', 'Fase'], ['city', 'Tempat penetapan'], ['date', 'Tanggal rapor'], ['teacher', 'Nama wali kelas'], ['teacherNip', 'NIP wali kelas'], ['principal', 'Nama kepala PKBM'], ['principalNip', 'NIP kepala PKBM']].map(([key, label]) => { const mandatory = key === 'date' || key === 'teacher' || key === 'principal' && semester === 'Genap'; return <div key={key}><Label htmlFor={'report-config-' + key}>{label} {mandatory ? <span className="text-xs font-semibold text-primary">Wajib</span> : key.endsWith('Nip') ? <span className="text-xs text-muted-foreground">Opsional</span> : null}</Label><Input id={'report-config-' + key} className={mandatory ? requiredClass : undefined} required={mandatory} aria-required={mandatory} aria-label={label} type={key === 'date' ? 'date' : 'text'} value={String(config[key as keyof Config] || '')} onChange={e => { setConfig({ ...config, [key]: e.target.value }); setDirty(true) }} /></div> })}
-          <div><Label>Tanda tangan kepala PKBM (semester 2, opsional, PNG)</Label><Input aria-label="Gambar tanda tangan kepala PKBM" type="file" accept="image/png" onChange={e => { const file = e.target.files?.[0]; if (!file) return; if (file.size > 300000) { toast.error('Gambar maksimal 300 KB'); return }; const reader = new FileReader(); reader.onload = () => { setConfig({ ...config, principalSignature: String(reader.result) }); setDirty(true) }; reader.readAsDataURL(file) }} />{config.principalSignature && <Button variant="ghost" onClick={() => { setConfig({ ...config, principalSignature: '' }); setDirty(true) }}>Hapus gambar tanda tangan</Button>}</div><div className="space-y-2 sm:col-span-2"><Label>Urutan dan kelompok mata pelajaran</Label>{config.subjects.map((m, i) => <div key={m.mapelId} className="flex flex-wrap gap-2"><Input className="min-w-56 flex-1" aria-label="Nama cetak mapel" value={m.name} onChange={e => { setConfig({ ...config, subjects: config.subjects.map((v, j) => i === j ? { ...v, name: e.target.value } : v) }); setDirty(true) }} /><Select className="w-48" value={m.group} onChange={e => { setConfig({ ...config, subjects: config.subjects.map((v, j) => i === j ? { ...v, group: e.target.value } : v) }); setDirty(true) }}><option value="umum">Mapel umum</option><option value="pemberdayaan">Pemberdayaan / keterampilan</option></Select><Button variant="outline" disabled={i === 0} onClick={() => { const subjects = [...config.subjects]; [subjects[i - 1], subjects[i]] = [subjects[i], subjects[i - 1]]; setConfig({ ...config, subjects }); setDirty(true) }}>Naik</Button></div>)}</div>
+        <Card id="report-config" tabIndex={-1} className="space-y-4 p-4"><h3 className="font-bold">Identitas dan cetak rapor</h3><p className="text-sm text-muted-foreground">Lembar rapor semester 1 ditandatangani orang tua/wali dan wali kelas. Semester 2 ditambah tanda tangan Kepala PKBM tersendiri di bagian paling akhir tengah, di bawah orang tua/wali dan wali kelas.</p>{settingsLocked && <div role="status" className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"><strong>Pengaturan kelas dikunci</strong><p>Sudah ada rapor final / terbit pada periode ini. Pengaturan digunakan bersama oleh satu kelas. Untuk koreksi, wali kelas atau admin perlu membuka revisi rapor final / terbit yang terkait, disertai alasan.</p><Button variant="outline" disabled={busy} onClick={() => leave(() => { setStudentId(records.find(r => ['final', 'published'].includes(r.status))?.studentId || ''); setTab('rapor') })}>Lihat rapor yang terkunci</Button></div>}<p className="text-sm text-muted-foreground">Kolom bertanda Wajib harus lengkap sebelum finalisasi. Draf pengaturan dapat disimpan bertahap.</p><fieldset disabled={readOnly || !canManage || inputsBusy || isArchived || settingsLocked} className="grid gap-3 sm:grid-cols-2">{[['program', 'Program'], ['phase', 'Fase'], ['city', 'Tempat penetapan'], ['date', 'Tanggal rapor'], ['teacher', 'Nama wali kelas'], ['teacherNip', 'NIP wali kelas'], ['principal', 'Nama kepala PKBM'], ['principalNip', 'NIP kepala PKBM']].map(([key, label]) => { const mandatory = key === 'date' || key === 'teacher' || key === 'principal' && semester === 'Genap'; return <div key={key}><Label htmlFor={'report-config-' + key}>{label} {mandatory ? <span className="text-xs font-semibold text-primary">Wajib</span> : key.endsWith('Nip') ? <span className="text-xs text-muted-foreground">Opsional</span> : null}</Label><Input id={'report-config-' + key} className={mandatory ? requiredClass : undefined} required={mandatory} aria-required={mandatory} aria-label={label} type={key === 'date' ? 'date' : 'text'} value={String(config[key as keyof Config] || '')} onChange={e => { setConfig({ ...config, [key]: e.target.value }); markEdited() }} /></div> })}
+          <div><Label>Tanda tangan kepala PKBM (semester 2, opsional, PNG)</Label><Input aria-label="Gambar tanda tangan kepala PKBM" type="file" accept="image/png" onChange={e => { const file = e.target.files?.[0]; if (!file) return; if (file.size > 300000) { toast.error('Gambar maksimal 300 KB'); return }; const reader = new FileReader(); const targetScope = qs; reader.onload = () => { if (scopeRef.current !== targetScope || activeTabRef.current !== 'pengaturan') return; setConfig(current => current ? { ...current, principalSignature: String(reader.result) } : current); markEdited() }; reader.readAsDataURL(file) }} />{config.principalSignature && <Button variant="ghost" onClick={() => { setConfig({ ...config, principalSignature: '' }); markEdited() }}>Hapus gambar tanda tangan</Button>}</div><div className="space-y-2 sm:col-span-2"><Label>Urutan dan kelompok mata pelajaran</Label>{config.subjects.map((m, i) => <div key={m.mapelId} className="flex flex-wrap gap-2"><Input className="min-w-56 flex-1" aria-label="Nama cetak mapel" value={m.name} onChange={e => { setConfig({ ...config, subjects: config.subjects.map((v, j) => i === j ? { ...v, name: e.target.value } : v) }); markEdited() }} /><Select className="w-48" value={m.group} onChange={e => { setConfig({ ...config, subjects: config.subjects.map((v, j) => i === j ? { ...v, group: e.target.value } : v) }); markEdited() }}><option value="umum">Mapel umum</option><option value="pemberdayaan">Pemberdayaan / keterampilan</option></Select><Button variant="outline" disabled={i === 0} onClick={() => { const subjects = [...config.subjects]; [subjects[i - 1], subjects[i]] = [subjects[i], subjects[i - 1]]; setConfig({ ...config, subjects }); markEdited() }}>Naik</Button></div>)}</div>
           <section className="space-y-3 rounded-xl border p-4 sm:col-span-2" aria-label="Pengaturan ekstrakurikuler kelas">
             <h4 className="font-semibold">Ekstrakurikuler kelas ini</h4><p className="text-sm text-muted-foreground">Berlaku hanya untuk kelas, tahun ajaran, dan semester yang dipilih. Keterangan diisi per siswa pada Pemeriksaan &amp; cetak.</p>
-            <label className="flex items-center gap-2"><input type="checkbox" checked={config.extrasEnabled !== false} onChange={e => { setConfig({ ...config, extrasEnabled: e.target.checked }); setDirty(true) }} />Kelas ini memiliki ekstrakurikuler</label>
-            {config.extrasEnabled !== false && <><p className="text-sm">Daftar kegiatan menjadi pilihan saat mengisi rapor siswa. Jika daftar kosong, nama kegiatan dapat ditulis langsung per siswa.</p>{(config.extraActivities || []).map((name, i) => <div key={i} className="flex gap-2"><Input aria-label={'Kegiatan kelas ' + (i + 1)} maxLength={100} placeholder="Contoh: Pramuka, Seni Tari, Futsal" value={name} onChange={e => { setConfig({ ...config, extraActivities: config.extraActivities!.map((v, j) => i === j ? e.target.value : v) }); setDirty(true) }} /><Button variant="ghost" aria-label={'Hapus kegiatan kelas ' + (i + 1)} onClick={() => { setConfig({ ...config, extraActivities: config.extraActivities!.filter((_, j) => i !== j) }); setDirty(true) }}>Hapus</Button></div>)}<Button variant="outline" disabled={(config.extraActivities?.length || 0) >= 20} onClick={() => { setConfig({ ...config, extraActivities: [...(config.extraActivities || []), ''] }); setDirty(true) }}>Tambah kegiatan kelas</Button></>}
+            <label className="flex items-center gap-2"><input type="checkbox" checked={config.extrasEnabled !== false} onChange={e => { setConfig({ ...config, extrasEnabled: e.target.checked }); markEdited() }} />Kelas ini memiliki ekstrakurikuler</label>
+            {config.extrasEnabled !== false && <><p className="text-sm">Daftar kegiatan menjadi pilihan saat mengisi rapor siswa. Jika daftar kosong, nama kegiatan dapat ditulis langsung per siswa.</p>{(config.extraActivities || []).map((name, i) => <div key={i} className="flex gap-2"><Input aria-label={'Kegiatan kelas ' + (i + 1)} maxLength={100} placeholder="Contoh: Pramuka, Seni Tari, Futsal" value={name} onChange={e => { setConfig({ ...config, extraActivities: config.extraActivities!.map((v, j) => i === j ? e.target.value : v) }); markEdited() }} /><Button variant="ghost" aria-label={'Hapus kegiatan kelas ' + (i + 1)} onClick={() => { setConfig({ ...config, extraActivities: config.extraActivities!.filter((_, j) => i !== j) }); markEdited() }}>Hapus</Button></div>)}<Button variant="outline" disabled={(config.extraActivities?.length || 0) >= 20} onClick={() => { setConfig({ ...config, extraActivities: [...(config.extraActivities || []), ''] }); markEdited() }}>Tambah kegiatan kelas</Button></>}
           </section>
-          <Button disabled={!dirty} onClick={() => void run(saveConfig)}>Simpan pengaturan</Button>
+          <Button disabled={busy || !dirty} onClick={() => void saveCurrent(false, 'form').catch(() => {})}>Simpan pengaturan</Button>
         </fieldset></Card>
-        {isAdmin && <Card className="space-y-3 p-4"><h3 className="font-bold">Bantuan AI</h3><p className="text-sm">API key dikonfigurasi pada server. Gemini: {ai.geminiConfigured ? 'tersedia' : 'belum tersedia'} · OpenAI: {ai.openaiConfigured ? 'tersedia' : 'belum tersedia'}</p><Label>Penyedia</Label><Select aria-label={"Penyedia"} value={ai.provider} disabled={busy || isArchived} onChange={e => { setAI({ ...ai, provider: e.target.value }); setAIDirty(true) }}><option value="">Nonaktif</option><option value="gemini">Gemini</option><option value="openai">OpenAI</option></Select><Label>ID model</Label><Input aria-label={"ID model"} value={ai.model} disabled={busy || isArchived} onChange={e => { setAI({ ...ai, model: e.target.value }); setAIDirty(true) }} placeholder="Model yang tersedia pada akun penyedia" /><Button disabled={busy || isArchived || !aiDirty} onClick={() => void run(saveAI)}>Simpan pengaturan AI</Button></Card>}
+        {isAdmin && <Card className="space-y-3 p-4"><h3 className="font-bold">Bantuan AI</h3><p className="text-sm">API key dikonfigurasi pada server. Gemini: {ai.geminiConfigured ? 'tersedia' : 'belum tersedia'} · OpenAI: {ai.openaiConfigured ? 'tersedia' : 'belum tersedia'}</p><Label>Penyedia</Label><Select aria-label={"Penyedia"} value={ai.provider} disabled={inputsBusy || isArchived} onChange={e => { setAI({ ...ai, provider: e.target.value }); markAIEdited() }}><option value="">Nonaktif</option><option value="gemini">Gemini</option><option value="openai">OpenAI</option></Select><Label>ID model</Label><Input aria-label={"ID model"} value={ai.model} disabled={inputsBusy || isArchived} onChange={e => { setAI({ ...ai, model: e.target.value }); markAIEdited() }} placeholder="Model yang tersedia pada akun penyedia" /><Button disabled={busy || isArchived || !aiDirty} onClick={() => void saveCurrent(false, 'ai').catch(() => {})}>Simpan pengaturan AI</Button></Card>}
       </>}
       {tab === 'impor' && isAdmin && <Card className="space-y-4 p-4"><h3 className="font-bold">Impor workbook semester lalu</h3><p className="text-sm">Pilih kelas dan semester tujuan di atas. Data baru disimpan setelah pencocokan dan konfirmasi. Data yang sudah ada tidak ditimpa.</p><Input aria-label="Workbook rapor" type="file" accept=".xlsm,.xlsx" disabled={busy} onChange={e => void run(() => upload(e.target.files?.[0]))} />
         {importData && <><p className="text-sm">Sumber: {importData.preview.source?.year || 'tahun tidak dicantumkan'} · Semester {importData.preview.source?.semester || '—'} · Kelas {importData.preview.source?.class || '—'}</p><p>{importData.preview.students.length} siswa · {importData.preview.subjects.length} sheet mapel</p>{importData.preview.issues.map((v, i) => <p className="text-red-700" key={i}>{v}</p>)}<div className="space-y-2">{importData.preview.students.map(s => <div key={s.row} className="grid gap-2 sm:grid-cols-2"><span>{s.name} · NIS {s.nis} · NISN {s.nisn}</span><Select value={importStudents[s.row] || ''} onChange={e => setImportStudents({ ...importStudents, [s.row]: e.target.value })}><option value="">Cocokkan siswa...</option><option value="skip">Lewati siswa ini</option>{importData.students.map(pd => <option key={pd.id} value={pd.id}>{pd.nama} · {pd.nis}</option>)}</Select></div>)}</div><div className="space-y-2">{importData.preview.subjects.map(s => <div key={s.sheet}><Label>{s.sheet} · {s.labels.length} CP</Label><Select value={importSubjects[s.sheet] || ''} onChange={e => setImportSubjects({ ...importSubjects, [s.sheet]: e.target.value })}><option value="">Cocokkan mapel...</option><option value="skip">Lewati sheet ini</option>{importData.subjects.map(mp => <option key={mp.mapelId} value={mp.mapelId}>{mp.name}</option>)}</Select>{s.issues.map((v, i) => <p key={i} className="text-sm text-red-700">{v}</p>)}</div>)}</div><Button disabled={busy || dirty} onClick={() => void run(async () => { await request('/rapor-sumatif/import/' + importData.id + '/confirm?' + qs, token, 'POST', { revision: period.revision, students: importStudents, subjects: importSubjects }); setImportData(null); await refreshPeriod(); toast.success('Data historis berhasil diimpor') })}>Konfirmasi dan simpan impor</Button></>}
       </Card>}
     </>}
     </>}
-    {suggestion && <div role="dialog" aria-modal="true" aria-label="Tinjau saran AI" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><Card className="w-full max-w-xl space-y-4 p-5"><p className="text-xs">{suggestionQueue.length + 1} saran menunggu tinjauan</p><h3 className="font-bold">Tinjau saran AI · {students.find(s => s.id === suggestion.studentId)?.nama}</h3><Label>Capaian yang dikuasai</Label><textarea aria-label={"Capaian yang dikuasai"} className={textClass} value={suggestion.strength} onChange={e => setSuggestion({ ...suggestion, strength: e.target.value })} /><Label>Penguatan</Label><textarea aria-label={"Penguatan"} className={textClass} value={suggestion.growth} onChange={e => setSuggestion({ ...suggestion, growth: e.target.value })} /><p className="text-xs text-muted-foreground">Penerapan mengganti deskripsi pada draf. Periksa isinya lalu simpan nilai.</p><div className="flex gap-2"><Button onClick={() => { editNarrative(suggestion.studentId, 'strength', suggestion.strength); editNarrative(suggestion.studentId, 'growth', suggestion.growth); setSuggestion(suggestionQueue[0] || null); setSuggestionQueue(rows => rows.slice(1)) }}>Terapkan pada draf</Button><Button variant="outline" onClick={() => { setSuggestion(null); setSuggestionQueue([]) }}>Batal</Button></div></Card></div>}
+    {suggestion && <div role="dialog" aria-modal="true" aria-label="Tinjau saran AI" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><Card className="w-full max-w-xl space-y-4 p-5"><p className="text-xs">{suggestionQueue.length + 1} saran menunggu tinjauan</p><h3 className="font-bold">Tinjau saran AI · {students.find(s => s.id === suggestion.studentId)?.nama}</h3><Label>Capaian yang dikuasai</Label><textarea aria-label={"Capaian yang dikuasai"} className={textClass} value={suggestion.strength} onChange={e => setSuggestion({ ...suggestion, strength: e.target.value })} /><Label>Penguatan</Label><textarea aria-label={"Penguatan"} className={textClass} value={suggestion.growth} onChange={e => setSuggestion({ ...suggestion, growth: e.target.value })} /><p className="text-xs text-muted-foreground">Periksa isinya sebelum menerapkan. Deskripsi draf disimpan otomatis setelah diterapkan.</p><div className="flex gap-2"><Button onClick={() => { editNarrative(suggestion.studentId, 'strength', suggestion.strength); editNarrative(suggestion.studentId, 'growth', suggestion.growth); setSuggestion(suggestionQueue[0] || null); setSuggestionQueue(rows => rows.slice(1)) }}>Terapkan pada draf</Button><Button variant="outline" onClick={() => { setSuggestion(null); setSuggestionQueue([]) }}>Batal</Button></div></Card></div>}
     {previewURL && <div role="dialog" aria-modal="true" aria-label="Pratinjau cetak rapor" className="fixed inset-0 z-50 flex flex-col bg-background p-4"><div className="mb-3 flex items-center gap-3"><strong>Pratinjau PDF</strong><a href={previewURL} download="rapor.pdf" className="underline">Unduh PDF</a><Button className="ml-auto" variant="outline" onClick={() => setPreviewURL('')}>Tutup</Button></div><iframe title="PDF rapor" src={previewURL} className="w-full flex-1 rounded-lg border" /></div>}
   </div>
 }

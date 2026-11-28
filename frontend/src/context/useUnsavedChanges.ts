@@ -2,8 +2,12 @@ import { createContext, useContext, useEffect, useRef } from 'react'
 
 export type FormState = { dirty: boolean; busy: boolean; save: () => Promise<void>; discard: () => Promise<void> }
 export type Guard = { read: () => FormState }
-export type Navigation = { register: (guard: Guard) => () => void; leave: (action: () => void) => void }
+export type Navigation = { register: (guard: Guard) => () => void; leave: (action: () => void) => void; dialogOpen: boolean }
 export const UnsavedChangesContext = createContext<Navigation | null>(null)
+
+export function useUnsavedChangesDialogOpen() {
+  return !!useContext(UnsavedChangesContext)?.dialogOpen
+}
 
 export function useGuardedNavigation() {
   const context = useContext(UnsavedChangesContext)
